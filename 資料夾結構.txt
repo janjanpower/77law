@@ -1,0 +1,26 @@
+case_management_system/
+├── main.py                     # 🚀 主程式入口
+├── config/
+│   ├── __init__.py            # 模組初始化
+│   └── settings.py            # ⚙️ 全域設定檔
+├── models/
+│   ├── __init__.py
+│   ├── case_model.py          # 📋 案件資料模型
+│   └── database.py            # 🗄️ 資料庫操作 (待實作)
+├── views/
+│   ├── __init__.py
+│   ├── base_window.py         # 🪟 基礎視窗類別
+│   ├── main_window.py         # 🏠 主視窗
+│   ├── case_overview.py       # 📊 案件總覽
+│   └── dialogs.py             # 💬 對話框
+├── controllers/
+│   ├── __init__.py
+│   ├── case_controller.py     # 🎮 案件控制器
+│   └── ui_controller.py       # 🖱️ UI 控制器 (待實作)
+├── utils/
+│   ├── __init__.py
+│   ├── excel_handler.py       # 📑 Excel 處理工具
+│   └── validators.py          # ✅ 資料驗證工具
+├── assets/                    # 🎨 資源檔案
+     └── styles/
+        └── theme.py           # 主題樣式 (待實作)
