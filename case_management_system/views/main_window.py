@@ -8,6 +8,8 @@ class MainWindow:
     """主應用程式視窗"""
 
     def __init__(self):
+        # 在初始化時加入關閉標記
+        self._is_closing = False
         self.case_overview = None
         self.selected_folder = None
         self.drag_data = {"x": 0, "y": 0}
@@ -45,7 +47,7 @@ class MainWindow:
             print(f"儲存設定失敗: {e}")
 
     def _setup_window(self):
-        """設定視窗基本屬性"""
+        """設定視窗基本屬性 - 修正遞迴問題"""
         self.window.title(AppConfig.WINDOW_TITLES['main'])
         self.window.geometry(f"{AppConfig.DEFAULT_WINDOW['width']}x{AppConfig.DEFAULT_WINDOW['height']}")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
@@ -62,23 +64,7 @@ class MainWindow:
         # 置中顯示
         self._center_window()
 
-        # 修正：設定關閉協議，確保主視窗X按鈕正確關閉
-        self.window.protocol("WM_DELETE_WINDOW", self.close)
-        self.window.configure(bg=AppConfig.COLORS['window_bg'])
-
-        # 移除系統標題欄
-        self.window.overrideredirect(True)
-
-        # 設定最小尺寸
-        self.window.minsize(
-            AppConfig.SIZES['min_window']['width'],
-            AppConfig.SIZES['min_window']['height']
-        )
-
-        # 置中顯示
-        self._center_window()
-
-        # 設定關閉協議 - 關鍵修改
+        # 修正：只設定一次關閉協議
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
     def _center_window(self):
@@ -278,7 +264,7 @@ class MainWindow:
             print(f"建立資料夾結構失敗：{e}")
 
     def _on_confirm(self):
-        """確認按鈕事件 - 關鍵修改"""
+        """確認按鈕事件"""
         if hasattr(self, 'selected_folder') and self.selected_folder:
             # 隱藏主視窗
             self.hide()
@@ -288,7 +274,7 @@ class MainWindow:
             messagebox.showwarning("提醒", "請先選擇母資料夾位置")
 
     def _show_case_overview(self):
-        """顯示案件總覽 - 關鍵修改"""
+        """顯示案件總覽"""
         if self.case_overview is None:
             # 動態導入避免循環導入
             from views.case_overview import CaseOverviewWindow
@@ -304,19 +290,36 @@ class MainWindow:
         self.case_overview.show()
 
     def show_main_window(self):
-        """顯示主視窗 - 新增方法"""
+        """顯示主視窗"""
         self.show()
         if self.case_overview:
             self.case_overview.hide()
 
     def close(self):
-        """關閉視窗 - 統一的關閉處理"""
-        # 如果總覽視窗存在，先關閉它
-        if self.case_overview:
-            self.case_overview.close()
+        """關閉視窗 - 修正銷毀錯誤"""
+        try:
+            # 設定關閉標記
+            self._is_closing = True
 
-        # 關閉主視窗
-        self.window.destroy()
+            # 如果總覽視窗存在且未關閉，先關閉它
+            if hasattr(self, 'case_overview') and self.case_overview:
+                try:
+                    if hasattr(self.case_overview, 'window') and self.case_overview.window.winfo_exists():
+                        self.case_overview.window.destroy()
+                except:
+                    pass
+                self.case_overview = None
+
+            # 檢查主視窗是否還存在
+            if hasattr(self, 'window') and self.window.winfo_exists():
+                self.window.quit()
+                self.window.destroy()
+
+        except Exception as e:
+            print(f"關閉視窗時發生錯誤: {e}")
+            # 強制退出
+            import sys
+            sys.exit(0)
 
     def show(self):
         """顯示視窗"""
