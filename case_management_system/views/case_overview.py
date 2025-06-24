@@ -21,6 +21,11 @@ class CaseOverviewWindow:
         self.case_data: List[CaseData] = []
         self.drag_data = {"x": 0, "y": 0}
 
+        # 使用深拷貝避免修改全域設定
+        import copy
+        self.visible_fields = copy.deepcopy(AppConfig.CASE_FIELDS)
+
+
         # 建立視窗
         self.window = tk.Toplevel(parent) if parent else tk.Tk()
         self._setup_window()
@@ -315,42 +320,49 @@ class CaseOverviewWindow:
         self.tree.tag_configure('evenrow', background='white')
 
     def _update_tree_columns(self):
-        """更新樹狀圖欄位 - 修正版本"""
-        # 取得可見欄位
+        """更新樹狀圖欄位 - 強化版本"""
+        # 取得當前可見欄位
         visible_columns = [
             field_id for field_id, field_info in self.visible_fields.items()
             if field_info['visible']
         ]
 
-        # 添加隱藏的索引欄位
+        # 重新設定所有欄位（包含隱藏索引）
         all_columns = ['case_index'] + visible_columns
 
-        # 設定欄位
-        self.tree['columns'] = all_columns
+        # 完全重建樹狀圖欄位
+        self.tree.configure(columns=all_columns)
         self.tree['show'] = 'headings'
 
-        # 設定索引欄位（隱藏）
+        # 隱藏索引欄位
         self.tree.heading('case_index', text='')
         self.tree.column('case_index', width=0, minwidth=0, stretch=False)
 
-        # 設定每個可見欄位
+        # 設定可見欄位
         for field_id in visible_columns:
             field_info = self.visible_fields[field_id]
 
-            # 設定欄位標題
             self.tree.heading(
                 field_id,
                 text=field_info['name'],
                 anchor='center'
             )
 
-            # 設定欄位寬度
             self.tree.column(
                 field_id,
                 width=field_info['width'],
                 minwidth=80,
                 anchor='center'
             )
+
+        # 清除不需要的欄位標題
+        for field_id, field_info in self.visible_fields.items():
+            if not field_info['visible'] and field_id in self.tree['columns']:
+                try:
+                    self.tree.heading(field_id, text='')
+                    self.tree.column(field_id, width=0, minwidth=0)
+                except:
+                    pass
 
     def _create_field_controls(self):
         """建立欄位顯示控制 - 修正版本"""
@@ -367,7 +379,7 @@ class CaseOverviewWindow:
         # 欄位勾選框
         self.field_vars = {}
         for field_id, field_info in self.visible_fields.items():
-            # 關鍵修正：勾選表示隱藏，所以初始值應該是 not visible
+            # 勾選表示隱藏，初始值為 not visible
             var = tk.BooleanVar(value=not field_info['visible'])
             self.field_vars[field_id] = var
 
@@ -386,19 +398,20 @@ class CaseOverviewWindow:
             checkbox.pack(side='left', padx=10)
 
     def _toggle_field(self, field_id: str):
-        """切換欄位顯示狀態 - 確保立即生效"""
-        # 取得勾選狀態
+        """切換欄位顯示狀態 - 修正版本"""
+        # 取得勾選狀態（勾選=隱藏）
         is_checked = self.field_vars[field_id].get()
-        # 設定可見性（勾選=隱藏）
+
+        # 更新可見性狀態
         self.visible_fields[field_id]['visible'] = not is_checked
 
-        print(f"切換欄位 {field_id}: 勾選={is_checked}, 可見={not is_checked}")
-
-        # 強制更新介面
-        self.window.update_idletasks()
+        # 立即更新樹狀圖結構
         self._update_tree_columns()
-        self.window.update_idletasks()
+
+        # 重新載入資料
         self._refresh_tree_data()
+
+        # 強制介面更新
         self.window.update_idletasks()
 
     def _load_cases(self):
