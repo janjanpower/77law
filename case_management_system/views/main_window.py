@@ -46,7 +46,7 @@ class MainWindow:
 
     def _setup_window(self):
         """設定視窗基本屬性"""
-        self.window.title(AppConfig.WINDOW_TITLES['main'])  # 使用統一標題
+        self.window.title(AppConfig.WINDOW_TITLES['main'])
         self.window.geometry(f"{AppConfig.DEFAULT_WINDOW['width']}x{AppConfig.DEFAULT_WINDOW['height']}")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
 
@@ -61,6 +61,25 @@ class MainWindow:
 
         # 置中顯示
         self._center_window()
+
+        # 修正：設定關閉協議，確保主視窗X按鈕正確關閉
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
+        self.window.configure(bg=AppConfig.COLORS['window_bg'])
+
+        # 移除系統標題欄
+        self.window.overrideredirect(True)
+
+        # 設定最小尺寸
+        self.window.minsize(
+            AppConfig.SIZES['min_window']['width'],
+            AppConfig.SIZES['min_window']['height']
+        )
+
+        # 置中顯示
+        self._center_window()
+
+        # 設定關閉協議 - 關鍵修改
+        self.window.protocol("WM_DELETE_WINDOW", self.close)
 
     def _center_window(self):
         """將視窗置中顯示"""
@@ -89,13 +108,13 @@ class MainWindow:
         self.title_frame.pack(fill='x')
         self.title_frame.pack_propagate(False)
 
-        # 標題標籤 - 使用統一字體
+        # 標題標籤
         self.title_label = tk.Label(
             self.title_frame,
             text=AppConfig.WINDOW_TITLES['main'],
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title']  # 使用統一字體設定
+            font=AppConfig.FONTS['title']
         )
         self.title_label.pack(side='left', padx=10)
 
@@ -150,7 +169,7 @@ class MainWindow:
             text="歡迎使用案件管理系統",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['welcome']  # 使用統一字體設定
+            font=AppConfig.FONTS['welcome']
         )
         welcome_label.pack(expand=True)
 
@@ -164,11 +183,11 @@ class MainWindow:
         # 選擇資料夾按鈕
         self.folder_btn = tk.Button(
             button_frame,
-            text='選擇資料母資料夾',  # 更明確的說明
+            text='選擇資料母資料夾',
             command=self._choose_data_folder,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體設定
+            font=AppConfig.FONTS['button'],
             width=18,
             height=2
         )
@@ -185,7 +204,7 @@ class MainWindow:
             textvariable=self.folder_path_var,
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],  # 使用統一字體設定
+            font=AppConfig.FONTS['text'],
             wraplength=350
         )
         self.folder_label.pack(pady=5)
@@ -204,7 +223,7 @@ class MainWindow:
             command=self._on_confirm,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體設定
+            font=AppConfig.FONTS['button'],
             width=10,
             height=2
         )
@@ -217,7 +236,7 @@ class MainWindow:
             command=self.close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體設定
+            font=AppConfig.FONTS['button'],
             width=10,
             height=2
         )
@@ -259,14 +278,17 @@ class MainWindow:
             print(f"建立資料夾結構失敗：{e}")
 
     def _on_confirm(self):
-        """確認按鈕事件"""
+        """確認按鈕事件 - 關鍵修改"""
         if hasattr(self, 'selected_folder') and self.selected_folder:
+            # 隱藏主視窗
+            self.hide()
+            # 顯示案件總覽
             self._show_case_overview()
         else:
             messagebox.showwarning("提醒", "請先選擇母資料夾位置")
 
     def _show_case_overview(self):
-        """顯示案件總覽"""
+        """顯示案件總覽 - 關鍵修改"""
         if self.case_overview is None:
             # 動態導入避免循環導入
             from views.case_overview import CaseOverviewWindow
@@ -276,13 +298,24 @@ class MainWindow:
             data_file = os.path.join(self.selected_folder, AppConfig.DATA_CONFIG['case_data_file'])
             case_controller = CaseController(data_file)
 
-            # 建立總覽視窗
-            self.case_overview = CaseOverviewWindow(self.window, case_controller)
+            # 建立總覽視窗，傳入主視窗實例以便回調
+            self.case_overview = CaseOverviewWindow(None, case_controller, main_window=self)
 
         self.case_overview.show()
 
+    def show_main_window(self):
+        """顯示主視窗 - 新增方法"""
+        self.show()
+        if self.case_overview:
+            self.case_overview.hide()
+
     def close(self):
-        """關閉視窗"""
+        """關閉視窗 - 統一的關閉處理"""
+        # 如果總覽視窗存在，先關閉它
+        if self.case_overview:
+            self.case_overview.close()
+
+        # 關閉主視窗
         self.window.destroy()
 
     def show(self):

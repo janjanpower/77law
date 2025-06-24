@@ -1,269 +1,665 @@
-from typing import List, Optional
-from models.case_model import CaseData
-from utils.excel_handler import ExcelHandler
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from typing import Dict, List, Optional
 from config.settings import AppConfig
-import json
-import os
-from datetime import datetime
+from models.case_model import CaseData
 
-class CaseController:
-    """案件資料控制器"""
+class CaseOverviewWindow:
+    """案件總覽視窗"""
 
-    def __init__(self, data_file: str = None):
-        """
-        初始化案件控制器
+    def __init__(self, parent=None, case_controller=None):
+        self.parent = parent
+        self.case_controller = case_controller
+        self.visible_fields = AppConfig.CASE_FIELDS.copy()
+        self.case_data: List[CaseData] = []
+        self.drag_data = {"x": 0, "y": 0}
 
-        Args:
-            data_file: 資料檔案路徑，如果為None則使用預設路徑
-        """
-        if data_file is None:
-            self.data_file = AppConfig.DATA_CONFIG['case_data_file']
-        else:
-            self.data_file = data_file
-
-        self.data_folder = os.path.dirname(self.data_file) if os.path.dirname(self.data_file) else '.'
-        self.cases: List[CaseData] = []
-
-        # 確保資料夾存在
-        self._ensure_data_folder()
+        # 建立視窗
+        self.window = tk.Toplevel(parent) if parent else tk.Tk()
+        self._setup_window()
+        self._setup_styles()
+        self._create_layout()
 
         # 載入案件資料
-        self.load_cases()
+        if self.case_controller:
+            self._load_cases()
 
-    def _ensure_data_folder(self):
-        """確保資料夾存在"""
-        try:
-            if not os.path.exists(self.data_folder):
-                os.makedirs(self.data_folder)
-                print(f"建立資料夾：{self.data_folder}")
+    def _setup_window(self):
+        """設定視窗基本屬性"""
+        # 使用統一的標題
+        self.window.title(AppConfig.WINDOW_TITLES['overview'])
+        self.window.geometry("1200x800")  # 增大總覽視窗尺寸
+        self.window.configure(bg=AppConfig.COLORS['window_bg'])
 
-            # 只建立刑事和民事資料夾
-            for folder_name in AppConfig.CASE_TYPE_FOLDERS.values():
-                folder_path = os.path.join(self.data_folder, folder_name)
-                if not os.path.exists(folder_path):
-                    os.makedirs(folder_path)
-                    print(f"建立案件類型資料夾：{folder_path}")
+        # 移除系統標題欄
+        self.window.overrideredirect(True)
 
-        except Exception as e:
-            print(f"建立資料夾失敗: {e}")
+        # 設定最小尺寸
+        self.window.minsize(1000, 700)
 
-    def get_data_folder(self) -> str:
-        """取得資料資料夾路徑"""
-        return self.data_folder
+        # 置中顯示
+        self._center_window()
 
-    def get_case_type_folder(self, case_type: str) -> str:
-        """取得特定案件類型的資料夾路徑"""
-        folder_name = AppConfig.CASE_TYPE_FOLDERS.get(case_type, case_type)
-        return os.path.join(self.data_folder, folder_name)
+    def _center_window(self):
+        """將視窗置中顯示"""
+        self.window.update_idletasks()
+        width = 1200
+        height = 800
+        x = (self.window.winfo_screenwidth() // 2) - (width // 2)
+        y = (self.window.winfo_screenheight() // 2) - (height // 2)
+        self.window.geometry(f"{width}x{height}+{x}+{y}")
 
-    def load_cases(self) -> bool:
+    def _setup_styles(self):
+        """設定 ttk 樣式"""
+        self.style = ttk.Style()
+
+        # 按鈕樣式
+        self.style.configure(
+            'Custom.TButton',
+            background=AppConfig.COLORS['button_bg'],
+            foreground=AppConfig.COLORS['button_fg'],
+            borderwidth=1,
+            focuscolor='none'
+        )
+
+        self.style.map(
+            'Custom.TButton',
+            background=[('active', AppConfig.COLORS['button_hover'])]
+        )
+
+        # 功能按鈕樣式
+        self.style.configure(
+            'Function.TButton',
+            background=AppConfig.COLORS['button_bg'],
+            foreground=AppConfig.COLORS['button_fg'],
+            width=15
+        )
+
+    def _create_layout(self):
+        """建立總覽視窗佈局"""
+        # 主容器
+        self.main_frame = tk.Frame(
+            self.window,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        self.main_frame.pack(fill='both', expand=True, padx=5, pady=5)
+
+        # 自定義標題列
+        self.title_frame = tk.Frame(
+            self.main_frame,
+            bg=AppConfig.COLORS['title_bg'],
+            height=AppConfig.SIZES['title_height']
+        )
+        self.title_frame.pack(fill='x', pady=(0, 5))
+        self.title_frame.pack_propagate(False)
+
+        # 標題標籤 - 使用統一字體和標題
+        self.title_label = tk.Label(
+            self.title_frame,
+            text=AppConfig.WINDOW_TITLES['overview'],
+            bg=AppConfig.COLORS['title_bg'],
+            fg=AppConfig.COLORS['title_fg'],
+            font=AppConfig.FONTS['title']  # 使用統一字體設定
+        )
+        self.title_label.pack(side='left', padx=10)
+
+        # 關閉按鈕
+        self.close_btn = tk.Button(
+            self.title_frame,
+            text="✕",
+            bg=AppConfig.COLORS['title_bg'],
+            fg=AppConfig.COLORS['title_fg'],
+            font=('Arial', 12, 'bold'),
+            bd=0,
+            width=3,
+            command=self.close
+        )
+        self.close_btn.pack(side='right', padx=5)
+
+        # 設定拖曳功能
+        self._setup_drag()
+
+        # 內容區域
+        self.content_frame = tk.Frame(
+            self.main_frame,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        self.content_frame.pack(fill='both', expand=True)
+
+        # 建立具體內容
+        self._create_overview_layout()
+        self._setup_treeview()
+        self._create_field_controls()
+
+    def create_button(self, parent, text, command, style_type='Custom'):
+        """建立標準化按鈕"""
+        if style_type == 'Function':
+            return tk.Button(
+                parent,
+                text=text,
+                command=command,
+                bg=AppConfig.COLORS['button_bg'],
+                fg=AppConfig.COLORS['button_fg'],
+                font=AppConfig.FONTS['button'],  # 使用統一字體
+                width=15,
+                height=2
+            )
+        else:
+            return tk.Button(
+                parent,
+                text=text,
+                command=command,
+                bg=AppConfig.COLORS['button_bg'],
+                fg=AppConfig.COLORS['button_fg'],
+                font=AppConfig.FONTS['button'],  # 使用統一字體
+                width=10
+            )
+
+    def _setup_drag(self):
+        """設定視窗拖曳功能"""
+        def start_drag(event):
+            self.drag_data["x"] = event.x
+            self.drag_data["y"] = event.y
+
+        def on_drag(event):
+            x = self.window.winfo_x() + (event.x - self.drag_data["x"])
+            y = self.window.winfo_y() + (event.y - self.drag_data["y"])
+            self.window.geometry(f"+{x}+{y}")
+
+        # 綁定標題列拖曳事件
+        self.title_frame.bind("<Button-1>", start_drag)
+        self.title_frame.bind("<B1-Motion>", on_drag)
+        self.title_label.bind("<Button-1>", start_drag)
+        self.title_label.bind("<B1-Motion>", on_drag)
+
+    def _create_overview_layout(self):
+        """建立總覽視窗佈局"""
+        # 工具列區域
+        self.toolbar_frame = tk.Frame(
+            self.content_frame,
+            bg=AppConfig.COLORS['window_bg'],
+            height=50
+        )
+        self.toolbar_frame.pack(fill='x', pady=(0, 10))
+        self.toolbar_frame.pack_propagate(False)
+
+        # 功能按鈕
+        self._create_toolbar_buttons()
+
+        # 樹狀圖區域
+        self.tree_frame = tk.Frame(
+            self.content_frame,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        self.tree_frame.pack(fill='both', expand=True, pady=(0, 10))
+
+        # 欄位控制區域
+        self.field_control_frame = tk.Frame(
+            self.content_frame,
+            bg=AppConfig.COLORS['window_bg'],
+            height=60
+        )
+        self.field_control_frame.pack(fill='x')
+        self.field_control_frame.pack_propagate(False)
+
+    def _create_toolbar_buttons(self):
+        """建立工具列按鈕"""
+        # 新增案件按鈕
+        self.add_case_btn = self.create_button(
+            self.toolbar_frame,
+            '新增案件',
+            self._on_add_case,
+            'Function'
+        )
+        self.add_case_btn.pack(side='left', padx=(10, 5))
+
+        # 上傳資料按鈕
+        self.upload_btn = self.create_button(
+            self.toolbar_frame,
+            '匯入Excel',
+            self._on_import_excel,
+            'Function'
+        )
+        self.upload_btn.pack(side='left', padx=5)
+
+        # 匯出Excel按鈕
+        self.export_btn = self.create_button(
+            self.toolbar_frame,
+            '匯出Excel',
+            self._on_export_excel,
+            'Function'
+        )
+        self.export_btn.pack(side='left', padx=5)
+
+        # 重新整理按鈕
+        self.refresh_btn = self.create_button(
+            self.toolbar_frame,
+            '重新整理',
+            self._on_refresh,
+            'Custom'
+        )
+        self.refresh_btn.pack(side='right', padx=(5, 10))
+
+    def _setup_treeview(self):
+        """設定樹狀圖控件"""
+        # 建立樹狀圖容器
+        tree_container = tk.Frame(self.tree_frame, bg=AppConfig.COLORS['window_bg'])
+        tree_container.pack(fill='both', expand=True)
+
+        # 樹狀圖 - 移除滾動軸
+        self.tree = ttk.Treeview(
+            tree_container,
+            selectmode='extended'
+        )
+        self.tree.pack(fill='both', expand=True)
+
+        # 進度追蹤可視化區域
+        self.progress_frame = tk.Frame(
+            tree_container,
+            bg=AppConfig.COLORS['window_bg'],
+            height=100
+        )
+        self.progress_frame.pack(side='bottom', fill='x', pady=5)
+        self.progress_frame.pack_propagate(False)
+
+        # 設定樹狀圖樣式
+        self._setup_tree_style()
+
+        # 設定欄位
+        self._update_tree_columns()
+
+        # 設定進度可視化
+        self._setup_progress_visualization()
+
+        # 綁定事件
+        self.tree.bind('<Double-1>', self._on_item_double_click)
+        self.tree.bind('<Button-3>', self._on_item_right_click)
+        self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
+
+    def _setup_tree_style(self):
+        """設定樹狀圖樣式"""
+        self.style.configure(
+            'Treeview',
+            background='white',
+            foreground='black',
+            rowheight=25,
+            fieldbackground='white'
+        )
+
+        self.style.configure(
+            'Treeview.Heading',
+            background=AppConfig.COLORS['title_bg'],
+            foreground='black',
+            font=AppConfig.FONTS['button']  # 使用統一字體
+        )
+
+        # 交替行顏色
+        self.tree.tag_configure('oddrow', background='#F0F0F0')
+        self.tree.tag_configure('evenrow', background='white')
+
+    def _update_tree_columns(self):
+        """更新樹狀圖欄位"""
+        # 取得可見欄位
+        visible_columns = [
+            field_id for field_id, field_info in self.visible_fields.items()
+            if field_info['visible']
+        ]
+
+        # 只添加隱藏的索引欄位（不顯示案件編號）
+        all_columns = ['case_index'] + visible_columns
+
+        # 設定欄位
+        self.tree['columns'] = all_columns
+        self.tree['show'] = 'headings'
+
+        # 設定索引欄位（隱藏）
+        self.tree.heading('case_index', text='')
+        self.tree.column('case_index', width=0, minwidth=0, stretch=False)
+
+        # 設定每個可見欄位
+        for field_id in visible_columns:
+            field_info = self.visible_fields[field_id]
+
+            # 設定欄位標題
+            self.tree.heading(
+                field_id,
+                text=field_info['name'],
+                anchor='center'
+            )
+
+            # 設定欄位寬度
+            self.tree.column(
+                field_id,
+                width=field_info['width'],
+                minwidth=80,
+                anchor='center'
+            )
+
+    def _create_field_controls(self):
+        """建立欄位顯示控制"""
+        # 控制標題
+        control_title = tk.Label(
+            self.field_control_frame,
+            text="隱藏欄位：",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['button']  # 使用統一字體
+        )
+        control_title.pack(side='left', padx=(10, 20))
+
+        # 欄位勾選框
+        self.field_vars = {}
+        for field_id, field_info in AppConfig.CASE_FIELDS.items():
+            var = tk.BooleanVar(value=not field_info['visible'])
+            self.field_vars[field_id] = var
+
+            checkbox = tk.Checkbutton(
+                self.field_control_frame,
+                text=field_info['name'],
+                variable=var,
+                command=lambda fid=field_id: self._toggle_field(fid),
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color'],
+                selectcolor=AppConfig.COLORS['button_bg'],
+                activebackground=AppConfig.COLORS['window_bg'],
+                activeforeground=AppConfig.COLORS['text_color'],
+                font=AppConfig.FONTS['text']  # 使用統一字體
+            )
+            checkbox.pack(side='left', padx=10)
+
+    def _toggle_field(self, field_id: str):
+        """切換欄位顯示狀態"""
+        # 更新欄位可見性
+        is_hidden = self.field_vars[field_id].get()
+        self.visible_fields[field_id]['visible'] = not is_hidden
+
+        # 更新樹狀圖
+        self._update_tree_columns()
+        self._refresh_tree_data()
+
+    def _load_cases(self):
         """載入案件資料"""
-        try:
-            if os.path.exists(self.data_file):
-                with open(self.data_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.cases = [CaseData.from_dict(case_data) for case_data in data]
-                print(f"已載入 {len(self.cases)} 筆案件資料")
+        if self.case_controller:
+            self.case_data = self.case_controller.get_cases()
+            self._refresh_tree_data()
+
+    def _refresh_tree_data(self):
+        """重新整理樹狀圖資料"""
+        # 清空現有資料
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        # 重新載入資料
+        for i, case in enumerate(self.case_data):
+            # 第一個值是索引（隱藏）
+            values = [str(i)]
+
+            # 添加可見欄位的值（不包含案件編號）
+            visible_columns = [col for col in self.tree['columns'] if col != 'case_index']
+            for field_id in visible_columns:
+                if field_id == 'case_type':
+                    values.append(case.case_type)
+                elif field_id == 'client':
+                    values.append(case.client)
+                elif field_id == 'lawyer':
+                    values.append(case.lawyer or '')
+                elif field_id == 'legal_affairs':
+                    values.append(case.legal_affairs or '')
+
+            # 設定交替行顏色
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            self.tree.insert('', 'end', values=values, tags=(tag,))
+
+    def _setup_progress_visualization(self):
+        """設定進度可視化區域"""
+        # 標題
+        progress_title = tk.Label(
+            self.progress_frame,
+            text="案件進度可視化",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['button']  # 使用統一字體
+        )
+        progress_title.pack(pady=5)
+
+        # 進度顯示區域
+        self.progress_display = tk.Frame(
+            self.progress_frame,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        self.progress_display.pack(fill='both', expand=True, padx=20)
+
+    def _on_tree_select(self, event):
+        """樹狀圖選擇事件"""
+        selection = self.tree.selection()
+        if selection:
+            # 清空進度顯示
+            for widget in self.progress_display.winfo_children():
+                widget.destroy()
+
+            # 取得選中的案件
+            item = selection[0]
+            try:
+                # 從隱藏的 case_index 欄位取得索引
+                case_index = int(self.tree.item(item)['values'][0])
+                case = self.case_data[case_index]
+                self._display_case_progress(case)
+            except (ValueError, IndexError):
+                pass
+
+    def _display_case_progress(self, case: 'CaseData'):
+        """顯示案件進度 - 根據選中資料動態顯示"""
+        # 進度階段
+        stages = ['待處理', '一審', '二審', '三審', '合議庭', '已結案']
+        current_stage = case.progress
+
+        # 左側案件資訊
+        info_frame = tk.Frame(
+            self.progress_display,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        info_frame.pack(side='left', padx=10, anchor='nw')
+
+        # 顯示可見欄位的資料
+        visible_fields = [field_id for field_id, field_info in self.visible_fields.items() if field_info['visible']]
+
+        # 案件編號（固定顯示）
+        tk.Label(
+            info_frame,
+            text=f"案件編號: {case.case_id}",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['button']  # 使用統一字體
+        ).pack(anchor='w')
+
+        # 根據可見欄位動態顯示資訊
+        for field_id in visible_fields:
+            field_name = self.visible_fields[field_id]['name']
+            if field_id == 'case_type':
+                value = case.case_type
+            elif field_id == 'client':
+                value = case.client
+            elif field_id == 'lawyer':
+                value = case.lawyer or '未指派'
+            elif field_id == 'legal_affairs':
+                value = case.legal_affairs or '未指派'
             else:
-                print(f"資料檔案不存在，建立新的空資料庫：{self.data_file}")
-                self.cases = []
-                # 建立空的資料檔案
-                self.save_cases()
-            return True
-        except Exception as e:
-            print(f"載入案件資料失敗: {e}")
-            self.cases = []
-            return False
+                continue
 
-    def save_cases(self) -> bool:
-        """儲存案件資料"""
-        try:
-            data = [case.to_dict() for case in self.cases]
-            with open(self.data_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"已儲存 {len(self.cases)} 筆案件資料到：{self.data_file}")
-            return True
-        except Exception as e:
-            print(f"儲存案件資料失敗: {e}")
-            return False
+            tk.Label(
+                info_frame,
+                text=f"{field_name}: {value}",
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color'],
+                font=AppConfig.FONTS['text']  # 使用統一字體
+            ).pack(anchor='w')
 
-    # 移除備份相關的方法，簡化控制器
-    # def _create_backup(self):
-    # def _cleanup_old_backups(self):
-    # 這些方法已移除，不再需要備份功能
+        # 當前進度狀態
+        tk.Label(
+            info_frame,
+            text=f"目前狀態: {current_stage}",
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#4CAF50',
+            font=AppConfig.FONTS['text']  # 使用統一字體
+        ).pack(anchor='w', pady=(5, 0))
 
-    def add_case(self, case: CaseData) -> bool:
-        """新增案件"""
-        try:
-            # 檢查案件編號是否重複
-            if any(c.case_id == case.case_id for c in self.cases):
-                raise ValueError(f"案件編號 {case.case_id} 已存在")
+        # 右側進度條
+        progress_bar_frame = tk.Frame(
+            self.progress_display,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        progress_bar_frame.pack(side='right', expand=True, fill='x', padx=20)
 
-            self.cases.append(case)
-            success = self.save_cases()
-            if success:
-                print(f"已新增案件：{case.case_id}")
-            return success
-        except Exception as e:
-            print(f"新增案件失敗: {e}")
-            return False
+        for i, stage in enumerate(stages):
+            # 進度圓圈容器
+            circle_frame = tk.Frame(
+                progress_bar_frame,
+                bg=AppConfig.COLORS['window_bg']
+            )
+            circle_frame.pack(side='left', expand=True)
 
-    def update_case(self, case_id: str, updated_case: CaseData) -> bool:
-        """更新案件"""
-        try:
-            for i, case in enumerate(self.cases):
-                if case.case_id == case_id:
-                    updated_case.updated_date = datetime.now()
-                    self.cases[i] = updated_case
-                    success = self.save_cases()
-                    if success:
-                        print(f"已更新案件：{case_id}")
-                    return success
-            raise ValueError(f"找不到案件編號: {case_id}")
-        except Exception as e:
-            print(f"更新案件失敗: {e}")
-            return False
-
-    def delete_case(self, case_id: str) -> bool:
-        """刪除案件"""
-        try:
-            original_count = len(self.cases)
-            self.cases = [case for case in self.cases if case.case_id != case_id]
-
-            if len(self.cases) < original_count:
-                success = self.save_cases()
-                if success:
-                    print(f"已刪除案件：{case_id}")
-                return success
+            # 判斷狀態
+            if stage == current_stage:
+                bg_color = '#4CAF50'  # 綠色 - 當前階段
+                fg_color = 'white'
+            elif stages.index(current_stage) > i:
+                bg_color = '#2196F3'  # 藍色 - 已完成
+                fg_color = 'white'
             else:
-                raise ValueError(f"找不到案件編號: {case_id}")
-        except Exception as e:
-            print(f"刪除案件失敗: {e}")
-            return False
+                bg_color = '#E0E0E0'  # 灰色 - 未開始
+                fg_color = 'black'
 
-    def get_cases(self) -> List[CaseData]:
-        """取得所有案件"""
-        return self.cases.copy()
+            # 圓圈
+            circle = tk.Label(
+                circle_frame,
+                text=str(i+1),
+                bg=bg_color,
+                fg=fg_color,
+                font=AppConfig.FONTS['text'],  # 使用統一字體
+                width=3,
+                height=1
+            )
+            circle.pack()
 
-    def get_case_by_id(self, case_id: str) -> Optional[CaseData]:
-        """根據編號取得案件"""
-        for case in self.cases:
-            if case.case_id == case_id:
-                return case
-        return None
+            # 階段名稱
+            tk.Label(
+                circle_frame,
+                text=stage,
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color'],
+                font=('Microsoft JhengHei', 8)
+            ).pack()
 
-    def search_cases(self, keyword: str) -> List[CaseData]:
-        """搜尋案件"""
-        results = []
-        keyword = keyword.lower()
+            # 連接線 (除了最後一個)
+            if i < len(stages) - 1:
+                line_color = '#2196F3' if stages.index(current_stage) > i else '#E0E0E0'
+                tk.Frame(
+                    progress_bar_frame,
+                    bg=line_color,
+                    height=2,
+                    width=30
+                ).pack(side='left', pady=15)
 
-        for case in self.cases:
-            if (keyword in case.case_id.lower() or
-                keyword in case.case_type.lower() or
-                keyword in case.client.lower() or
-                (case.lawyer and keyword in case.lawyer.lower()) or
-                (case.legal_affairs and keyword in case.legal_affairs.lower()) or
-                keyword in case.progress.lower()):
-                results.append(case)
+    # 事件處理方法
+    def _on_add_case(self):
+        """新增案件事件"""
+        if self.case_controller:
+            # 此處可以開啟新增案件對話框
+            print("開啟新增案件對話框")
+        else:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
 
-        return results
+    def _on_import_excel(self):
+        """匯入Excel事件"""
+        if not self.case_controller:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
+            return
 
-    def export_to_excel(self, file_path: str = None) -> bool:
-        """匯出案件資料到 Excel"""
-        try:
-            if file_path is None:
-                # 使用預設的匯出路徑（直接放在資料夾根目錄）
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"案件資料匯出_{timestamp}.xlsx"
-                file_path = os.path.join(self.data_folder, filename)
+        file_path = filedialog.askopenfilename(
+            title="選擇要匯入的Excel檔案",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        )
 
-            success = ExcelHandler.export_cases_to_excel(self.cases, file_path)
-            if success:
-                print(f"已匯出案件資料到：{file_path}")
-            return success
-        except Exception as e:
-            print(f"匯出Excel失敗: {e}")
-            return False
-
-    def import_from_excel(self, file_path: str) -> bool:
-        """從 Excel 匯入案件資料"""
-        try:
-            imported_cases = ExcelHandler.import_cases_from_excel(file_path)
-            if imported_cases:
-                # 合併資料（避免重複）
-                existing_ids = {case.case_id for case in self.cases}
-                new_cases = []
-                updated_count = 0
-
-                for case in imported_cases:
-                    if case.case_id not in existing_ids:
-                        new_cases.append(case)
-                    else:
-                        # 更新現有案件
-                        for i, existing_case in enumerate(self.cases):
-                            if existing_case.case_id == case.case_id:
-                                case.updated_date = datetime.now()
-                                self.cases[i] = case
-                                updated_count += 1
-                                break
-
-                self.cases.extend(new_cases)
-                success = self.save_cases()
-
+        if file_path:
+            try:
+                success = self.case_controller.import_from_excel(file_path)
                 if success:
-                    print(f"匯入成功：新增 {len(new_cases)} 筆案件，更新 {updated_count} 筆案件")
+                    self._load_cases()
+                    messagebox.showinfo("成功", "Excel資料匯入成功！")
+                else:
+                    messagebox.showerror("錯誤", "Excel資料匯入失敗！")
+            except Exception as e:
+                messagebox.showerror("錯誤", f"匯入過程發生錯誤：{str(e)}")
 
-                return success
-            return False
-        except Exception as e:
-            print(f"匯入Excel失敗: {e}")
-            return False
+    def _on_export_excel(self):
+        """匯出Excel事件"""
+        if not self.case_controller:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
+            return
 
-    def generate_case_id(self) -> str:
-        """產生新的案件編號"""
-        try:
-            existing_ids = {case.case_id for case in self.cases}
-            year = datetime.now().year
+        if not self.case_data:
+            messagebox.showwarning("提醒", "沒有資料可以匯出")
+            return
 
-            for i in range(1, 10000):
-                case_id = f"C{year}{i:04d}"
-                if case_id not in existing_ids:
-                    return case_id
+        file_path = filedialog.asksaveasfilename(
+            title="儲存Excel檔案",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
 
-            raise RuntimeError("無法產生唯一的案件編號")
-        except Exception as e:
-            print(f"產生案件編號失敗: {e}")
-            return f"C{datetime.now().year}0001"
+        if file_path:
+            try:
+                success = self.case_controller.export_to_excel(file_path)
+                if success:
+                    messagebox.showinfo("成功", f"資料已匯出到：\n{file_path}")
+                else:
+                    messagebox.showerror("錯誤", "資料匯出失敗！")
+            except Exception as e:
+                messagebox.showerror("錯誤", f"匯出過程發生錯誤：{str(e)}")
 
-    def get_statistics(self) -> dict:
-        """取得案件統計資訊"""
-        try:
-            stats = {
-                'total_cases': len(self.cases),
-                'case_types': {},
-                'progress_stats': {},
-                'lawyer_stats': {},
-                'legal_affairs_stats': {}
-            }
+    def _on_refresh(self):
+        """重新整理事件"""
+        self._load_cases()
 
-            for case in self.cases:
-                # 案件類型統計
-                case_type = case.case_type
-                stats['case_types'][case_type] = stats['case_types'].get(case_type, 0) + 1
+    def _on_item_double_click(self, event):
+        """項目雙擊事件"""
+        selection = self.tree.selection()
+        if selection:
+            item = selection[0]
+            try:
+                case_index = int(self.tree.item(item)['values'][0])
+                case = self.case_data[case_index]
+                print(f"雙擊案件: {case.case_id}")
+                # 此處可以開啟編輯案件對話框
+            except (ValueError, IndexError):
+                pass
 
-                # 進度統計
-                progress = case.progress
-                stats['progress_stats'][progress] = stats['progress_stats'].get(progress, 0) + 1
+    def _on_item_right_click(self, event):
+        """項目右鍵事件"""
+        print("右鍵選單功能待實作")
 
-                # 律師統計
-                lawyer = case.lawyer or '未指派'
-                stats['lawyer_stats'][lawyer] = stats['lawyer_stats'].get(lawyer, 0) + 1
+    def add_case_data(self, case: CaseData):
+        """新增案件資料"""
+        if self.case_controller:
+            success = self.case_controller.add_case(case)
+            if success:
+                self._load_cases()
+                return True
+        return False
 
-                # 法務統計
-                legal_affairs = case.legal_affairs or '未指派'
-                stats['legal_affairs_stats'][legal_affairs] = stats['legal_affairs_stats'].get(legal_affairs, 0) + 1
+    def update_case_data(self, cases: List[CaseData]):
+        """更新所有案件資料"""
+        self.case_data = cases
+        self._refresh_tree_data()
 
-            return stats
-        except Exception as e:
-            print(f"取得統計資訊失敗: {e}")
-            return {}
+    def close(self):
+        """關閉視窗"""
+        self.window.destroy()
+
+    def show(self):
+        """顯示視窗"""
+        self.window.deiconify()
+
+    def hide(self):
+        """隱藏視窗"""
+        self.window.withdraw()
