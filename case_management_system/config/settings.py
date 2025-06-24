@@ -38,12 +38,12 @@ class AppConfig:
         'welcome': ('Microsoft JhengHei', 16, 'bold')
     }
 
-    # 案件欄位設定
+    # 🔧 完整的案件欄位設定 - 包含所有可能的欄位
     CASE_FIELDS = {
-        'case_type': {'name': '案件類型', 'width': 100, 'visible': True},
-        'client': {'name': '當事人', 'width': 150, 'visible': True},
-        'lawyer': {'name': '委任律師', 'width': 120, 'visible': True},
-        'legal_affairs': {'name': '法務', 'width': 100, 'visible': True}
+        'case_type': {'name': '案件類型', 'width': 100, 'visible': True, 'order': 1},
+        'client': {'name': '當事人', 'width': 150, 'visible': True, 'order': 2},
+        'lawyer': {'name': '委任律師', 'width': 120, 'visible': True, 'order': 3},
+        'legal_affairs': {'name': '法務', 'width': 100, 'visible': True, 'order': 4},
     }
 
     # 預設視窗設定

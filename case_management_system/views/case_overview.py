@@ -3,25 +3,16 @@ from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
 from config.settings import AppConfig
 from models.case_model import CaseData
-import copy
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
 
-    def __init__(self, parent=None, case_controller=None, main_window=None):
-        # 在初始化時加入關閉標記
-        self._is_closing = False
-
+    def __init__(self, parent=None, case_controller=None):
         self.parent = parent
         self.case_controller = case_controller
-        self.main_window = main_window
-
-        # 修正：使用深拷貝避免修改全域設定
-        self.visible_fields = copy.deepcopy(AppConfig.CASE_FIELDS)
-
+        self.visible_fields = AppConfig.CASE_FIELDS.copy()
         self.case_data: List[CaseData] = []
         self.drag_data = {"x": 0, "y": 0}
-        self.field_vars = {}  # 儲存欄位控制變數
 
         # 建立視窗
         self.window = tk.Toplevel(parent) if parent else tk.Tk()
@@ -35,8 +26,9 @@ class CaseOverviewWindow:
 
     def _setup_window(self):
         """設定視窗基本屬性"""
+        # 使用統一的標題
         self.window.title(AppConfig.WINDOW_TITLES['overview'])
-        self.window.geometry("1200x800")
+        self.window.geometry("1200x800")  # 增大總覽視窗尺寸
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
 
         # 移除系統標題欄
@@ -47,9 +39,6 @@ class CaseOverviewWindow:
 
         # 置中顯示
         self._center_window()
-
-        # 設定關閉協議
-        self.window.protocol("WM_DELETE_WINDOW", self._back_to_main)
 
     def _center_window(self):
         """將視窗置中顯示"""
@@ -99,20 +88,18 @@ class CaseOverviewWindow:
         self.title_frame = tk.Frame(
             self.main_frame,
             bg=AppConfig.COLORS['title_bg'],
-            height=AppConfig.SIZES['title_height'],
-            relief='flat',
-            bd=0
+            height=AppConfig.SIZES['title_height']
         )
         self.title_frame.pack(fill='x', pady=(0, 5))
         self.title_frame.pack_propagate(False)
 
-        # 標題標籤
+        # 標題標籤 - 使用統一字體和標題
         self.title_label = tk.Label(
             self.title_frame,
             text=AppConfig.WINDOW_TITLES['overview'],
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title']
+            font=AppConfig.FONTS['title']  # 使用統一字體設定
         )
         self.title_label.pack(side='left', padx=10)
 
@@ -125,7 +112,7 @@ class CaseOverviewWindow:
             font=('Arial', 12, 'bold'),
             bd=0,
             width=3,
-            command=self._back_to_main
+            command=self.close
         )
         self.close_btn.pack(side='right', padx=5)
 
@@ -144,26 +131,6 @@ class CaseOverviewWindow:
         self._setup_treeview()
         self._create_field_controls()
 
-    def _back_to_main(self):
-        """返回主視窗 - 修正版本"""
-        try:
-            if hasattr(self, '_is_closing') and self._is_closing:
-                return
-
-            if self.main_window and hasattr(self.main_window, 'window'):
-                if self.main_window.window.winfo_exists():
-                    self.hide()
-                    self.main_window.show_main_window()
-                else:
-                    # 主視窗已關閉，直接關閉當前視窗
-                    self.window.destroy()
-        except:
-            # 發生錯誤時直接關閉
-            try:
-                self.window.destroy()
-            except:
-                pass
-
     def create_button(self, parent, text, command, style_type='Custom'):
         """建立標準化按鈕"""
         if style_type == 'Function':
@@ -173,7 +140,7 @@ class CaseOverviewWindow:
                 command=command,
                 bg=AppConfig.COLORS['button_bg'],
                 fg=AppConfig.COLORS['button_fg'],
-                font=AppConfig.FONTS['button'],
+                font=AppConfig.FONTS['button'],  # 使用統一字體
                 width=15,
                 height=2
             )
@@ -184,7 +151,7 @@ class CaseOverviewWindow:
                 command=command,
                 bg=AppConfig.COLORS['button_bg'],
                 fg=AppConfig.COLORS['button_fg'],
-                font=AppConfig.FONTS['button'],
+                font=AppConfig.FONTS['button'],  # 使用統一字體
                 width=10
             )
 
@@ -274,12 +241,12 @@ class CaseOverviewWindow:
         self.refresh_btn.pack(side='right', padx=(5, 10))
 
     def _setup_treeview(self):
-        """設定樹狀圖控件 - 加入除錯資訊"""
+        """設定樹狀圖控件"""
         # 建立樹狀圖容器
         tree_container = tk.Frame(self.tree_frame, bg=AppConfig.COLORS['window_bg'])
         tree_container.pack(fill='both', expand=True)
 
-        # 樹狀圖
+        # 樹狀圖 - 移除滾動軸
         self.tree = ttk.Treeview(
             tree_container,
             selectmode='extended'
@@ -298,8 +265,7 @@ class CaseOverviewWindow:
         # 設定樹狀圖樣式
         self._setup_tree_style()
 
-        # 設定欄位 - 加入除錯
-        print("初始化樹狀圖欄位配置...")
+        # 設定欄位
         self._update_tree_columns()
 
         # 設定進度可視化
@@ -324,7 +290,7 @@ class CaseOverviewWindow:
             'Treeview.Heading',
             background=AppConfig.COLORS['title_bg'],
             foreground='black',
-            font=AppConfig.FONTS['button']
+            font=AppConfig.FONTS['button']  # 使用統一字體
         )
 
         # 交替行顏色
@@ -332,7 +298,7 @@ class CaseOverviewWindow:
         self.tree.tag_configure('evenrow', background='white')
 
     def _update_tree_columns(self):
-        """修正：只使用可見欄位，不要隱藏索引"""
+        """更新樹狀圖欄位"""
         try:
             # 取得當前可見欄位
             visible_fields = []
@@ -356,25 +322,20 @@ class CaseOverviewWindow:
             print(f"更新樹狀圖欄位失敗: {e}")
 
     def _create_field_controls(self):
-        """修正：建立欄位顯示控制"""
-        # 清空現有控制項
-        for widget in self.field_control_frame.winfo_children():
-            widget.destroy()
-
+        """建立欄位顯示控制"""
         # 控制標題
         control_title = tk.Label(
             self.field_control_frame,
             text="隱藏欄位：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['button']
+            font=AppConfig.FONTS['button']  # 使用統一字體
         )
         control_title.pack(side='left', padx=(10, 20))
 
-        # 重新建立欄位勾選框
+        # 欄位勾選框
         self.field_vars = {}
-        for field_id, field_info in self.visible_fields.items():
-            # 勾選表示隱藏（True=隱藏，False=顯示）
+        for field_id, field_info in AppConfig.CASE_FIELDS.items():
             var = tk.BooleanVar(value=not field_info['visible'])
             self.field_vars[field_id] = var
 
@@ -388,38 +349,19 @@ class CaseOverviewWindow:
                 selectcolor=AppConfig.COLORS['button_bg'],
                 activebackground=AppConfig.COLORS['window_bg'],
                 activeforeground=AppConfig.COLORS['text_color'],
-                font=AppConfig.FONTS['text']
+                font=AppConfig.FONTS['text']  # 使用統一字體
             )
             checkbox.pack(side='left', padx=10)
 
-            print(f"建立欄位控制: {field_info['name']} - 初始狀態: {'隱藏' if not field_info['visible'] else '顯示'}")
-
     def _toggle_field(self, field_id: str):
-        """修正：切換欄位顯示狀態"""
-        try:
-            # 取得勾選狀態（True=隱藏，False=顯示）
-            is_hidden = self.field_vars[field_id].get()
+        """切換欄位顯示狀態"""
+        # 更新欄位可見性
+        is_hidden = self.field_vars[field_id].get()
+        self.visible_fields[field_id]['visible'] = not is_hidden
 
-            # 更新可見性狀態
-            self.visible_fields[field_id]['visible'] = not is_hidden
-
-            field_name = self.visible_fields[field_id]['name']
-            status = "隱藏" if is_hidden else "顯示"
-            print(f"切換欄位 '{field_name}' 為 {status}")
-
-            # 立即更新樹狀圖結構
-            self._update_tree_columns()
-
-            # 重新載入資料
-            self._refresh_tree_data()
-
-            # 強制更新介面
-            self.window.update_idletasks()
-
-        except Exception as e:
-            print(f"切換欄位失敗: {e}")
-            import traceback
-            traceback.print_exc()
+        # 更新樹狀圖
+        self._update_tree_columns()
+        self._refresh_tree_data()
 
     def _load_cases(self):
         """載入案件資料"""
@@ -428,7 +370,7 @@ class CaseOverviewWindow:
             self._refresh_tree_data()
 
     def _refresh_tree_data(self):
-        """修正：使用項目ID來追蹤索引"""
+        """重新整理樹狀圖資料"""
         try:
             # 清空現有資料
             for item in self.tree.get_children():
@@ -475,7 +417,7 @@ class CaseOverviewWindow:
             text="案件進度可視化",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['button']
+            font=AppConfig.FONTS['button']  # 使用統一字體
         )
         progress_title.pack(pady=5)
 
@@ -487,7 +429,7 @@ class CaseOverviewWindow:
         self.progress_display.pack(fill='both', expand=True, padx=20)
 
     def _on_tree_select(self, event):
-        """修正：從項目ID取得索引"""
+        """樹狀圖選擇事件"""
         selection = self.tree.selection()
         if selection:
             # 清空進度顯示
@@ -506,9 +448,8 @@ class CaseOverviewWindow:
             except (ValueError, IndexError) as e:
                 print(f"取得案件索引失敗: {e}")
 
-
     def _display_case_progress(self, case: 'CaseData'):
-        """顯示案件進度 - 移除案件編號顯示"""
+        """顯示案件進度 - 根據選中資料動態顯示"""
         # 進度階段
         stages = ['待處理', '一審', '二審', '三審', '合議庭', '已結案']
         current_stage = case.progress
@@ -520,28 +461,39 @@ class CaseOverviewWindow:
         )
         info_frame.pack(side='left', padx=10, anchor='nw')
 
-        # 根據可見欄位動態顯示資訊（移除案件編號固定顯示）
-        for field_id, field_info in self.visible_fields.items():
-            if field_info['visible']:
-                field_name = field_info['name']
-                if field_id == 'case_type':
-                    value = case.case_type
-                elif field_id == 'client':
-                    value = case.client
-                elif field_id == 'lawyer':
-                    value = case.lawyer or '未指派'
-                elif field_id == 'legal_affairs':
-                    value = case.legal_affairs or '未指派'
-                else:
-                    continue
+        # 顯示可見欄位的資料
+        visible_fields = [field_id for field_id, field_info in self.visible_fields.items() if field_info['visible']]
 
-                tk.Label(
-                    info_frame,
-                    text=f"{field_name}: {value}",
-                    bg=AppConfig.COLORS['window_bg'],
-                    fg=AppConfig.COLORS['text_color'],
-                    font=AppConfig.FONTS['text']
-                ).pack(anchor='w')
+        # 案件編號（固定顯示）
+        tk.Label(
+            info_frame,
+            text=f"案件編號: {case.case_id}",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['button']  # 使用統一字體
+        ).pack(anchor='w')
+
+        # 根據可見欄位動態顯示資訊
+        for field_id in visible_fields:
+            field_name = self.visible_fields[field_id]['name']
+            if field_id == 'case_type':
+                value = case.case_type
+            elif field_id == 'client':
+                value = case.client
+            elif field_id == 'lawyer':
+                value = case.lawyer or '未指派'
+            elif field_id == 'legal_affairs':
+                value = case.legal_affairs or '未指派'
+            else:
+                continue
+
+            tk.Label(
+                info_frame,
+                text=f"{field_name}: {value}",
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color'],
+                font=AppConfig.FONTS['text']  # 使用統一字體
+            ).pack(anchor='w')
 
         # 當前進度狀態
         tk.Label(
@@ -549,7 +501,7 @@ class CaseOverviewWindow:
             text=f"目前狀態: {current_stage}",
             bg=AppConfig.COLORS['window_bg'],
             fg='#4CAF50',
-            font=AppConfig.FONTS['text']
+            font=AppConfig.FONTS['text']  # 使用統一字體
         ).pack(anchor='w', pady=(5, 0))
 
         # 右側進度條
@@ -584,7 +536,7 @@ class CaseOverviewWindow:
                 text=str(i+1),
                 bg=bg_color,
                 fg=fg_color,
-                font=AppConfig.FONTS['text'],
+                font=AppConfig.FONTS['text'],  # 使用統一字體
                 width=3,
                 height=1
             )
@@ -613,6 +565,7 @@ class CaseOverviewWindow:
     def _on_add_case(self):
         """新增案件事件"""
         if self.case_controller:
+            # 此處可以開啟新增案件對話框
             print("開啟新增案件對話框")
         else:
             messagebox.showwarning("提醒", "案件控制器未初始化")
@@ -670,7 +623,7 @@ class CaseOverviewWindow:
         self._load_cases()
 
     def _on_item_double_click(self, event):
-        """修正：從項目ID取得索引"""
+        """項目雙擊事件"""
         selection = self.tree.selection()
         if selection:
             item = selection[0]
@@ -702,45 +655,13 @@ class CaseOverviewWindow:
         self._refresh_tree_data()
 
     def close(self):
-        """關閉視窗 - 修正版本"""
-        try:
-            # 設定關閉標記
-            self._is_closing = True
-
-            if self.main_window and hasattr(self.main_window, 'close'):
-                # 檢查主視窗是否還存在
-                if hasattr(self.main_window, 'window') and self.main_window.window.winfo_exists():
-                    self.main_window.close()
-                else:
-                    # 主視窗已關閉，直接關閉當前視窗
-                    if hasattr(self, 'window') and self.window.winfo_exists():
-                        self.window.destroy()
-            else:
-                # 沒有主視窗，直接關閉
-                if hasattr(self, 'window') and self.window.winfo_exists():
-                    self.window.destroy()
-
-        except Exception as e:
-            print(f"關閉總覽視窗時發生錯誤: {e}")
-            # 強制關閉
-            try:
-                if hasattr(self, 'window'):
-                    self.window.destroy()
-            except:
-                pass
+        """關閉視窗"""
+        self.window.destroy()
 
     def show(self):
-        """顯示視窗 - 加入安全檢查"""
-        try:
-            if hasattr(self, 'window') and self.window.winfo_exists():
-                self.window.deiconify()
-        except:
-            pass
+        """顯示視窗"""
+        self.window.deiconify()
 
     def hide(self):
-        """隱藏視窗 - 加入安全檢查"""
-        try:
-            if hasattr(self, 'window') and self.window.winfo_exists():
-                self.window.withdraw()
-        except:
-            pass
+        """隱藏視窗"""
+        self.window.withdraw()
