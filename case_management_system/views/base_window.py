@@ -70,11 +70,16 @@ class BaseWindow:
             y = self.window.winfo_y() + (event.y - self.drag_data["y"])
             self.window.geometry(f"+{x}+{y}")
 
-        # 綁定標題列拖曳事件
-        self.title_frame.bind("<Button-1>", start_drag)
-        self.title_frame.bind("<B1-Motion>", on_drag)
-        self.title_label.bind("<Button-1>", start_drag)
-        self.title_label.bind("<B1-Motion>", on_drag)
+        # 等待標題框架建立後再綁定
+        self.window.after(100, lambda: self._bind_drag_events(start_drag, on_drag))
+
+    def _bind_drag_events(self, start_drag, on_drag):
+        """綁定拖曳事件到標題框架"""
+        if hasattr(self, 'title_frame') and hasattr(self, 'title_label'):
+            self.title_frame.bind("<Button-1>", start_drag)
+            self.title_frame.bind("<B1-Motion>", on_drag)
+            self.title_label.bind("<Button-1>", start_drag)
+            self.title_label.bind("<B1-Motion>", on_drag)
 
     def _setup_styles(self):
         """設定 ttk 樣式"""
@@ -110,42 +115,33 @@ class BaseWindow:
             width=15
         )
 
-        # 標題標籤樣式
-        self.style.configure(
-            'Title.TLabel',
-            background=AppConfig.COLORS['title_bg'],
-            foreground=AppConfig.COLORS['title_fg'],
-            font=('Arial', 12, 'bold'),
-            anchor='center'
-        )
-
     def _create_layout(self):
         """建立基礎佈局"""
-        # 主容器 - 移除內邊距
+        # 主容器
         self.main_frame = tk.Frame(
             self.window,
             bg=AppConfig.COLORS['window_bg']
         )
-        self.main_frame.pack(fill='both', expand=True)  # 移除 padx=5, pady=5
+        self.main_frame.pack(fill='both', expand=True)
 
-        # 標題列 - 移除下邊距
+        # 標題列
         self.title_frame = tk.Frame(
             self.main_frame,
             bg=AppConfig.COLORS['title_bg'],
             height=AppConfig.SIZES['title_height']
         )
-        self.title_frame.pack(fill='x')  # 移除 pady=(0, 5)
+        self.title_frame.pack(fill='x')
         self.title_frame.pack_propagate(False)
 
-        # 標題標籤 - 移除展開
+        # 標題標籤 - 使用統一字體
         self.title_label = tk.Label(
             self.title_frame,
             text=self.title,
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=('Microsoft JhengHei', 14, 'bold')
+            font=AppConfig.FONTS['title']  # 使用統一字體設定
         )
-        self.title_label.pack(side='left', padx=10)  # 改為固定左邊距，移除 expand=True
+        self.title_label.pack(side='left', padx=10)
 
         # 關閉按鈕
         self.close_btn = tk.Button(
@@ -158,7 +154,7 @@ class BaseWindow:
             width=3,
             command=self.close
         )
-        self.close_btn.pack(side='right', padx=10)  # 改為固定右邊距
+        self.close_btn.pack(side='right', padx=10)
 
         # 內容區域
         self.content_frame = tk.Frame(
@@ -203,20 +199,26 @@ class BaseWindow:
         button_frame.pack(side='bottom', pady=10)
 
         # 確定按鈕
-        ok_btn = self.create_button(
+        ok_btn = tk.Button(
             button_frame,
-            '確定',
-            ok_command or self.close,
-            'Dialog.TButton'
+            text='確定',
+            command=ok_command or self.close,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],  # 使用統一字體
+            width=10
         )
         ok_btn.pack(side='left', padx=5)
 
         # 取消按鈕
-        cancel_btn = self.create_button(
+        cancel_btn = tk.Button(
             button_frame,
-            '取消',
-            cancel_command or self.close,
-            'Dialog.TButton'
+            text='取消',
+            command=cancel_command or self.close,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],  # 使用統一字體
+            width=10
         )
         cancel_btn.pack(side='left', padx=5)
 

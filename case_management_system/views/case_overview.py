@@ -1,14 +1,15 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
 from config.settings import AppConfig
 from models.case_model import CaseData
 
 class CaseOverviewWindow:
-    """案件總覽視窗 - 獨立版本避免繼承問題"""
+    """案件總覽視窗"""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, case_controller=None):
         self.parent = parent
+        self.case_controller = case_controller
         self.visible_fields = AppConfig.CASE_FIELDS.copy()
         self.case_data: List[CaseData] = []
         self.drag_data = {"x": 0, "y": 0}
@@ -19,20 +20,22 @@ class CaseOverviewWindow:
         self._setup_styles()
         self._create_layout()
 
+        # 載入案件資料
+        if self.case_controller:
+            self._load_cases()
+
     def _setup_window(self):
         """設定視窗基本屬性"""
-        self.window.title("案件總覽")
-        self.window.geometry(f"{AppConfig.DEFAULT_WINDOW['width']}x{AppConfig.DEFAULT_WINDOW['height']}")
+        # 使用統一的標題
+        self.window.title(AppConfig.WINDOW_TITLES['overview'])
+        self.window.geometry("1200x800")  # 增大總覽視窗尺寸
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
 
         # 移除系統標題欄
         self.window.overrideredirect(True)
 
         # 設定最小尺寸
-        self.window.minsize(
-            AppConfig.SIZES['min_window']['width'],
-            AppConfig.SIZES['min_window']['height']
-        )
+        self.window.minsize(1000, 700)
 
         # 置中顯示
         self._center_window()
@@ -40,8 +43,8 @@ class CaseOverviewWindow:
     def _center_window(self):
         """將視窗置中顯示"""
         self.window.update_idletasks()
-        width = AppConfig.DEFAULT_WINDOW['width']
-        height = AppConfig.DEFAULT_WINDOW['height']
+        width = 1200
+        height = 800
         x = (self.window.winfo_screenwidth() // 2) - (width // 2)
         y = (self.window.winfo_screenheight() // 2) - (height // 2)
         self.window.geometry(f"{width}x{height}+{x}+{y}")
@@ -90,15 +93,15 @@ class CaseOverviewWindow:
         self.title_frame.pack(fill='x', pady=(0, 5))
         self.title_frame.pack_propagate(False)
 
-        # 標題標籤
+        # 標題標籤 - 使用統一字體和標題
         self.title_label = tk.Label(
             self.title_frame,
-            text="案件總覽",
+            text=AppConfig.WINDOW_TITLES['overview'],
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=('Microsoft JhengHei', 14, 'bold')
+            font=AppConfig.FONTS['title']  # 使用統一字體設定
         )
-        self.title_label.pack(side='left', expand=True)
+        self.title_label.pack(side='left', padx=10)
 
         # 關閉按鈕
         self.close_btn = tk.Button(
@@ -137,7 +140,7 @@ class CaseOverviewWindow:
                 command=command,
                 bg=AppConfig.COLORS['button_bg'],
                 fg=AppConfig.COLORS['button_fg'],
-                font=('Microsoft JhengHei', 10),
+                font=AppConfig.FONTS['button'],  # 使用統一字體
                 width=15,
                 height=2
             )
@@ -148,7 +151,7 @@ class CaseOverviewWindow:
                 command=command,
                 bg=AppConfig.COLORS['button_bg'],
                 fg=AppConfig.COLORS['button_fg'],
-                font=('Microsoft JhengHei', 10),
+                font=AppConfig.FONTS['button'],  # 使用統一字體
                 width=10
             )
 
@@ -213,8 +216,8 @@ class CaseOverviewWindow:
         # 上傳資料按鈕
         self.upload_btn = self.create_button(
             self.toolbar_frame,
-            '上傳資料',
-            self._on_upload_data,
+            '匯入Excel',
+            self._on_import_excel,
             'Function'
         )
         self.upload_btn.pack(side='left', padx=5)
@@ -286,8 +289,8 @@ class CaseOverviewWindow:
         self.style.configure(
             'Treeview.Heading',
             background=AppConfig.COLORS['title_bg'],
-            foreground='black',  # 改為黑色
-            font=('Microsoft JhengHei', 10, 'bold')
+            foreground='black',
+            font=AppConfig.FONTS['button']  # 使用統一字體
         )
 
         # 交替行顏色
@@ -302,7 +305,7 @@ class CaseOverviewWindow:
             if field_info['visible']
         ]
 
-        # 添加隱藏的索引欄位
+        # 只添加隱藏的索引欄位（不顯示案件編號）
         all_columns = ['case_index'] + visible_columns
 
         # 設定欄位
@@ -331,6 +334,7 @@ class CaseOverviewWindow:
                 minwidth=80,
                 anchor='center'
             )
+
     def _create_field_controls(self):
         """建立欄位顯示控制"""
         # 控制標題
@@ -339,7 +343,7 @@ class CaseOverviewWindow:
             text="隱藏欄位：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=('Microsoft JhengHei', 10, 'bold')
+            font=AppConfig.FONTS['button']  # 使用統一字體
         )
         control_title.pack(side='left', padx=(10, 20))
 
@@ -358,7 +362,8 @@ class CaseOverviewWindow:
                 fg=AppConfig.COLORS['text_color'],
                 selectcolor=AppConfig.COLORS['button_bg'],
                 activebackground=AppConfig.COLORS['window_bg'],
-                activeforeground=AppConfig.COLORS['text_color']
+                activeforeground=AppConfig.COLORS['text_color'],
+                font=AppConfig.FONTS['text']  # 使用統一字體
             )
             checkbox.pack(side='left', padx=10)
 
@@ -372,6 +377,12 @@ class CaseOverviewWindow:
         self._update_tree_columns()
         self._refresh_tree_data()
 
+    def _load_cases(self):
+        """載入案件資料"""
+        if self.case_controller:
+            self.case_data = self.case_controller.get_cases()
+            self._refresh_tree_data()
+
     def _refresh_tree_data(self):
         """重新整理樹狀圖資料"""
         # 清空現有資料
@@ -380,10 +391,10 @@ class CaseOverviewWindow:
 
         # 重新載入資料
         for i, case in enumerate(self.case_data):
-            # 第一個值是索引
+            # 第一個值是索引（隱藏）
             values = [str(i)]
 
-            # 添加可見欄位的值
+            # 添加可見欄位的值（不包含案件編號）
             visible_columns = [col for col in self.tree['columns'] if col != 'case_index']
             for field_id in visible_columns:
                 if field_id == 'case_type':
@@ -407,7 +418,7 @@ class CaseOverviewWindow:
             text="案件進度可視化",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=('Microsoft JhengHei', 12, 'bold')
+            font=AppConfig.FONTS['button']  # 使用統一字體
         )
         progress_title.pack(pady=5)
 
@@ -458,7 +469,7 @@ class CaseOverviewWindow:
             text=f"案件編號: {case.case_id}",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=('Microsoft JhengHei', 10, 'bold')
+            font=AppConfig.FONTS['button']  # 使用統一字體
         ).pack(anchor='w')
 
         # 根據可見欄位動態顯示資訊
@@ -480,7 +491,7 @@ class CaseOverviewWindow:
                 text=f"{field_name}: {value}",
                 bg=AppConfig.COLORS['window_bg'],
                 fg=AppConfig.COLORS['text_color'],
-                font=('Microsoft JhengHei', 9)
+                font=AppConfig.FONTS['text']  # 使用統一字體
             ).pack(anchor='w')
 
         # 當前進度狀態
@@ -489,7 +500,7 @@ class CaseOverviewWindow:
             text=f"目前狀態: {current_stage}",
             bg=AppConfig.COLORS['window_bg'],
             fg='#4CAF50',
-            font=('Microsoft JhengHei', 9, 'bold')
+            font=AppConfig.FONTS['text']  # 使用統一字體
         ).pack(anchor='w', pady=(5, 0))
 
         # 右側進度條
@@ -524,7 +535,7 @@ class CaseOverviewWindow:
                 text=str(i+1),
                 bg=bg_color,
                 fg=fg_color,
-                font=('Microsoft JhengHei', 10, 'bold'),
+                font=AppConfig.FONTS['text'],  # 使用統一字體
                 width=3,
                 height=1
             )
@@ -552,25 +563,76 @@ class CaseOverviewWindow:
     # 事件處理方法
     def _on_add_case(self):
         """新增案件事件"""
-        print("新增案件功能待實作")
+        if self.case_controller:
+            # 此處可以開啟新增案件對話框
+            print("開啟新增案件對話框")
+        else:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
 
-    def _on_upload_data(self):
-        """上傳資料事件"""
-        print("上傳資料功能待實作")
+    def _on_import_excel(self):
+        """匯入Excel事件"""
+        if not self.case_controller:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
+            return
+
+        file_path = filedialog.askopenfilename(
+            title="選擇要匯入的Excel檔案",
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
+        )
+
+        if file_path:
+            try:
+                success = self.case_controller.import_from_excel(file_path)
+                if success:
+                    self._load_cases()
+                    messagebox.showinfo("成功", "Excel資料匯入成功！")
+                else:
+                    messagebox.showerror("錯誤", "Excel資料匯入失敗！")
+            except Exception as e:
+                messagebox.showerror("錯誤", f"匯入過程發生錯誤：{str(e)}")
 
     def _on_export_excel(self):
         """匯出Excel事件"""
-        print("匯出Excel功能待實作")
+        if not self.case_controller:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
+            return
+
+        if not self.case_data:
+            messagebox.showwarning("提醒", "沒有資料可以匯出")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="儲存Excel檔案",
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+
+        if file_path:
+            try:
+                success = self.case_controller.export_to_excel(file_path)
+                if success:
+                    messagebox.showinfo("成功", f"資料已匯出到：\n{file_path}")
+                else:
+                    messagebox.showerror("錯誤", "資料匯出失敗！")
+            except Exception as e:
+                messagebox.showerror("錯誤", f"匯出過程發生錯誤：{str(e)}")
 
     def _on_refresh(self):
         """重新整理事件"""
-        self._refresh_tree_data()
+        self._load_cases()
 
     def _on_item_double_click(self, event):
         """項目雙擊事件"""
         selection = self.tree.selection()
         if selection:
-            print(f"雙擊項目: {selection[0]}")
+            item = selection[0]
+            try:
+                case_index = int(self.tree.item(item)['values'][0])
+                case = self.case_data[case_index]
+                print(f"雙擊案件: {case.case_id}")
+                # 此處可以開啟編輯案件對話框
+            except (ValueError, IndexError):
+                pass
 
     def _on_item_right_click(self, event):
         """項目右鍵事件"""
@@ -578,36 +640,17 @@ class CaseOverviewWindow:
 
     def add_case_data(self, case: CaseData):
         """新增案件資料"""
-        self.case_data.append(case)
-        self._refresh_tree_data()
+        if self.case_controller:
+            success = self.case_controller.add_case(case)
+            if success:
+                self._load_cases()
+                return True
+        return False
 
     def update_case_data(self, cases: List[CaseData]):
         """更新所有案件資料"""
         self.case_data = cases
         self._refresh_tree_data()
-
-    # 事件處理方法
-    def _on_add_case(self):
-        """新增案件事件"""
-        print("新增案件功能待實作")
-
-    def _on_upload_data(self):
-        """上傳資料事件"""
-        print("上傳資料功能待實作")
-
-    def _on_export_excel(self):
-        """匯出Excel事件"""
-        print("匯出Excel功能待實作")
-
-    def _on_refresh(self):
-        """重新整理事件"""
-        self._refresh_tree_data()
-
-    def _on_item_double_click(self, event):
-        """項目雙擊事件"""
-        selection = self.tree.selection()
-        if selection:
-            print(f"雙擊項目: {selection[0]}")
 
     def close(self):
         """關閉視窗"""

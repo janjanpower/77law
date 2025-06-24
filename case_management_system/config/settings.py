@@ -30,7 +30,15 @@ class AppConfig:
         'button_spacing': 10
     }
 
-    # 案件欄位設定 (移除進度追蹤欄位)
+    # 字體設定
+    FONTS = {
+        'title': ('Microsoft JhengHei', 12, 'bold'),
+        'button': ('Microsoft JhengHei', 10),
+        'text': ('Microsoft JhengHei', 9),
+        'welcome': ('Microsoft JhengHei', 16, 'bold')
+    }
+
+    # 案件欄位設定
     CASE_FIELDS = {
         'case_type': {'name': '案件類型', 'width': 100, 'visible': True},
         'client': {'name': '當事人', 'width': 150, 'visible': True},
@@ -44,4 +52,24 @@ class AppConfig:
         'width': 400,
         'height': 600,
         'resizable': True
+    }
+
+    # 視窗標題設定
+    WINDOW_TITLES = {
+        'main': '案件管理系統',
+        'overview': '案件管理系統 - 總覽',
+        'add_case': '案件管理系統 - 新增案件',
+        'edit_case': '案件管理系統 - 編輯案件'
+    }
+
+    # 資料儲存設定 - 簡化版本
+    DATA_CONFIG = {
+        'case_data_file': 'cases_data.json',  # 案件資料庫檔案
+        'settings_file': 'app_settings.json'  # 應用程式設定檔案
+    }
+
+    # 案件類型對應的資料夾名稱
+    CASE_TYPE_FOLDERS = {
+        '刑事': '刑事',
+        '民事': '民事'
     }
