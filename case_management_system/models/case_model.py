@@ -6,11 +6,19 @@ from datetime import datetime
 class CaseData:
     """案件資料類別"""
     case_id: str
-    case_type: str  # 案件類型
+    case_type: str  # 案件類型（刑事/民事）
     client: str     # 當事人
     lawyer: Optional[str] = None    # 委任律師
     legal_affairs: Optional[str] = None  # 法務
     progress: str = "待處理"  # 進度追蹤
+
+    # 新增詳細資訊欄位
+    case_reason: Optional[str] = None    # 案由
+    case_number: Optional[str] = None    # 案號
+    opposing_party: Optional[str] = None # 對造
+    court: Optional[str] = None          # 負責法院
+    division: Optional[str] = None       # 負責股別
+
     created_date: datetime = None
     updated_date: datetime = None
 
@@ -29,6 +37,11 @@ class CaseData:
             'lawyer': self.lawyer,
             'legal_affairs': self.legal_affairs,
             'progress': self.progress,
+            'case_reason': self.case_reason,
+            'case_number': self.case_number,
+            'opposing_party': self.opposing_party,
+            'court': self.court,
+            'division': self.division,
             'created_date': self.created_date.isoformat(),
             'updated_date': self.updated_date.isoformat()
         }
@@ -43,6 +56,11 @@ class CaseData:
             lawyer=data.get('lawyer'),
             legal_affairs=data.get('legal_affairs'),
             progress=data.get('progress', '待處理'),
+            case_reason=data.get('case_reason'),
+            case_number=data.get('case_number'),
+            opposing_party=data.get('opposing_party'),
+            court=data.get('court'),
+            division=data.get('division'),
             created_date=datetime.fromisoformat(data['created_date']),
             updated_date=datetime.fromisoformat(data['updated_date'])
         )

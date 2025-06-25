@@ -1,1 +1,17 @@
-[]
+[
+  {
+    "case_id": "C20250001",
+    "case_type": "民事",
+    "client": "李恩",
+    "lawyer": "羅妻",
+    "legal_affairs": "小小",
+    "progress": "三審",
+    "case_reason": "哈哈",
+    "case_number": "12345",
+    "opposing_party": "789",
+    "court": "123",
+    "division": "123",
+    "created_date": "2025-06-25T04:30:44.884348",
+    "updated_date": "2025-06-25T11:35:48.925096"
+  }
+]

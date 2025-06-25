@@ -13,23 +13,6 @@ class AppConfig:
         'border_color': '#555555'
     }
 
-    # 尺寸設定
-    SIZES = {
-        # 固定按鈕尺寸
-        'dialog_button': {'width': 80, 'height': 30},
-        'function_button': {'width': 50, 'height': 15},
-
-        # 視窗最小尺寸
-        'min_window': {'width': 800, 'height': 600},
-
-        # 標題列高度
-        'title_height': 25,
-
-        # 邊距
-        'padding': 20,
-        'button_spacing': 10
-    }
-
     # 字體設定
     FONTS = {
         'title': ('Microsoft JhengHei', 12, 'bold'),
@@ -38,19 +21,38 @@ class AppConfig:
         'welcome': ('Microsoft JhengHei', 16, 'bold')
     }
 
-    # 🔧 完整的案件欄位設定 - 包含所有可能的欄位
-    CASE_FIELDS = {
+    # 尺寸設定
+    SIZES = {
+        'dialog_button': {'width': 80, 'height': 30},
+        'function_button': {'width': 50, 'height': 15},
+        'min_window': {'width': 800, 'height': 600},
+        'title_height': 25,
+        'padding': 20,
+        'button_spacing': 10
+    }
+
+    # 🔥 分離：總覽樹狀圖顯示欄位（只顯示主要資訊）
+    OVERVIEW_FIELDS = {
         'case_type': {'name': '案件類型', 'width': 100, 'visible': True, 'order': 1},
         'client': {'name': '當事人', 'width': 150, 'visible': True, 'order': 2},
         'lawyer': {'name': '委任律師', 'width': 120, 'visible': True, 'order': 3},
-        'legal_affairs': {'name': '法務', 'width': 100, 'visible': True, 'order': 4},
+        'legal_affairs': {'name': '法務', 'width': 100, 'visible': True, 'order': 4}
+    }
+
+    # 🔥 新增：案件進度可視化顯示欄位（包含所有詳細資訊）
+    PROGRESS_DISPLAY_FIELDS = {
+        'case_number': {'name': '案號', 'order': 1},
+        'case_reason': {'name': '案由', 'order': 2},
+        'opposing_party': {'name': '對造', 'order': 3},
+        'court': {'name': '負責法院', 'order': 4},
+        'division': {'name': '負責股別', 'order': 5}
     }
 
     # 預設視窗設定
     DEFAULT_WINDOW = {
         'title': '案件管理系統',
-        'width': 400,
-        'height': 600,
+        'width': 200,
+        'height': 400,
         'resizable': True
     }
 
@@ -62,11 +64,17 @@ class AppConfig:
         'edit_case': '案件管理系統 - 編輯案件'
     }
 
-    # 資料儲存設定 - 簡化版本
+    # 資料儲存設定
     DATA_CONFIG = {
-        'case_data_file': 'cases_data.json',  # 案件資料庫檔案
-        'settings_file': 'app_settings.json'  # 應用程式設定檔案
+        'case_data_file': 'cases_data.json',
+        'settings_file': 'app_settings.json'
     }
+
+    # 案件類型選項
+    CASE_TYPES = ['刑事', '民事']
+
+    # 進度選項
+    PROGRESS_OPTIONS = ['待處理', '一審', '二審', '三審', '合議庭', '已結案']
 
     # 案件類型對應的資料夾名稱
     CASE_TYPE_FOLDERS = {

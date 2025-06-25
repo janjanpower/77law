@@ -1,6 +1,7 @@
 from typing import List, Optional
 from models.case_model import CaseData
 from utils.excel_handler import ExcelHandler
+from utils.folder_manager import FolderManager  # 新增導入
 from config.settings import AppConfig
 import json
 import os
@@ -10,12 +11,7 @@ class CaseController:
     """案件資料控制器"""
 
     def __init__(self, data_file: str = None):
-        """
-        初始化案件控制器
-
-        Args:
-            data_file: 資料檔案路徑，如果為None則使用預設路徑
-        """
+        """初始化案件控制器"""
         if data_file is None:
             self.data_file = AppConfig.DATA_CONFIG['case_data_file']
         else:
@@ -24,11 +20,32 @@ class CaseController:
         self.data_folder = os.path.dirname(self.data_file) if os.path.dirname(self.data_file) else '.'
         self.cases: List[CaseData] = []
 
+        # 初始化資料夾管理器
+        self.folder_manager = FolderManager(self.data_folder)
+
         # 確保資料夾存在
         self._ensure_data_folder()
 
         # 載入案件資料
         self.load_cases()
+
+    def _migrate_case_data(self, case_dict: dict) -> dict:
+        """遷移舊版案件資料到新版格式"""
+        # 確保所有新欄位都有預設值
+        default_fields = {
+            'case_reason': None,
+            'case_number': None,
+            'opposing_party': None,
+            'court': None,
+            'division': None
+        }
+
+        # 合併預設值和現有資料
+        for field, default_value in default_fields.items():
+            if field not in case_dict:
+                case_dict[field] = default_value
+
+        return case_dict
 
     def _ensure_data_folder(self):
         """確保資料夾存在"""
@@ -59,38 +76,65 @@ class CaseController:
     def load_cases(self) -> bool:
         """載入案件資料"""
         try:
+            print(f"嘗試載入案件資料檔案: {self.data_file}")
+
             if os.path.exists(self.data_file):
                 with open(self.data_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                    self.cases = [CaseData.from_dict(case_data) for case_data in data]
-                print(f"已載入 {len(self.cases)} 筆案件資料")
+                    print(f"從檔案載入 {len(data)} 筆原始資料")
+
+                    # 遷移資料格式
+                    migrated_data = [self._migrate_case_data(case_data) for case_data in data]
+                    self.cases = [CaseData.from_dict(case_data) for case_data in migrated_data]
+
+                print(f"成功載入 {len(self.cases)} 筆案件資料")
+
+                # 驗證載入的資料
+                for i, case in enumerate(self.cases):
+                    print(f"案件 {i+1}: {case.case_id} - {case.client} ({case.case_type})")
+
             else:
                 print(f"資料檔案不存在，建立新的空資料庫：{self.data_file}")
                 self.cases = []
                 # 建立空的資料檔案
                 self.save_cases()
+
             return True
+
         except Exception as e:
             print(f"載入案件資料失敗: {e}")
+            import traceback
+            traceback.print_exc()
             self.cases = []
             return False
 
     def save_cases(self) -> bool:
         """儲存案件資料"""
         try:
+            print(f"開始儲存 {len(self.cases)} 筆案件資料到: {self.data_file}")
+
             data = [case.to_dict() for case in self.cases]
+
+            # 確保資料夾存在
+            os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
+
             with open(self.data_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f"已儲存 {len(self.cases)} 筆案件資料到：{self.data_file}")
+
+            print(f"成功儲存 {len(self.cases)} 筆案件資料")
+
+            # 驗證儲存的資料
+            with open(self.data_file, 'r', encoding='utf-8') as f:
+                saved_data = json.load(f)
+                print(f"驗證：檔案中有 {len(saved_data)} 筆資料")
+
             return True
+
         except Exception as e:
             print(f"儲存案件資料失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return False
-
-    # 移除備份相關的方法，簡化控制器
-    # def _create_backup(self):
-    # def _cleanup_old_backups(self):
-    # 這些方法已移除，不再需要備份功能
 
     def add_case(self, case: CaseData) -> bool:
         """新增案件"""
@@ -99,11 +143,26 @@ class CaseController:
             if any(c.case_id == case.case_id for c in self.cases):
                 raise ValueError(f"案件編號 {case.case_id} 已存在")
 
+            # 新增案件到列表
             self.cases.append(case)
+
+            # 儲存案件資料
             success = self.save_cases()
-            if success:
-                print(f"已新增案件：{case.case_id}")
-            return success
+            if not success:
+                # 如果儲存失敗，從列表中移除
+                self.cases.remove(case)
+                return False
+
+            # 🔥 新增：建立案件資料夾結構
+            folder_success = self.folder_manager.create_case_folder_structure(case)
+            if not folder_success:
+                print(f"警告：案件 {case.case_id} 資料夾結構建立失敗")
+                # 注意：這裡不回傳False，因為案件資料已經成功儲存
+                # 只是資料夾建立失敗，可以後續手動處理
+
+            print(f"已新增案件：{case.case_id}")
+            return True
+
         except Exception as e:
             print(f"新增案件失敗: {e}")
             return False
@@ -115,14 +174,30 @@ class CaseController:
                 if case.case_id == case_id:
                     updated_case.updated_date = datetime.now()
                     self.cases[i] = updated_case
+
+                    # 儲存案件資料
                     success = self.save_cases()
                     if success:
+                        # 🔥 新增：更新案件資訊Excel檔案
+                        excel_success = self.folder_manager.update_case_info_excel(updated_case)
+                        if not excel_success:
+                            print(f"警告：案件 {case_id} Excel檔案更新失敗")
+
                         print(f"已更新案件：{case_id}")
                     return success
+
             raise ValueError(f"找不到案件編號: {case_id}")
+
         except Exception as e:
             print(f"更新案件失敗: {e}")
             return False
+
+    def get_case_folder_path(self, case_id: str) -> Optional[str]:
+        """取得指定案件的資料夾路徑"""
+        case = self.get_case_by_id(case_id)
+        if case:
+            return self.folder_manager.get_case_folder_path(case)
+        return None
 
     def delete_case(self, case_id: str) -> bool:
         """刪除案件"""
