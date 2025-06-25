@@ -459,7 +459,7 @@ class CaseOverviewWindow:
             text="案件追蹤進度",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['button']  # 使用統一字體
+            font=AppConfig.FONTS['button']
         )
         progress_title.pack(pady=5)
 
@@ -502,7 +502,7 @@ class CaseOverviewWindow:
     # 修正 views/case_overview.py 中的 _display_case_progress 方法
 
     def _display_case_progress(self, case: 'CaseData'):
-        """顯示案件進度 - 根據選中資料動態顯示"""
+        """顯示案件進度 - 根據選中資料動態顯示，包含日期資訊"""
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
@@ -513,8 +513,6 @@ class CaseOverviewWindow:
             bg=AppConfig.COLORS['window_bg']
         )
         info_frame.pack(side='left', padx=10, anchor='nw')
-
-        # 🔥 修正：只顯示案件進度相關的詳細資訊，並按指定佈局排列
 
         # 第一排：案號（單獨一排，突出顯示）
         case_number = getattr(case, 'case_number', None) or '未設定'
@@ -586,42 +584,83 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['text']
         ).pack(anchor='w', pady=(5, 5))
 
-        # 當前進度狀態
+        # 🔥 修改：當前進度狀態和日期
         current_stage = getattr(case, 'progress', '待處理')
+        current_date = getattr(case, 'progress_date', None)
+
+        progress_text = f"目前狀態: {current_stage}"
+        if current_date:
+            progress_text += f" ({current_date})"
+
         tk.Label(
             info_frame,
-            text=f"目前狀態: {current_stage}",
+            text=progress_text,
             bg=AppConfig.COLORS['window_bg'],
             fg='#FF9800',  # 橙色
             font=AppConfig.FONTS['button']
         ).pack(anchor='w', pady=(0, 10))
 
-        # 右側進度條（保持原有設計）
+        # 🔥 新增：進度歷史顯示
+        progress_history = getattr(case, 'progress_history', {})
+        if progress_history:
+            tk.Label(
+                info_frame,
+                text="進度歷史:",
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color'],
+                font=AppConfig.FONTS['button']
+            ).pack(anchor='w', pady=(5, 5))
+
+            # 顯示進度歷史（限制顯示最近5個）
+            history_items = list(progress_history.items())[-5:]  # 只顯示最近5個
+            for progress_stage, date in history_items:
+                tk.Label(
+                    info_frame,
+                    text=f"  • {progress_stage}: {date}",
+                    bg=AppConfig.COLORS['window_bg'],
+                    fg='#B0B0B0',  # 淺灰色
+                    font=AppConfig.FONTS['text']
+                ).pack(anchor='w')
+
+        # 🔥 修改：右側進度條 - 包含日期資訊
         progress_bar_frame = tk.Frame(
             self.progress_display,
             bg=AppConfig.COLORS['window_bg']
         )
         progress_bar_frame.pack(side='right', expand=True, fill='x', padx=20)
 
-        stages = ['待處理', '一審', '二審', '三審', '合議庭', '已結案']
+        # 根據案件類型取得對應的進度階段
+        case_type = getattr(case, 'case_type', '')
+        stages = AppConfig.get_progress_options(case_type)
+        progress_history = getattr(case, 'progress_history', {})
 
         for i, stage in enumerate(stages):
-            circle_frame = tk.Frame(
+            # 每個階段的容器
+            stage_container = tk.Frame(
                 progress_bar_frame,
                 bg=AppConfig.COLORS['window_bg']
             )
-            circle_frame.pack(side='left', expand=True)
+            stage_container.pack(side='left', expand=True)
 
+            # 圓圈框架
+            circle_frame = tk.Frame(
+                stage_container,
+                bg=AppConfig.COLORS['window_bg']
+            )
+            circle_frame.pack()
+
+            # 判斷階段狀態
             if stage == current_stage:
                 bg_color = '#4CAF50'  # 綠色 - 當前階段
                 fg_color = 'white'
-            elif stages.index(current_stage) > i:
+            elif current_stage in stages and stages.index(current_stage) > i:
                 bg_color = '#2196F3'  # 藍色 - 已完成
                 fg_color = 'white'
             else:
                 bg_color = '#E0E0E0'  # 灰色 - 未開始
                 fg_color = 'black'
 
+            # 進度圓圈
             circle = tk.Label(
                 circle_frame,
                 text=str(i+1),
@@ -633,22 +672,38 @@ class CaseOverviewWindow:
             )
             circle.pack()
 
-            tk.Label(
+            # 階段名稱
+            stage_label = tk.Label(
                 circle_frame,
                 text=stage,
                 bg=AppConfig.COLORS['window_bg'],
                 fg=AppConfig.COLORS['text_color'],
                 font=('Microsoft JhengHei', 8)
-            ).pack()
+            )
+            stage_label.pack()
 
+            # 🔥 新增：顯示該階段的日期（如果有的話）
+            stage_date = progress_history.get(stage)
+            if stage_date:
+                date_label = tk.Label(
+                    circle_frame,
+                    text=stage_date,
+                    bg=AppConfig.COLORS['window_bg'],
+                    fg='#888888',  # 深灰色
+                    font=('Microsoft JhengHei', 7)
+                )
+                date_label.pack()
+
+            # 連接線（除了最後一個階段）
             if i < len(stages) - 1:
-                line_color = '#2196F3' if stages.index(current_stage) > i else '#E0E0E0'
-                tk.Frame(
+                line_color = '#2196F3' if current_stage in stages and stages.index(current_stage) > i else '#E0E0E0'
+                line_frame = tk.Frame(
                     progress_bar_frame,
                     bg=line_color,
                     height=2,
                     width=30
-                ).pack(side='left', pady=15)
+                )
+                line_frame.pack(side='left', pady=15)
 
     # 事件處理方法
     def _on_add_case(self):
@@ -818,6 +873,8 @@ class CaseOverviewWindow:
             # 建立右鍵選單
             context_menu = tk.Menu(self.window, tearoff=0)
             context_menu.add_command(label="編輯案件", command=lambda: self._on_item_double_click(None))
+            context_menu.add_command(label="進度歷史管理", command=self._on_manage_progress_history)  # 🔥 新增
+            context_menu.add_separator()
             context_menu.add_command(label="刪除案件", command=self._on_delete_case)
             context_menu.add_separator()
             context_menu.add_command(label="開啟案件資料夾", command=self._on_open_case_folder)
@@ -828,6 +885,45 @@ class CaseOverviewWindow:
                 context_menu.tk_popup(event.x_root, event.y_root)
             finally:
                 context_menu.grab_release()
+
+    def _on_manage_progress_history(self):
+        """🔥 新增：管理進度歷史"""
+        selection = self.tree.selection()
+        if not selection:
+            return
+
+        try:
+            item = selection[0]
+
+            # 從 tags 中取得索引
+            tags = self.tree.item(item, 'tags')
+            case_index = None
+
+            for tag in tags:
+                if tag.startswith('index_'):
+                    case_index = int(tag.replace('index_', ''))
+                    break
+
+            if case_index is not None and case_index < len(self.case_data):
+                case = self.case_data[case_index]
+
+                from views.progress_history_dialog import ProgressHistoryDialog
+
+                def update_case_progress_history(case_data):
+                    """更新案件進度歷史的回調函數"""
+                    success = self.case_controller.update_case(case.case_id, case_data)
+                    if success:
+                        self._load_cases()  # 重新載入資料
+                    return success
+
+                ProgressHistoryDialog.show_dialog(self.window, case, update_case_progress_history)
+            else:
+                print(f"無法取得有效的案件索引：tags={tags}")
+
+        except (ValueError, IndexError) as e:
+            print(f"管理進度歷史失敗: {e}")
+            messagebox.showerror("錯誤", "無法開啟進度歷史管理")
+
     def _on_delete_case(self):
         """刪除案件"""
         selection = self.tree.selection()

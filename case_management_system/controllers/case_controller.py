@@ -37,7 +37,9 @@ class CaseController:
             'case_number': None,
             'opposing_party': None,
             'court': None,
-            'division': None
+            'division': None,
+            'progress_date': None,  # 🔥 新增
+            'progress_history': {}  # 🔥 新增
         }
 
         # 合併預設值和現有資料
@@ -45,7 +47,100 @@ class CaseController:
             if field not in case_dict:
                 case_dict[field] = default_value
 
+        # 🔥 新增：如果有進度但沒有進度歷史，建立基本歷史記錄
+        if (case_dict.get('progress') and
+            case_dict.get('progress_date') and
+            not case_dict.get('progress_history')):
+            case_dict['progress_history'] = {
+                case_dict['progress']: case_dict['progress_date']
+            }
+
         return case_dict
+
+    def update_case_progress(self, case_id: str, new_progress: str, progress_date: str = None) -> bool:
+        """
+        🔥 新增：更新案件進度和日期
+
+        Args:
+            case_id: 案件編號
+            new_progress: 新的進度狀態
+            progress_date: 進度日期（格式：YYYY-MM-DD），如果為None則使用當前日期
+
+        Returns:
+            bool: 是否更新成功
+        """
+        try:
+            case = self.get_case_by_id(case_id)
+            if not case:
+                raise ValueError(f"找不到案件編號: {case_id}")
+
+            # 更新進度
+            case.update_progress(new_progress, progress_date)
+
+            # 儲存資料
+            success = self.save_cases()
+            if success:
+                # 更新案件資訊Excel檔案
+                excel_success = self.folder_manager.update_case_info_excel(case)
+                if not excel_success:
+                    print(f"警告：案件 {case_id} Excel檔案更新失敗")
+
+                print(f"已更新案件 {case_id} 進度為：{new_progress}")
+            return success
+
+        except Exception as e:
+            print(f"更新案件進度失敗: {e}")
+            return False
+
+    def get_case_progress_history(self, case_id: str) -> dict:
+        """
+        🔥 新增：取得案件進度歷史
+
+        Args:
+            case_id: 案件編號
+
+        Returns:
+            dict: 進度歷史記錄 {進度: 日期}
+        """
+        case = self.get_case_by_id(case_id)
+        if case and hasattr(case, 'progress_history'):
+            return case.progress_history.copy()
+        return {}
+
+    def get_cases_by_progress(self, progress: str) -> List[CaseData]:
+        """
+        🔥 新增：根據進度狀態取得案件列表
+
+        Args:
+            progress: 進度狀態
+
+        Returns:
+            List[CaseData]: 符合條件的案件列表
+        """
+        return [case for case in self.cases if case.progress == progress]
+
+    def get_cases_by_date_range(self, start_date: str, end_date: str) -> List[CaseData]:
+        """
+        🔥 新增：根據進度日期範圍取得案件列表
+
+        Args:
+            start_date: 開始日期 (YYYY-MM-DD)
+            end_date: 結束日期 (YYYY-MM-DD)
+
+        Returns:
+            List[CaseData]: 符合條件的案件列表
+        """
+        try:
+            result = []
+            for case in self.cases:
+                if case.progress_date:
+                    if start_date <= case.progress_date <= end_date:
+                        result.append(case)
+            return result
+        except Exception as e:
+            print(f"根據日期範圍篩選案件失敗: {e}")
+            return []
+
 
     def _ensure_data_folder(self):
         """確保資料夾存在"""
@@ -311,14 +406,15 @@ class CaseController:
             return f"C{datetime.now().year}0001"
 
     def get_statistics(self) -> dict:
-        """取得案件統計資訊"""
+        """取得案件統計資訊（包含進度日期統計）"""
         try:
             stats = {
                 'total_cases': len(self.cases),
                 'case_types': {},
                 'progress_stats': {},
                 'lawyer_stats': {},
-                'legal_affairs_stats': {}
+                'legal_affairs_stats': {},
+                'progress_date_stats': {}  # 🔥 新增：進度日期統計
             }
 
             for case in self.cases:
@@ -337,6 +433,14 @@ class CaseController:
                 # 法務統計
                 legal_affairs = case.legal_affairs or '未指派'
                 stats['legal_affairs_stats'][legal_affairs] = stats['legal_affairs_stats'].get(legal_affairs, 0) + 1
+
+                # 🔥 新增：進度日期統計（按月分組）
+                if case.progress_date:
+                    try:
+                        year_month = case.progress_date[:7]  # YYYY-MM
+                        stats['progress_date_stats'][year_month] = stats['progress_date_stats'].get(year_month, 0) + 1
+                    except:
+                        pass
 
             return stats
         except Exception as e:

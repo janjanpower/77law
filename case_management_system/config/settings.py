@@ -31,7 +31,7 @@ class AppConfig:
         'button_spacing': 10
     }
 
-    # 🔥 分離：總覽樹狀圖顯示欄位（只顯示主要資訊）
+    # 總覽樹狀圖顯示欄位（只顯示主要資訊）
     OVERVIEW_FIELDS = {
         'case_type': {'name': '案件類型', 'width': 100, 'visible': True, 'order': 1},
         'client': {'name': '當事人', 'width': 150, 'visible': True, 'order': 2},
@@ -39,7 +39,7 @@ class AppConfig:
         'legal_affairs': {'name': '法務', 'width': 100, 'visible': True, 'order': 4}
     }
 
-    # 🔥 新增：案件進度可視化顯示欄位（包含所有詳細資訊）
+    # 案件進度可視化顯示欄位（包含所有詳細資訊）
     PROGRESS_DISPLAY_FIELDS = {
         'case_number': {'name': '案號', 'order': 1},
         'case_reason': {'name': '案由', 'order': 2},
@@ -73,11 +73,30 @@ class AppConfig:
     # 案件類型選項
     CASE_TYPES = ['刑事', '民事']
 
-    # 進度選項
-    PROGRESS_OPTIONS = ['待處理', '一審', '二審', '三審', '合議庭', '已結案']
+    # 根據案件類型的進度選項
+    PROGRESS_OPTIONS = {
+        '刑事': ['待處理', '偵查中', '起訴', '一審', '二審', '三審', '確定', '執行中', '已結案'],
+        '民事': ['待處理', '調解', '一審', '二審', '三審', '確定', '強制執行', '已結案'],
+        'default': ['待處理', '一審', '二審', '三審', '合議庭', '已結案']  # 預設選項（向後相容）
+    }
 
     # 案件類型對應的資料夾名稱
     CASE_TYPE_FOLDERS = {
         '刑事': '刑事',
         '民事': '民事'
     }
+
+    @classmethod
+    def get_progress_options(cls, case_type: str = None) -> list:
+        """
+        根據案件類型取得對應的進度選項
+
+        Args:
+            case_type: 案件類型 ('刑事' 或 '民事')
+
+        Returns:
+            list: 對應的進度選項列表
+        """
+        if case_type and case_type in cls.PROGRESS_OPTIONS:
+            return cls.PROGRESS_OPTIONS[case_type]
+        return cls.PROGRESS_OPTIONS['default']
