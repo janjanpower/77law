@@ -1,4 +1,6 @@
+
 import os
+import shutil
 import pandas as pd
 from typing import Optional, List
 from models.case_model import CaseData
@@ -84,6 +86,33 @@ class FolderManager:
 
         except Exception as e:
             print(f"建立進度資料夾失敗: {e}")
+            return False
+
+    def delete_progress_folder(self, case_data: CaseData, stage_name: str) -> bool:
+        """刪除案件的特定進度階段資料夾"""
+        try:
+            case_folder = self.get_case_folder_path(case_data)
+            if not case_folder:
+                print(f"找不到案件資料夾: {case_data.client}")
+                return False
+
+            stage_folder_path = os.path.join(case_folder, '進度追蹤', stage_name)
+
+            if os.path.exists(stage_folder_path):
+                # 檢查資料夾是否為空
+                if os.listdir(stage_folder_path):
+                    print(f"警告：階段資料夾 {stage_name} 內含檔案，將一併刪除")
+
+                # 刪除整個資料夾及其內容
+                shutil.rmtree(stage_folder_path)
+                print(f"已刪除階段資料夾: {stage_folder_path}")
+                return True
+            else:
+                print(f"階段資料夾不存在: {stage_folder_path}")
+                return False
+
+        except Exception as e:
+            print(f"刪除階段資料夾失敗: {e}")
             return False
 
     def _get_case_type_folder(self, case_type: str) -> Optional[str]:
@@ -249,6 +278,75 @@ class FolderManager:
         except Exception as e:
             print(f"取得階段資料夾路徑失敗: {e}")
             return None
+
+    def delete_case_folder(self, case_data: CaseData) -> bool:
+        """刪除案件的整個當事人資料夾"""
+        try:
+            case_folder = self.get_case_folder_path(case_data)
+            if not case_folder:
+                print(f"找不到案件資料夾: {case_data.client}")
+                return False
+
+            if os.path.exists(case_folder):
+                # 檢查資料夾是否為空
+                if os.listdir(case_folder):
+                    print(f"警告：案件資料夾 {case_data.client} 內含檔案，將一併刪除")
+
+                # 刪除整個資料夾及其內容
+                shutil.rmtree(case_folder)
+                print(f"已刪除案件資料夾: {case_folder}")
+                return True
+            else:
+                print(f"案件資料夾不存在: {case_folder}")
+                return False
+
+        except Exception as e:
+            print(f"刪除案件資料夾失敗: {e}")
+            return False
+
+    def get_case_folder_info(self, case_data: CaseData) -> dict:
+        """取得案件資料夾資訊（用於刪除前檢查）"""
+        try:
+            case_folder = self.get_case_folder_path(case_data)
+            if not case_folder or not os.path.exists(case_folder):
+                return {
+                    'exists': False,
+                    'path': case_folder,
+                    'has_files': False,
+                    'file_count': 0,
+                    'size_mb': 0
+                }
+
+            # 計算資料夾內檔案數量和大小
+            total_files = 0
+            total_size = 0
+
+            for root, dirs, files in os.walk(case_folder):
+                total_files += len(files)
+                for file in files:
+                    try:
+                        file_path = os.path.join(root, file)
+                        total_size += os.path.getsize(file_path)
+                    except:
+                        pass
+
+            return {
+                'exists': True,
+                'path': case_folder,
+                'has_files': total_files > 0,
+                'file_count': total_files,
+                'size_mb': round(total_size / (1024 * 1024), 2)
+            }
+
+        except Exception as e:
+            print(f"取得案件資料夾資訊失敗: {e}")
+            return {
+                'exists': False,
+                'path': None,
+                'has_files': False,
+                'file_count': 0,
+                'size_mb': 0
+            }
 
     def update_case_info_excel(self, case_data: CaseData) -> bool:
         """更新案件資訊Excel檔案"""

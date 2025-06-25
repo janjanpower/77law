@@ -1,22 +1,38 @@
 [
   {
     "case_id": "C20250001",
-    "case_type": "民事",
+    "case_type": "刑事",
     "client": "小恩",
-    "lawyer": "羅",
-    "legal_affairs": "大大",
-    "progress": "二審",
-    "case_reason": "99",
-    "case_number": "88",
-    "opposing_party": "77",
-    "court": "99",
-    "division": "678",
-    "progress_date": "2025-06-30",
+    "lawyer": "羅7",
+    "legal_affairs": "李人",
+    "progress": "待處理",
+    "case_reason": "9857",
+    "case_number": "1166",
+    "opposing_party": "9523",
+    "court": "6666",
+    "division": "777",
+    "progress_date": null,
     "progress_stages": {
-      "三審": "2025-07-02",
-      "二審": "2025-06-30"
+      "起訴": "2025-06-25"
     },
-    "created_date": "2025-06-25T12:42:54.093162",
-    "updated_date": "2025-06-25T13:51:54.539406"
+    "created_date": "2025-06-25T15:33:47.017815",
+    "updated_date": "2025-06-25T15:34:14.388549"
+  },
+  {
+    "case_id": "C20250002",
+    "case_type": "民事",
+    "client": "皮皮",
+    "lawyer": "55",
+    "legal_affairs": "99",
+    "progress": "待處理",
+    "case_reason": "66",
+    "case_number": "222",
+    "opposing_party": "11",
+    "court": null,
+    "division": null,
+    "progress_date": null,
+    "progress_stages": {},
+    "created_date": "2025-06-25T16:01:58.417486",
+    "updated_date": "2025-06-25T16:01:58.417490"
   }
 ]

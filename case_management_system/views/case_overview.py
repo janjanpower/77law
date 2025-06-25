@@ -1,3 +1,4 @@
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
@@ -16,6 +17,10 @@ class CaseOverviewWindow:
         self.drag_data = {"x": 0, "y": 0}
         self.progress_widgets = {}  # 儲存進度小部件的參考
 
+        # 新增：初始化搜尋相關變數
+        self.filtered_case_data = []  # 儲存過濾後的案件資料
+        self.search_var = tk.StringVar()  # 搜尋框變數
+
         # 建立視窗
         self.window = tk.Toplevel(parent) if parent else tk.Tk()
         self._setup_window()
@@ -29,7 +34,7 @@ class CaseOverviewWindow:
     def _setup_window(self):
         """設定視窗基本屬性"""
         self.window.title(AppConfig.WINDOW_TITLES['overview'])
-        self.window.geometry("1200x800")
+        self.window.geometry("600x800")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
         self.window.overrideredirect(True)
         self.window.minsize(1000, 700)
@@ -38,8 +43,8 @@ class CaseOverviewWindow:
     def _center_window(self):
         """將視窗置中顯示"""
         self.window.update_idletasks()
-        width = 1200
-        height = 800
+        width = 800
+        height = 600
         x = (self.window.winfo_screenwidth() // 2) - (width // 2)
         y = (self.window.winfo_screenheight() // 2) - (height // 2)
         self.window.geometry(f"{width}x{height}+{x}+{y}")
@@ -75,7 +80,7 @@ class CaseOverviewWindow:
             self.window,
             bg=AppConfig.COLORS['window_bg']
         )
-        self.main_frame.pack(fill='both', expand=True, padx=5, pady=5)
+        self.main_frame.pack(fill='both', expand=True)
 
         # 自定義標題列
         self.title_frame = tk.Frame(
@@ -83,7 +88,7 @@ class CaseOverviewWindow:
             bg=AppConfig.COLORS['title_bg'],
             height=AppConfig.SIZES['title_height']
         )
-        self.title_frame.pack(fill='x', pady=(0, 5))
+        self.title_frame.pack(fill='x')
         self.title_frame.pack_propagate(False)
 
         self.title_label = tk.Label(
@@ -114,7 +119,7 @@ class CaseOverviewWindow:
             self.main_frame,
             bg=AppConfig.COLORS['window_bg']
         )
-        self.content_frame.pack(fill='both', expand=True)
+        self.content_frame.pack(fill='both', expand=True,padx=5,pady=10)
 
         self._create_overview_layout()
         self._setup_treeview()
@@ -149,6 +154,17 @@ class CaseOverviewWindow:
 
         self._create_toolbar_buttons()
 
+        # 搜尋區域 - 新增
+        self.search_frame = tk.Frame(
+            self.content_frame,
+            bg=AppConfig.COLORS['window_bg'],
+            height=40
+        )
+        self.search_frame.pack(fill='x', pady=(0, 10))
+        self.search_frame.pack_propagate(False)
+
+        self._create_search_bar()
+
         # 樹狀圖區域
         self.tree_frame = tk.Frame(
             self.content_frame,
@@ -164,6 +180,215 @@ class CaseOverviewWindow:
         )
         self.field_control_frame.pack(fill='x')
         self.field_control_frame.pack_propagate(False)
+
+    def _create_search_bar(self):
+        """建立搜尋條"""
+        # 搜尋標籤
+        search_label = tk.Label(
+            self.search_frame,
+            text="搜尋：",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['button']
+        )
+        search_label.pack(side='left', padx=(10, 5))
+
+        # 搜尋輸入框
+        self.search_entry = tk.Entry(
+            self.search_frame,
+            textvariable=self.search_var,
+            bg='white',
+            fg='black',
+            font=AppConfig.FONTS['text'],
+            width=30
+        )
+        self.search_entry.pack(side='left', padx=5)
+
+        # 綁定搜尋事件
+        self.search_var.trace_add('write', self._on_search_changed)
+        self.search_entry.bind('<Return>', self._on_search_enter)
+
+        # 搜尋說明
+        search_help = tk.Label(
+            self.search_frame,
+            text="（可搜尋：當事人、案號、案件類型）",
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#AAAAAA',
+            font=('Microsoft JhengHei', 8)
+        )
+        search_help.pack(side='left', padx=(10, 0))
+
+        # 清除搜尋按鈕
+        clear_btn = tk.Button(
+            self.search_frame,
+            text="清除",
+            command=self._clear_search,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['text'],
+            width=6
+        )
+        clear_btn.pack(side='left', padx=(10, 0))
+
+        # 搜尋結果統計
+        self.search_result_label = tk.Label(
+            self.search_frame,
+            text="",
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#4CAF50',
+            font=AppConfig.FONTS['text']
+        )
+        self.search_result_label.pack(side='right', padx=(0, 10))
+
+    def _on_search_changed(self, *args):
+        """搜尋內容變更時的即時搜尋"""
+        # 延遲搜尋以避免過於頻繁的搜尋
+        if hasattr(self, '_search_after_id'):
+            self.window.after_cancel(self._search_after_id)
+
+        self._search_after_id = self.window.after(300, self._perform_search)
+
+    def _on_search_enter(self, event):
+        """按Enter鍵時立即搜尋"""
+        if hasattr(self, '_search_after_id'):
+            self.window.after_cancel(self._search_after_id)
+
+        self._perform_search()
+
+    def _perform_search(self):
+        """執行搜尋"""
+        try:
+            search_text = self.search_var.get().strip().lower()
+
+            if not search_text:
+                # 沒有搜尋文字時顯示所有資料
+                self.filtered_case_data = self.case_data.copy()
+                self.search_result_label.config(text="")
+            else:
+                # 執行搜尋
+                self.filtered_case_data = []
+
+                for case in self.case_data:
+                    # 搜尋當事人
+                    if search_text in case.client.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                    # 搜尋案號
+                    case_number = getattr(case, 'case_number', '') or ''
+                    if search_text in case_number.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                    # 搜尋案件類型
+                    if search_text in case.case_type.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                    # 搜尋案件編號
+                    if search_text in case.case_id.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                    # 搜尋委任律師
+                    lawyer = getattr(case, 'lawyer', '') or ''
+                    if search_text in lawyer.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                    # 搜尋法務
+                    legal_affairs = getattr(case, 'legal_affairs', '') or ''
+                    if search_text in legal_affairs.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                    # 搜尋案由
+                    case_reason = getattr(case, 'case_reason', '') or ''
+                    if search_text in case_reason.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
+                # 更新搜尋結果統計
+                total_count = len(self.case_data)
+                filtered_count = len(self.filtered_case_data)
+                self.search_result_label.config(
+                    text=f"找到 {filtered_count} / {total_count} 筆資料"
+                )
+
+            # 更新樹狀圖顯示
+            self._refresh_filtered_tree_data()
+
+            # 清空進度顯示（因為搜尋後選擇會改變）
+            for widget in self.progress_display.winfo_children():
+                widget.destroy()
+            self.progress_widgets.clear()
+
+        except Exception as e:
+            print(f"搜尋失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _clear_search(self):
+        """清除搜尋"""
+        self.search_var.set("")
+        self.search_entry.focus()
+
+    def _refresh_filtered_tree_data(self):
+        """重新整理樹狀圖資料（使用過濾後的資料）"""
+        try:
+            # 使用過濾後的資料
+            data_to_display = self.filtered_case_data if hasattr(self, 'filtered_case_data') else self.case_data
+
+            print(f"開始重新整理樹狀圖，顯示案件數量: {len(data_to_display)}")
+
+            # 清空現有項目
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+
+            current_columns = list(self.tree['columns'])
+            print(f"當前樹狀圖欄位: {current_columns}")
+
+            # 填入過濾後的資料
+            for i, case in enumerate(data_to_display):
+                values = []
+
+                for col_id in current_columns:
+                    if col_id == 'case_type':
+                        values.append(getattr(case, 'case_type', ''))
+                    elif col_id == 'client':
+                        values.append(getattr(case, 'client', ''))
+                    elif col_id == 'lawyer':
+                        values.append(getattr(case, 'lawyer', '') or '')
+                    elif col_id == 'legal_affairs':
+                        values.append(getattr(case, 'legal_affairs', '') or '')
+                    elif col_id == 'case_reason':
+                        values.append(getattr(case, 'case_reason', '') or '')
+                    elif col_id == 'case_number':
+                        values.append(getattr(case, 'case_number', '') or '')
+                    elif col_id == 'opposing_party':
+                        values.append(getattr(case, 'opposing_party', '') or '')
+                    elif col_id == 'court':
+                        values.append(getattr(case, 'court', '') or '')
+                    elif col_id == 'division':
+                        values.append(getattr(case, 'division', '') or '')
+                    else:
+                        values.append('')
+
+                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                item_id = self.tree.insert('', 'end', values=values, tags=(tag,))
+
+                # 保存原始案件索引以便後續操作
+                original_index = self.case_data.index(case)
+                existing_tags = self.tree.item(item_id, 'tags')
+                new_tags = list(existing_tags) + [f'index_{original_index}']
+                self.tree.item(item_id, tags=new_tags)
+
+            print(f"樹狀圖重新整理完成，已載入 {len(data_to_display)} 筆資料")
+
+        except Exception as e:
+            print(f"重新整理樹狀圖資料失敗: {e}")
+            import traceback
+            traceback.print_exc()
 
     def _create_toolbar_buttons(self):
         """建立工具列按鈕"""
@@ -191,14 +416,6 @@ class CaseOverviewWindow:
         )
         self.export_btn.pack(side='left', padx=5)
 
-        self.refresh_btn = self.create_button(
-            self.toolbar_frame,
-            '重新整理',
-            self._on_refresh,
-            'Custom'
-        )
-        self.refresh_btn.pack(side='right', padx=(5, 10))
-
     def create_button(self, parent, text, command, style_type='Custom'):
         """建立標準化按鈕"""
         if style_type == 'Function':
@@ -209,7 +426,7 @@ class CaseOverviewWindow:
                 bg=AppConfig.COLORS['button_bg'],
                 fg=AppConfig.COLORS['button_fg'],
                 font=AppConfig.FONTS['button'],
-                width=15,
+                width=10,
                 height=2
             )
         else:
@@ -334,7 +551,7 @@ class CaseOverviewWindow:
         self._refresh_tree_data()
 
     def _load_cases(self):
-        """載入案件資料"""
+        """載入案件資料（修改原有方法）"""
         try:
             print("開始載入案件資料...")
 
@@ -345,7 +562,15 @@ class CaseOverviewWindow:
                 print(f"控制器中的案件數量: {len(self.case_controller.cases)}")
                 print(f"視圖中的案件數量: {len(self.case_data)}")
 
-                self._refresh_tree_data()
+                # 初始化過濾資料
+                self.filtered_case_data = self.case_data.copy()
+
+                # 如果有搜尋條件，重新執行搜尋
+                if hasattr(self, 'search_var') and self.search_var.get().strip():
+                    self._perform_search()
+                else:
+                    self._refresh_filtered_tree_data()
+
                 print("案件資料載入完成")
             else:
                 print("案件控制器未初始化")
@@ -355,17 +580,22 @@ class CaseOverviewWindow:
             messagebox.showerror("錯誤", f"載入案件資料失敗：{str(e)}")
 
     def _refresh_tree_data(self):
-        """重新整理樹狀圖資料"""
+        """重新整理樹狀圖資料（支援搜尋過濾）"""
         try:
-            print(f"開始重新整理樹狀圖，案件數量: {len(self.case_data)}")
+            # 決定要顯示的資料：如果有過濾資料就用過濾資料，否則用全部資料
+            data_to_display = getattr(self, 'filtered_case_data', self.case_data)
 
+            print(f"開始重新整理樹狀圖，顯示案件數量: {len(data_to_display)} / 總數: {len(self.case_data)}")
+
+            # 清空現有項目
             for item in self.tree.get_children():
                 self.tree.delete(item)
 
             current_columns = list(self.tree['columns'])
             print(f"當前樹狀圖欄位: {current_columns}")
 
-            for i, case in enumerate(self.case_data):
+            # 遍歷要顯示的資料
+            for display_index, case in enumerate(data_to_display):
                 values = []
 
                 for col_id in current_columns:
@@ -390,14 +620,23 @@ class CaseOverviewWindow:
                     else:
                         values.append('')
 
-                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                tag = 'evenrow' if display_index % 2 == 0 else 'oddrow'
                 item_id = self.tree.insert('', 'end', values=values, tags=(tag,))
 
-                existing_tags = self.tree.item(item_id, 'tags')
-                new_tags = list(existing_tags) + [f'index_{i}']
-                self.tree.item(item_id, tags=new_tags)
+                # 重要：使用原始案件在完整列表中的索引，而不是顯示索引
+                try:
+                    original_index = self.case_data.index(case)
+                    existing_tags = self.tree.item(item_id, 'tags')
+                    new_tags = list(existing_tags) + [f'index_{original_index}']
+                    self.tree.item(item_id, tags=new_tags)
+                except ValueError:
+                    # 如果找不到原始索引，使用顯示索引作為備案
+                    print(f"警告：無法找到案件 {case.case_id} 的原始索引")
+                    existing_tags = self.tree.item(item_id, 'tags')
+                    new_tags = list(existing_tags) + [f'index_{display_index}']
+                    self.tree.item(item_id, tags=new_tags)
 
-            print(f"樹狀圖重新整理完成，已載入 {len(self.case_data)} 筆資料")
+            print(f"樹狀圖重新整理完成，已載入 {len(data_to_display)} 筆資料")
 
         except Exception as e:
             print(f"重新整理樹狀圖資料失敗: {e}")
@@ -408,7 +647,7 @@ class CaseOverviewWindow:
         """設定進度可視化區域"""
         progress_title = tk.Label(
             self.progress_frame,
-            text="案件追蹤進度",
+            text="案件進度",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['button']
@@ -450,8 +689,47 @@ class CaseOverviewWindow:
             except (ValueError, IndexError) as e:
                 print(f"取得案件索引失敗: {e}")
 
+    def _get_stage_color_by_date(self, stage_date: str, is_current: bool = False) -> tuple:
+        """
+        根據日期狀態取得階段顏色
+
+        Args:
+            stage_date: 階段日期 (格式: YYYY-MM-DD)
+            is_current: 是否為當前階段
+
+        Returns:
+            tuple: (背景色, 文字色)
+        """
+        try:
+            if not stage_date or stage_date == '未設定日期':
+                return ('#2196F3', 'white')  # 預設藍色
+
+            stage_datetime = datetime.strptime(stage_date, '%Y-%m-%d')
+            today = datetime.now()
+            date_diff = (stage_datetime - today).days
+
+            # 當天日期：白底黑字
+            if date_diff == 0:
+                return ('white', 'black')
+
+            # 超過日期：綠色
+            elif date_diff < 0:
+                return ('#4DC751', 'white')
+
+            # 前三天：黃色底黑字
+            elif 0 < date_diff <= 3:
+                return ('#E3F45F', 'black')
+
+            # 尚未到期：紅色
+            else:
+                return ('#CE7B7B', 'white')
+
+        except ValueError:
+            # 日期格式錯誤時使用預設顏色
+            return ('#2196F3', 'white')
+
     def _display_case_progress(self, case: 'CaseData'):
-        """顯示案件進度 - 簡化版本，只顯示實際存在的階段"""
+        """顯示案件進度 - 簡化版本，只顯示實際存在的階段（含新的日期顏色邏輯）"""
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
@@ -527,7 +805,7 @@ class CaseOverviewWindow:
         # 分隔線
         tk.Label(
             info_frame,
-            text="─" * 25,
+            text="－" * 15,
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text']
@@ -579,7 +857,7 @@ class CaseOverviewWindow:
             return
 
         # 按日期排序階段
-        sorted_stages = sorted(case.progress_stages.items(), key=lambda x: x[1])
+        sorted_stages = sorted(case.progress_stages.items(), key=lambda x: x[1] if x[1] else '9999-12-31')
 
         for i, (stage, date) in enumerate(sorted_stages):
             # 每個階段的容器
@@ -596,10 +874,9 @@ class CaseOverviewWindow:
             )
             circle_frame.pack()
 
-            # 判斷階段狀態
+            # 判斷階段狀態和顏色
             is_current = (stage == case.progress)
-            bg_color = '#4CAF50' if is_current else '#2196F3'  # 當前階段用綠色，其他用藍色
-            fg_color = 'white'
+            bg_color, fg_color = self._get_stage_color_by_date(date, is_current)
 
             # 階段文字顯示
             stage_text = stage[:4] if len(stage) > 4 else stage
@@ -656,7 +933,6 @@ class CaseOverviewWindow:
                     width=25
                 )
                 line_frame.pack(side='left', pady=5)
-
     def _on_stage_click(self, stage_name: str, case: CaseData):
         """階段點擊事件 - 開啟階段資料夾"""
         try:
@@ -681,12 +957,11 @@ class CaseOverviewWindow:
                 command=lambda: self._on_edit_progress_stage(case, stage_name)
             )
 
-            # 只有非當前階段才能刪除
-            if stage_name != case.progress:
-                context_menu.add_command(
-                    label="移除階段",
-                    command=lambda: self._on_remove_progress_stage(case, stage_name)
-                )
+            # 所有階段都可以移除
+            context_menu.add_command(
+                label="移除階段",
+                command=lambda: self._on_remove_progress_stage(case, stage_name)
+            )
 
             context_menu.add_separator()
             context_menu.add_command(
@@ -753,20 +1028,58 @@ class CaseOverviewWindow:
         )
 
     def _on_remove_progress_stage(self, case: CaseData, stage_name: str):
-        """移除進度階段"""
+        """移除進度階段（含刪除確認對話框）"""
         from views.dialogs import ConfirmDialog
+        import os
+        from tkinter import messagebox
+
+        # 檢查是否有對應的資料夾
+        stage_folder_path = self.case_controller.get_case_stage_folder_path(case.case_id, stage_name)
+        folder_exists = stage_folder_path and os.path.exists(stage_folder_path)
+
+        # 檢查資料夾是否有檔案
+        has_files = False
+        if folder_exists:
+            try:
+                files_in_folder = os.listdir(stage_folder_path)
+                has_files = len(files_in_folder) > 0
+            except:
+                has_files = False
+
+        # 建立確認訊息
+        if folder_exists and has_files:
+            confirm_message = (
+                f"確定要移除階段「{stage_name}」嗎？\n\n"
+                f"⚠️ 警告：此操作將同時刪除該階段的資料夾及其內的所有檔案！\n"
+                f"資料夾路徑：{stage_folder_path}\n\n"
+                f"此操作無法復原，請確認是否繼續？"
+            )
+        elif folder_exists:
+            confirm_message = (
+                f"確定要移除階段「{stage_name}」嗎？\n\n"
+                f"此操作將同時刪除該階段的空資料夾。"
+            )
+        else:
+            confirm_message = (
+                f"確定要移除階段「{stage_name}」嗎？\n"
+                f"此操作將移除該階段的記錄。"
+            )
 
         if ConfirmDialog.ask(
             self.window,
-            "確認移除",
-            f"確定要移除階段「{stage_name}」嗎？\n此操作將同時移除該階段的日期記錄。"
+            "確認刪除階段",
+            confirm_message
         ):
             try:
                 success = self.case_controller.remove_case_progress_stage(case.case_id, stage_name)
                 if success:
                     self._load_cases()
                     self._reselect_case(case.case_id)
-                    messagebox.showinfo("成功", f"已移除進度階段「{stage_name}」")
+
+                    if folder_exists:
+                        messagebox.showinfo("成功", f"已移除進度階段「{stage_name}」\n階段資料夾已同時刪除")
+                    else:
+                        messagebox.showinfo("成功", f"已移除進度階段「{stage_name}」")
                 else:
                     messagebox.showerror("錯誤", "無法移除當前進度階段")
             except Exception as e:
@@ -884,16 +1197,6 @@ class CaseOverviewWindow:
             except Exception as e:
                 messagebox.showerror("錯誤", f"匯出過程發生錯誤：{str(e)}")
 
-    def _on_refresh(self):
-        """重新整理事件"""
-        try:
-            print("手動重新整理...")
-            self._load_cases()
-            print("手動重新整理完成")
-        except Exception as e:
-            print(f"手動重新整理失敗: {e}")
-            messagebox.showerror("錯誤", f"重新整理失敗：{str(e)}")
-
     def _on_item_double_click(self, event):
         """項目雙擊事件 - 編輯案件"""
         selection = self.tree.selection()
@@ -952,7 +1255,7 @@ class CaseOverviewWindow:
                 context_menu.grab_release()
 
     def _on_delete_case(self):
-        """刪除案件"""
+        """刪除案件（含資料夾刪除確認）"""
         selection = self.tree.selection()
         if not selection:
             return
@@ -970,14 +1273,43 @@ class CaseOverviewWindow:
             if case_index is not None and case_index < len(self.case_data):
                 case = self.case_data[case_index]
 
+                # 取得案件資料夾資訊
+                folder_info = self.case_controller.get_case_folder_info(case.case_id)
+
+                # 建立確認訊息
+                confirm_message = f"確定要刪除案件 {case.case_number} - {case.client} 嗎？\n\n"
+
+                if folder_info['exists'] and folder_info['has_files']:
+                    confirm_message += (
+                        f"此操作無法復原，請確認是否繼續？"
+                    )
+                elif folder_info['exists']:
+                    confirm_message += (
+                        f"此操作將同時刪除該案件的空資料夾。\n"
+                        f"資料夾路徑：{folder_info['path']}"
+                    )
+                else:
+                    confirm_message += "此操作將移除該案件的記錄。"
+
                 from views.dialogs import ConfirmDialog
-                if ConfirmDialog.ask(self.window, "確認刪除", f"確定要刪除案件 {case.case_id} - {case.client} 嗎？"):
-                    success = self.case_controller.delete_case(case.case_id)
-                    if success:
-                        self._load_cases()
-                        messagebox.showinfo("成功", f"案件 {case.case_id} 已刪除")
-                    else:
-                        messagebox.showerror("錯誤", "案件刪除失敗")
+                if ConfirmDialog.ask(
+                    self.window,
+                    "確認刪除案件",
+                    confirm_message
+                ):
+                    try:
+                        success = self.case_controller.delete_case(case.case_id, delete_folder=True)
+                        if success:
+                            self._load_cases()
+
+                            if folder_info['exists']:
+                                messagebox.showinfo("成功", f"案件 {case.case_id} 已刪除\n案件資料夾已同時刪除")
+                            else:
+                                messagebox.showinfo("成功", f"案件 {case.case_id} 已刪除")
+                        else:
+                            messagebox.showerror("錯誤", "案件刪除失敗")
+                    except Exception as e:
+                        messagebox.showerror("錯誤", f"刪除案件失敗：{str(e)}")
             else:
                 print(f"無法取得有效的案件索引：tags={tags}")
 

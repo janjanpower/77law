@@ -15,17 +15,17 @@ class AppConfig:
 
     # 字體設定
     FONTS = {
-        'title': ('Microsoft JhengHei', 12, 'bold'),
-        'button': ('Microsoft JhengHei', 10),
-        'text': ('Microsoft JhengHei', 9),
-        'welcome': ('Microsoft JhengHei', 16, 'bold')
+        'title': ('Microsoft JhengHei', 10, 'bold'),
+        'button': ('Microsoft JhengHei', 8),
+        'text': ('Microsoft JhengHei', 8),
+        'welcome': ('Microsoft JhengHei', 10, 'bold')
     }
 
     # 尺寸設定
     SIZES = {
         'dialog_button': {'width': 80, 'height': 30},
         'function_button': {'width': 50, 'height': 15},
-        'min_window': {'width': 800, 'height': 600},
+        'min_window': {'width': 500, 'height': 400},
         'title_height': 25,
         'padding': 20,
         'button_spacing': 10

@@ -233,21 +233,67 @@ class CaseController:
             if not case:
                 raise ValueError(f"找不到案件編號: {case_id}")
 
+            # 先刪除對應的資料夾
+            print(f"準備刪除階段 {stage_name} 的資料夾...")
+            folder_success = self.folder_manager.delete_progress_folder(case, stage_name)
+
+            if folder_success:
+                print(f"階段資料夾刪除成功: {stage_name}")
+            else:
+                print(f"階段資料夾刪除失敗或不存在: {stage_name}")
+
+            # 再移除進度階段記錄
             success = case.remove_progress_stage(stage_name)
             if success:
-                self.save_cases()
-                self.folder_manager.update_case_info_excel(case)
-                print(f"已移除案件 {case_id} 的階段 {stage_name}")
+                # 儲存更新後的案件資料
+                save_success = self.save_cases()
+                if save_success:
+                    # 更新Excel檔案
+                    self.folder_manager.update_case_info_excel(case)
+                    print(f"已移除案件 {case_id} 的階段 {stage_name}")
 
-            return success
+                    if not folder_success:
+                        print(f"警告：階段記錄已移除，但資料夾刪除失敗")
+
+                    return True
+                else:
+                    print(f"階段記錄移除成功，但儲存案件資料失敗")
+                    return False
+            else:
+                print(f"移除階段記錄失敗")
+                return False
 
         except Exception as e:
             print(f"移除案件進度階段失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
-    def delete_case(self, case_id: str) -> bool:
+    def delete_case(self, case_id: str, delete_folder: bool = True) -> bool:
         """刪除案件"""
         try:
+            # 找到要刪除的案件
+            case_to_delete = None
+            for case in self.cases:
+                if case.case_id == case_id:
+                    case_to_delete = case
+                    break
+
+            if not case_to_delete:
+                raise ValueError(f"找不到案件編號: {case_id}")
+
+            # 如果需要刪除資料夾
+            folder_success = True
+            if delete_folder:
+                print(f"準備刪除案件 {case_id} 的資料夾...")
+                folder_success = self.folder_manager.delete_case_folder(case_to_delete)
+
+                if folder_success:
+                    print(f"案件資料夾刪除成功: {case_to_delete.client}")
+                else:
+                    print(f"案件資料夾刪除失敗或不存在: {case_to_delete.client}")
+
+            # 從列表中移除案件
             original_count = len(self.cases)
             self.cases = [case for case in self.cases if case.case_id != case_id]
 
@@ -255,12 +301,36 @@ class CaseController:
                 success = self.save_cases()
                 if success:
                     print(f"已刪除案件：{case_id}")
-                return success
+
+                    if delete_folder and not folder_success:
+                        print(f"警告：案件記錄已刪除，但資料夾刪除失敗")
+
+                    return True
+                else:
+                    # 如果儲存失敗，恢復案件
+                    self.cases.append(case_to_delete)
+                    print(f"儲存失敗，已恢復案件記錄")
+                    return False
             else:
                 raise ValueError(f"找不到案件編號: {case_id}")
+
         except Exception as e:
             print(f"刪除案件失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
+    def get_case_folder_info(self, case_id: str) -> dict:
+        """取得案件資料夾資訊（用於刪除前檢查）"""
+        try:
+            case = self.get_case_by_id(case_id)
+            if not case:
+                return {'exists': False}
+
+            return self.folder_manager.get_case_folder_info(case)
+        except Exception as e:
+            print(f"取得案件資料夾資訊失敗: {e}")
+            return {'exists': False}
 
     def get_cases(self) -> List[CaseData]:
         """取得所有案件"""

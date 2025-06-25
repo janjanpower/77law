@@ -32,9 +32,8 @@ class CaseData:
         if self.updated_date is None:
             self.updated_date = datetime.now()
 
-        # 確保當前進度在階段記錄中
-        if self.progress and self.progress_date and self.progress not in self.progress_stages:
-            self.progress_stages[self.progress] = self.progress_date
+        # 新增案件時，預設不建立任何進度階段記錄
+        # 只有在明確呼叫 update_progress 或 add_progress_stage 時才會建立
 
     def update_progress(self, new_progress: str, progress_date: str = None):
         """更新進度"""
@@ -56,13 +55,36 @@ class CaseData:
 
     def remove_progress_stage(self, stage_name: str) -> bool:
         """移除進度階段"""
+        # 如果移除的是當前進度，需要重新設定當前進度
         if stage_name == self.progress:
-            return False  # 不能移除當前進度
+            # 從進度階段中移除
+            if stage_name in self.progress_stages:
+                del self.progress_stages[stage_name]
 
+            # 重新設定當前進度為剩餘階段中最新的，或設為待處理
+            if self.progress_stages:
+                # 按日期排序，取最新的階段作為當前進度
+                sorted_stages = sorted(
+                    self.progress_stages.items(),
+                    key=lambda x: x[1] if x[1] else '0000-01-01'
+                )
+                latest_stage, latest_date = sorted_stages[-1]
+                self.progress = latest_stage
+                self.progress_date = latest_date
+            else:
+                # 沒有任何階段記錄時，設為待處理
+                self.progress = '待處理'
+                self.progress_date = None
+
+            self.updated_date = datetime.now()
+            return True
+
+        # 移除非當前進度階段
         if stage_name in self.progress_stages:
             del self.progress_stages[stage_name]
             self.updated_date = datetime.now()
             return True
+
         return False
 
     def update_stage_date(self, stage_name: str, new_date: str):
@@ -75,7 +97,7 @@ class CaseData:
 
     def get_ordered_stages(self) -> List[tuple]:
         """取得按日期排序的階段列表"""
-        return sorted(self.progress_stages.items(), key=lambda x: x[1])
+        return sorted(self.progress_stages.items(), key=lambda x: x[1] if x[1] else '9999-12-31')
 
     def to_dict(self) -> Dict[str, Any]:
         """轉換為字典格式"""
