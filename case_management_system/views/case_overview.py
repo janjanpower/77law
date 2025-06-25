@@ -502,7 +502,7 @@ class CaseOverviewWindow:
     # 修正 views/case_overview.py 中的 _display_case_progress 方法
 
     def _display_case_progress(self, case: 'CaseData'):
-        """顯示案件進度 - 根據選中資料動態顯示，包含日期資訊"""
+        """🔥 修改：顯示案件進度 - 使用漸進式顯示邏輯"""
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
@@ -584,7 +584,7 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['text']
         ).pack(anchor='w', pady=(5, 5))
 
-        # 🔥 修改：當前進度狀態和日期
+        # 當前進度狀態和日期
         current_stage = getattr(case, 'progress', '待處理')
         current_date = getattr(case, 'progress_date', None)
 
@@ -600,9 +600,11 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['button']
         ).pack(anchor='w', pady=(0, 10))
 
-        # 🔥 新增：進度歷史顯示
+        # 🔥 修改：顯示漸進式進度歷史
         progress_history = getattr(case, 'progress_history', {})
-        if progress_history:
+        display_stages = case.get_display_stages() if hasattr(case, 'get_display_stages') else [current_stage]
+
+        if len(display_stages) > 1 or progress_history:
             tk.Label(
                 info_frame,
                 text="進度歷史:",
@@ -611,30 +613,46 @@ class CaseOverviewWindow:
                 font=AppConfig.FONTS['button']
             ).pack(anchor='w', pady=(5, 5))
 
-            # 顯示進度歷史（限制顯示最近5個）
-            history_items = list(progress_history.items())[-5:]  # 只顯示最近5個
-            for progress_stage, date in history_items:
+            # 🔥 修改：按照漸進式順序顯示歷史
+            for stage in display_stages:
+                stage_date = progress_history.get(stage, '未設定日期')
+                color = '#4CAF50' if stage == current_stage else '#B0B0B0'  # 當前階段用綠色
+
                 tk.Label(
                     info_frame,
-                    text=f"  • {progress_stage}: {date}",
+                    text=f"  • {stage}: {stage_date}",
                     bg=AppConfig.COLORS['window_bg'],
-                    fg='#B0B0B0',  # 淺灰色
+                    fg=color,
                     font=AppConfig.FONTS['text']
                 ).pack(anchor='w')
 
-        # 🔥 修改：右側進度條 - 包含日期資訊
+        # 🔥 修改：右側進度條 - 漸進式顯示
         progress_bar_frame = tk.Frame(
             self.progress_display,
             bg=AppConfig.COLORS['window_bg']
         )
         progress_bar_frame.pack(side='right', expand=True, fill='x', padx=20)
 
-        # 根據案件類型取得對應的進度階段
+        # 🔥 修改：根據案件類型取得完整進度階段，但只顯示已達到的部分
         case_type = getattr(case, 'case_type', '')
-        stages = AppConfig.get_progress_options(case_type)
-        progress_history = getattr(case, 'progress_history', {})
+        all_stages = AppConfig.get_progress_options(case_type)
+        display_stages = case.get_display_stages() if hasattr(case, 'get_display_stages') else [current_stage]
 
-        for i, stage in enumerate(stages):
+        # 確定要顯示的階段範圍
+        if display_stages:
+            try:
+                # 找到最後一個階段在完整列表中的位置
+                last_stage = display_stages[-1]
+                last_index = all_stages.index(last_stage)
+                stages_to_show = all_stages[:last_index + 1]  # 只顯示到當前最新階段
+            except ValueError:
+                # 如果階段不在標準列表中，就直接使用 display_stages
+                stages_to_show = display_stages
+        else:
+            stages_to_show = [current_stage]
+
+        # 🔥 修改：漸進式進度條顯示
+        for i, stage in enumerate(stages_to_show):
             # 每個階段的容器
             stage_container = tk.Frame(
                 progress_bar_frame,
@@ -653,11 +671,17 @@ class CaseOverviewWindow:
             if stage == current_stage:
                 bg_color = '#4CAF50'  # 綠色 - 當前階段
                 fg_color = 'white'
-            elif current_stage in stages and stages.index(current_stage) > i:
-                bg_color = '#2196F3'  # 藍色 - 已完成
-                fg_color = 'white'
+            elif stage in display_stages:
+                stage_index_in_display = display_stages.index(stage)
+                current_index_in_display = display_stages.index(current_stage) if current_stage in display_stages else -1
+                if stage_index_in_display < current_index_in_display:
+                    bg_color = '#2196F3'  # 藍色 - 已完成
+                    fg_color = 'white'
+                else:
+                    bg_color = '#4CAF50'  # 綠色 - 當前階段
+                    fg_color = 'white'
             else:
-                bg_color = '#E0E0E0'  # 灰色 - 未開始
+                bg_color = '#E0E0E0'  # 灰色 - 未開始（這個情況在漸進式顯示中不應該出現）
                 fg_color = 'black'
 
             # 進度圓圈
@@ -682,7 +706,7 @@ class CaseOverviewWindow:
             )
             stage_label.pack()
 
-            # 🔥 新增：顯示該階段的日期（如果有的話）
+            # 顯示該階段的日期（如果有的話）
             stage_date = progress_history.get(stage)
             if stage_date:
                 date_label = tk.Label(
@@ -694,9 +718,9 @@ class CaseOverviewWindow:
                 )
                 date_label.pack()
 
-            # 連接線（除了最後一個階段）
-            if i < len(stages) - 1:
-                line_color = '#2196F3' if current_stage in stages and stages.index(current_stage) > i else '#E0E0E0'
+            # 🔥 修改：連接線（只在有下一個階段時顯示）
+            if i < len(stages_to_show) - 1:
+                line_color = '#2196F3'  # 已完成的線用藍色
                 line_frame = tk.Frame(
                     progress_bar_frame,
                     bg=line_color,

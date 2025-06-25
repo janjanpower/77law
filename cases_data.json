@@ -15,7 +15,33 @@
     "progress_history": {
       "執行中": "2025-06-20"
     },
+    "completed_stages": [
+      "執行中"
+    ],
     "created_date": "2025-06-25T04:30:44.884348",
     "updated_date": "2025-06-25T12:01:10.514571"
+  },
+  {
+    "case_id": "C20250002",
+    "case_type": "刑事",
+    "client": "233",
+    "lawyer": "44",
+    "legal_affairs": "55",
+    "progress": "起訴",
+    "case_reason": "77",
+    "case_number": "88",
+    "opposing_party": "99+",
+    "court": "+",
+    "division": "52",
+    "progress_date": "2025-06-27",
+    "progress_history": {
+      "偵查中": "2025-06-25",
+      "起訴": "2025-06-27"
+    },
+    "completed_stages": [
+      "起訴"
+    ],
+    "created_date": "2025-06-25T12:20:07.502499",
+    "updated_date": "2025-06-25T12:20:26.134355"
   }
 ]

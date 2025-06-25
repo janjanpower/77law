@@ -333,17 +333,26 @@ class ProgressHistoryDialog(BaseWindow):
                 messagebox.showinfo("成功", f"已刪除進度記錄：{progress}")
 
     def _save_changes(self):
-        """儲存變更"""
+        """🔥 修改：儲存變更（包含漸進式進度邏輯）"""
         if self.case_data and self.on_update:
             # 更新案件資料
+            old_progress = self.case_data.progress
             self.case_data.progress_history = self.progress_history.copy()
             self.case_data.updated_date = datetime.now()
+
+            # 🔥 新增：重新計算已完成階段
+            self._recalculate_completed_stages()
 
             # 呼叫更新回調
             try:
                 success = self.on_update(self.case_data)
                 if success:
                     messagebox.showinfo("成功", "進度歷史已更新")
+
+                    # 🔥 新增：顯示階段變化資訊
+                    new_stages = self.case_data.get_display_stages()
+                    print(f"更新後的進度階段：{new_stages}")
+
                     self.close()
                 else:
                     messagebox.showerror("錯誤", "更新失敗")
@@ -357,3 +366,24 @@ class ProgressHistoryDialog(BaseWindow):
         """顯示進度歷史管理對話框"""
         dialog = ProgressHistoryDialog(parent, case_data, on_update)
         dialog.window.wait_window()
+
+    def _recalculate_completed_stages(self):
+        """
+        🔥 新增：根據進度歷史重新計算已完成階段
+        """
+        from config.settings import AppConfig
+
+        if not self.case_data:
+            return
+
+        # 取得該案件類型的完整進度順序
+        all_stages = AppConfig.get_progress_options(self.case_data.case_type)
+
+        # 找出歷史中存在的最高階段
+        max_stage_index = -1
+        for stage in self.progress_history.keys():
+            try:
+                stage_index = all_stages.index(stage)
+                max_stage_index = max(max_stage_index, stage_index)
+            except ValueError:
+                # 如果階段不在標

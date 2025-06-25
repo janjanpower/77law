@@ -38,14 +38,19 @@ class CaseController:
             'opposing_party': None,
             'court': None,
             'division': None,
-            'progress_date': None,  # 🔥 新增
-            'progress_history': {}  # 🔥 新增
+            'progress_date': None,
+            'progress_history': {},
+            'completed_stages': []  # 🔥 新增
         }
 
         # 合併預設值和現有資料
         for field, default_value in default_fields.items():
             if field not in case_dict:
                 case_dict[field] = default_value
+
+        # 🔥 修改：初始化已完成階段
+        if not case_dict.get('completed_stages') and case_dict.get('progress'):
+            case_dict['completed_stages'] = [case_dict['progress']]
 
         # 🔥 新增：如果有進度但沒有進度歷史，建立基本歷史記錄
         if (case_dict.get('progress') and
@@ -59,7 +64,7 @@ class CaseController:
 
     def update_case_progress(self, case_id: str, new_progress: str, progress_date: str = None) -> bool:
         """
-        🔥 新增：更新案件進度和日期
+        🔥 修改：漸進式更新案件進度和日期
 
         Args:
             case_id: 案件編號
@@ -74,18 +79,31 @@ class CaseController:
             if not case:
                 raise ValueError(f"找不到案件編號: {case_id}")
 
-            # 更新進度
+            # 🔥 記錄更新前的階段
+            old_stages = case.get_display_stages().copy()
+
+            # 更新進度（會自動更新completed_stages）
             case.update_progress(new_progress, progress_date)
+
+            # 🔥 取得更新後的階段
+            new_stages = case.get_display_stages()
 
             # 儲存資料
             success = self.save_cases()
             if success:
+                # 🔥 新增：更新進度資料夾結構（漸進式）
+                folder_success = self.folder_manager.update_progress_folders(case)
+
                 # 更新案件資訊Excel檔案
                 excel_success = self.folder_manager.update_case_info_excel(case)
+
                 if not excel_success:
                     print(f"警告：案件 {case_id} Excel檔案更新失敗")
+                if not folder_success:
+                    print(f"警告：案件 {case_id} 進度資料夾更新失敗")
 
-                print(f"已更新案件 {case_id} 進度為：{new_progress}")
+                print(f"已更新案件 {case_id} 進度：{old_stages} → {new_stages}")
+                print(f"當前進度：{new_progress} ({progress_date or datetime.now().strftime('%Y-%m-%d')})")
             return success
 
         except Exception as e:
