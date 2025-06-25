@@ -141,14 +141,14 @@ class CaseFormDialog(BaseWindow):
 
     def _create_field(self, parent, label_text, var_name, row, field_type='entry',
                      values=None, required=False):
-        """建立表單欄位"""
+        """建立表單欄位 - 使用統一的字體設定"""
         # 標籤
         label = tk.Label(
             parent,
             text=f"{label_text}{'*' if required else ''}:",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],
+            font=AppConfig.FONTS['text'],  # 使用統一文字字體
             width=12,
             anchor='w'
         )
@@ -161,7 +161,8 @@ class CaseFormDialog(BaseWindow):
                 textvariable=self.form_vars[var_name],
                 values=values or [],
                 state='readonly' if values else 'normal',
-                width=30
+                width=30,
+                font=AppConfig.FONTS['text']  # 使用統一文字字體
             )
         else:
             widget = tk.Entry(
@@ -169,7 +170,7 @@ class CaseFormDialog(BaseWindow):
                 textvariable=self.form_vars[var_name],
                 bg='white',
                 fg='black',
-                font=AppConfig.FONTS['text'],
+                font=AppConfig.FONTS['text'],  # 使用統一文字字體
                 width=32
             )
 
@@ -177,7 +178,7 @@ class CaseFormDialog(BaseWindow):
         parent.grid_columnconfigure(1, weight=1)
 
     def _create_form_buttons(self, parent):
-        """建立表單按鈕"""
+        """建立表單按鈕 - 使用統一的字體設定"""
         button_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
         button_frame.pack(pady=20)
 
@@ -187,8 +188,9 @@ class CaseFormDialog(BaseWindow):
             command=self._on_save,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],
-            width=10
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=8,
+            height=1
         )
         save_btn.pack(side='left', padx=5)
 
@@ -198,8 +200,9 @@ class CaseFormDialog(BaseWindow):
             command=self.close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],
-            width=10
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=8,
+            height=1
         )
         cancel_btn.pack(side='left', padx=5)
 
@@ -216,7 +219,7 @@ class CaseFormDialog(BaseWindow):
         return True
 
     def _on_save(self):
-        """儲存按鈕事件"""
+        """儲存按鈕事件 - 使用統一的顯示格式"""
         if not self._validate_form():
             return
 

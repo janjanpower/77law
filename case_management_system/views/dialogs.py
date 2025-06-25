@@ -35,7 +35,7 @@ class ConfirmDialog:
         self.window.geometry(f"400x200+{x}+{y}")
 
     def _create_dialog_content(self):
-        """建立對話框內容"""
+        """建立對話框內容 - 確認對話框"""
         # 主容器
         main_frame = tk.Frame(self.window, bg=AppConfig.COLORS['window_bg'])
         main_frame.pack(fill='both', expand=True)
@@ -85,7 +85,7 @@ class ConfirmDialog:
             text=self.message,
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],  # 使用統一字體
+            font=AppConfig.FONTS['text'],  # 使用統一文字字體
             wraplength=350,
             justify='center'
         )
@@ -102,8 +102,9 @@ class ConfirmDialog:
             command=self._on_ok,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體
-            width=10
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=8,
+            height=1
         )
         ok_btn.pack(side='left', padx=5)
 
@@ -114,8 +115,9 @@ class ConfirmDialog:
             command=self._on_cancel,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體
-            width=10
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=8,
+            height=1
         )
         cancel_btn.pack(side='left', padx=5)
 

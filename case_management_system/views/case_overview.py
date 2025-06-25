@@ -402,15 +402,15 @@ class CaseOverviewWindow:
 
         self.upload_btn = self.create_button(
             self.toolbar_frame,
-            '匯入Excel',
-            self._on_import_excel,
+            '上傳資料',
+            self._on_upload_data,
             'Function'
         )
         self.upload_btn.pack(side='left', padx=5)
 
         self.export_btn = self.create_button(
             self.toolbar_frame,
-            '匯出Excel',
+            '匯出案件資訊',
             self._on_export_excel,
             'Function'
         )
@@ -426,8 +426,8 @@ class CaseOverviewWindow:
                 bg=AppConfig.COLORS['button_bg'],
                 fg=AppConfig.COLORS['button_fg'],
                 font=AppConfig.FONTS['button'],
-                width=10,
-                height=2
+                width=14,
+                height=0
             )
         else:
             return tk.Button(
@@ -517,7 +517,7 @@ class CaseOverviewWindow:
             text="隱藏欄位：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['button']
+            font=AppConfig.FONTS['text']
         )
         control_title.pack(side='left', padx=(10, 10))
 
@@ -729,7 +729,7 @@ class CaseOverviewWindow:
             return ('#2196F3', 'white')
 
     def _display_case_progress(self, case: 'CaseData'):
-        """顯示案件進度 - 簡化版本，只顯示實際存在的階段（含新的日期顏色邏輯）"""
+        """顯示案件進度 - 使用統一的顯示格式"""
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
@@ -742,7 +742,7 @@ class CaseOverviewWindow:
         )
         info_frame.pack(side='left', padx=10, anchor='nw')
 
-        # 案件基本資訊顯示
+        # 案件資訊顯示 - 只顯示案號
         case_number = getattr(case, 'case_number', None) or '未設定'
         tk.Label(
             info_frame,
@@ -831,8 +831,9 @@ class CaseOverviewWindow:
             command=lambda: self._on_add_progress_stage(case),
             bg='#4CAF50',
             fg='white',
-            font=AppConfig.FONTS['text'],
-            width=20
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=15,
+            height=1
         )
         add_stage_btn.pack(anchor='w', pady=5)
 
@@ -902,7 +903,7 @@ class CaseOverviewWindow:
                 height=2,
                 relief='solid',
                 borderwidth=0,
-                cursor='hand2'  # 滑鼠指標變為手型
+                cursor='hand2'
             )
             stage_label.pack(pady=2)
 
@@ -933,6 +934,60 @@ class CaseOverviewWindow:
                     width=25
                 )
                 line_frame.pack(side='left', pady=5)
+
+    def _on_upload_data(self):
+        """上傳資料事件"""
+        # 檢查是否選擇了案件
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("提醒", "請先選擇一個案件")
+            return
+
+        if not self.case_controller:
+            messagebox.showwarning("提醒", "案件控制器未初始化")
+            return
+
+        try:
+            # 取得選中的案件
+            item = selection[0]
+            tags = self.tree.item(item, 'tags')
+            case_index = None
+
+            for tag in tags:
+                if tag.startswith('index_'):
+                    case_index = int(tag.replace('index_', ''))
+                    break
+
+            if case_index is not None and case_index < len(self.case_data):
+                case = self.case_data[case_index]
+
+                # 檢查案件是否有資料夾
+                case_folder = self.case_controller.get_case_folder_path(case.case_id)
+                if not case_folder or not os.path.exists(case_folder):
+                    messagebox.showerror("錯誤", f"找不到案件 {case.client} 的資料夾，無法上傳檔案")
+                    return
+
+                # 顯示上傳對話框
+                from views.upload_file_dialog import UploadFileDialog
+
+                def on_upload_complete():
+                    """上傳完成後的回調"""
+                    print("檔案上傳完成")
+
+                UploadFileDialog.show_upload_dialog(
+                    self.window,
+                    case,
+                    self.case_controller.folder_manager,
+                    on_upload_complete
+                )
+            else:
+                print(f"無法取得有效的案件索引：tags={tags}")
+                messagebox.showerror("錯誤", "無法取得選中的案件資訊")
+
+        except Exception as e:
+            print(f"開啟上傳對話框失敗: {e}")
+            messagebox.showerror("錯誤", f"無法開啟上傳對話框：{str(e)}")
+
     def _on_stage_click(self, stage_name: str, case: CaseData):
         """階段點擊事件 - 開啟階段資料夾"""
         try:
@@ -1102,7 +1157,6 @@ class CaseOverviewWindow:
         except Exception as e:
             print(f"重新選擇案件失敗: {e}")
 
-    # 以下是原有的事件處理方法，保持不變
     def _on_add_case(self):
         """新增案件事件"""
         if not self.case_controller:
@@ -1126,10 +1180,14 @@ class CaseOverviewWindow:
                     print(f"資料重新載入完成，當前案件數量: {len(self.case_data)}")
 
                     folder_path = self.case_controller.get_case_folder_path(case_data.case_id)
+
+                    # 使用統一的顯示格式
+                    case_display_name = AppConfig.format_case_display_name(case_data)
+
                     if folder_path:
-                        message = f"案件 {case_data.case_id} 新增成功！\n\n已建立資料夾結構：\n{folder_path}"
+                        message = f"案件 {case_display_name} 新增成功！\n\n已建立資料夾結構：\n{folder_path}"
                     else:
-                        message = f"案件 {case_data.case_id} 新增成功！\n\n注意：資料夾結構建立失敗，請手動建立。"
+                        message = f"案件 {case_display_name} 新增成功！\n\n注意：資料夾結構建立失敗，請手動建立。"
 
                     self.window.after(100, lambda: messagebox.showinfo("成功", message))
                 else:
@@ -1148,28 +1206,6 @@ class CaseOverviewWindow:
         except Exception as e:
             print(f"開啟新增案件對話框失敗: {e}")
             messagebox.showerror("錯誤", f"無法開啟新增案件對話框：{str(e)}")
-
-    def _on_import_excel(self):
-        """匯入Excel事件"""
-        if not self.case_controller:
-            messagebox.showwarning("提醒", "案件控制器未初始化")
-            return
-
-        file_path = filedialog.askopenfilename(
-            title="選擇要匯入的Excel檔案",
-            filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
-        )
-
-        if file_path:
-            try:
-                success = self.case_controller.import_from_excel(file_path)
-                if success:
-                    self._load_cases()
-                    messagebox.showinfo("成功", "Excel資料匯入成功！")
-                else:
-                    messagebox.showerror("錯誤", "Excel資料匯入失敗！")
-            except Exception as e:
-                messagebox.showerror("錯誤", f"匯入過程發生錯誤：{str(e)}")
 
     def _on_export_excel(self):
         """匯出Excel事件"""
@@ -1222,7 +1258,10 @@ class CaseOverviewWindow:
                     success = self.case_controller.update_case(case.case_id, case_data)
                     if success:
                         self._load_cases()
-                        self.window.after(100, lambda: messagebox.showinfo("成功", f"案件 {case_data.case_id} 更新成功！"))
+
+                        # 使用統一的顯示格式
+                        case_display_name = AppConfig.format_case_display_name(case_data)
+                        self.window.after(100, lambda: messagebox.showinfo("成功", f"案件 {case_display_name} 更新成功！"))
                     else:
                         messagebox.showerror("錯誤", "案件更新失敗！")
                     return success
@@ -1243,11 +1282,9 @@ class CaseOverviewWindow:
 
             context_menu = tk.Menu(self.window, tearoff=0)
             context_menu.add_command(label="編輯案件", command=lambda: self._on_item_double_click(None))
-            context_menu.add_separator()
             context_menu.add_command(label="刪除案件", command=self._on_delete_case)
             context_menu.add_separator()
-            context_menu.add_command(label="開啟案件資料夾", command=self._on_open_case_folder)
-            context_menu.add_command(label="更新Excel檔案", command=self._on_update_case_excel)
+            context_menu.add_command(label="開啟當事人資料夾", command=self._on_open_case_folder)
 
             try:
                 context_menu.tk_popup(event.x_root, event.y_root)
@@ -1276,8 +1313,11 @@ class CaseOverviewWindow:
                 # 取得案件資料夾資訊
                 folder_info = self.case_controller.get_case_folder_info(case.case_id)
 
+                # 使用統一的顯示格式
+                case_display_name = AppConfig.format_case_display_name(case)
+
                 # 建立確認訊息
-                confirm_message = f"確定要刪除案件 {case.case_number} - {case.client} 嗎？\n\n"
+                confirm_message = f"確定要刪除案件 {case_display_name} 嗎？\n\n"
 
                 if folder_info['exists'] and folder_info['has_files']:
                     confirm_message += (
@@ -1303,9 +1343,9 @@ class CaseOverviewWindow:
                             self._load_cases()
 
                             if folder_info['exists']:
-                                messagebox.showinfo("成功", f"案件 {case.case_id} 已刪除\n案件資料夾已同時刪除")
+                                messagebox.showinfo("成功", f"案件 {case_display_name} 已刪除\n案件資料夾已同時刪除")
                             else:
-                                messagebox.showinfo("成功", f"案件 {case.case_id} 已刪除")
+                                messagebox.showinfo("成功", f"案件 {case_display_name} 已刪除")
                         else:
                             messagebox.showerror("錯誤", "案件刪除失敗")
                     except Exception as e:
@@ -1347,37 +1387,6 @@ class CaseOverviewWindow:
         except Exception as e:
             print(f"開啟資料夾失敗: {e}")
             messagebox.showerror("錯誤", "無法開啟案件資料夾")
-
-    def _on_update_case_excel(self):
-        """更新案件Excel檔案"""
-        selection = self.tree.selection()
-        if not selection:
-            return
-
-        try:
-            item = selection[0]
-            tags = self.tree.item(item, 'tags')
-            case_index = None
-
-            for tag in tags:
-                if tag.startswith('index_'):
-                    case_index = int(tag.replace('index_', ''))
-                    break
-
-            if case_index is not None and case_index < len(self.case_data):
-                case = self.case_data[case_index]
-
-                success = self.case_controller.folder_manager.update_case_info_excel(case)
-                if success:
-                    messagebox.showinfo("成功", f"案件 {case.case_id} 的Excel檔案已更新")
-                else:
-                    messagebox.showerror("錯誤", "Excel檔案更新失敗")
-            else:
-                print(f"無法取得有效的案件索引：tags={tags}")
-
-        except Exception as e:
-            print(f"更新Excel檔案失敗: {e}")
-            messagebox.showerror("錯誤", "無法更新Excel檔案")
 
     def add_case_data(self, case: CaseData):
         """新增案件資料"""

@@ -13,19 +13,19 @@ class AppConfig:
         'border_color': '#555555'
     }
 
-    # 字體設定
+    # 字體設定 - 統一調整字體大小
     FONTS = {
-        'title': ('Microsoft JhengHei', 10, 'bold'),
-        'button': ('Microsoft JhengHei', 8),
-        'text': ('Microsoft JhengHei', 8),
-        'welcome': ('Microsoft JhengHei', 10, 'bold')
+        'title': ('Microsoft JhengHei', 11, 'bold'),
+        'button': ('Microsoft JhengHei', 9),         # 按鈕字體改為 20
+        'text': ('Microsoft JhengHei', 9),           # 一般文字改為 10
+        'welcome': ('Microsoft JhengHei', 9, 'bold')
     }
 
     # 尺寸設定
     SIZES = {
         'dialog_button': {'width': 80, 'height': 30},
         'function_button': {'width': 50, 'height': 15},
-        'min_window': {'width': 500, 'height': 400},
+        'min_window': {'width': 300, 'height': 300},
         'title_height': 25,
         'padding': 20,
         'button_spacing': 10
@@ -100,3 +100,18 @@ class AppConfig:
         if case_type and case_type in cls.PROGRESS_OPTIONS:
             return cls.PROGRESS_OPTIONS[case_type]
         return cls.PROGRESS_OPTIONS['default']
+
+    @classmethod
+    def format_case_display_name(cls, case_data) -> str:
+        """
+        統一的案件顯示名稱格式：case_number(當事人名稱)
+
+        Args:
+            case_data: 案件資料物件
+
+        Returns:
+            str: 格式化的顯示名稱
+        """
+        case_number = getattr(case_data, 'case_number', None) or '未設定案號'
+        client_name = getattr(case_data, 'client', '未知當事人')
+        return f"{case_number}({client_name})"

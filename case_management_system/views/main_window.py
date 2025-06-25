@@ -152,7 +152,7 @@ class MainWindow:
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['welcome']  # 使用統一字體設定
         )
-        welcome_label.pack(expand=True)
+        welcome_label.pack(expand=True,pady=(10,0))
 
         # 主功能按鈕區域
         button_frame = tk.Frame(
@@ -164,7 +164,7 @@ class MainWindow:
         # 選擇資料夾按鈕
         self.folder_btn = tk.Button(
             button_frame,
-            text='選擇資料母資料夾',  # 更明確的說明
+            text='選擇主要資料夾',  # 更明確的說明
             command=self._choose_data_folder,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
@@ -172,7 +172,7 @@ class MainWindow:
             width=18,
             height=2
         )
-        self.folder_btn.pack(pady=10)
+        self.folder_btn.pack(pady=(0,30))
 
         # 資料夾路徑顯示
         initial_path = self.app_settings.get('data_folder', '尚未選擇母資料夾')
@@ -195,7 +195,7 @@ class MainWindow:
             button_frame,
             bg=AppConfig.COLORS['window_bg']
         )
-        action_frame.pack(pady=20)
+        action_frame.pack(pady=(0,25))
 
         # 確認按鈕
         confirm_btn = tk.Button(
@@ -208,7 +208,7 @@ class MainWindow:
             width=10,
             height=2
         )
-        confirm_btn.pack(side='left', padx=10)
+        confirm_btn.pack(side='left', padx=10,pady=(10,0))
 
         # 離開按鈕
         exit_btn = tk.Button(
@@ -221,12 +221,12 @@ class MainWindow:
             width=10,
             height=2
         )
-        exit_btn.pack(side='left', padx=10)
+        exit_btn.pack(side='left', padx=10,pady=(10,0))
 
     def _choose_data_folder(self):
         """選擇母資料夾"""
         folder_path = filedialog.askdirectory(
-            title="選擇母資料夾位置",
+            title="父資料夾位置",
             initialdir=self.app_settings.get('data_folder', os.path.expanduser('~'))
         )
 

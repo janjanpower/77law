@@ -52,7 +52,11 @@ class SimpleProgressEditDialog(BaseWindow):
             info_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
             info_frame.pack(fill='x', padx=20, pady=(20, 10))
 
-            info_text = f"案件：{self.case_data.case_id} - {self.case_data.client} ({self.case_data.case_type})"
+            # 使用統一的案件顯示格式
+            case_display_name = AppConfig.format_case_display_name(self.case_data)
+            case_type = self.case_data.case_type
+
+            info_text = f"案件：{case_display_name} ({case_type})"
             tk.Label(
                 info_frame,
                 text=info_text,
@@ -85,7 +89,8 @@ class SimpleProgressEditDialog(BaseWindow):
                 textvariable=self.stage_var,
                 values=progress_options,
                 state='normal',  # 允許輸入自訂階段
-                width=25
+                width=25,
+                font=AppConfig.FONTS['text']  # 使用統一字體
             )
             self.stage_combo.grid(row=0, column=1, sticky='w', pady=10)
         else:
@@ -96,7 +101,7 @@ class SimpleProgressEditDialog(BaseWindow):
                 textvariable=self.stage_var,
                 bg=AppConfig.COLORS['window_bg'],
                 fg='#4CAF50',
-                font=AppConfig.FONTS['button']
+                font=AppConfig.FONTS['button']  # 使用按鈕字體大小
             )
             stage_label.grid(row=0, column=1, sticky='w', pady=10)
 
@@ -125,7 +130,8 @@ class SimpleProgressEditDialog(BaseWindow):
                 foreground='white',
                 borderwidth=2,
                 date_pattern='yyyy-mm-dd',
-                locale='zh_TW'
+                locale='zh_TW',
+                font=AppConfig.FONTS['text']  # 使用統一字體
             )
             self.date_entry.set_date(initial_date)
         else:
@@ -156,8 +162,9 @@ class SimpleProgressEditDialog(BaseWindow):
             command=self._on_save,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],
-            width=10
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=8,
+            height=1
         )
         save_btn.pack(side='left', padx=5)
 
@@ -168,8 +175,9 @@ class SimpleProgressEditDialog(BaseWindow):
             command=self.close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],
-            width=10
+            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            width=8,
+            height=1
         )
         cancel_btn.pack(side='left', padx=5)
 

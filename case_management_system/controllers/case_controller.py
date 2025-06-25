@@ -131,7 +131,7 @@ class CaseController:
             return False
 
     def add_case(self, case: CaseData) -> bool:
-        """新增案件"""
+        """新增案件 - 使用統一顯示格式"""
         try:
             # 檢查案件編號是否重複
             if any(c.case_id == case.case_id for c in self.cases):
@@ -149,9 +149,11 @@ class CaseController:
             # 建立案件資料夾結構
             folder_success = self.folder_manager.create_case_folder_structure(case)
             if not folder_success:
-                print(f"警告：案件 {case.case_id} 資料夾結構建立失敗")
+                case_display_name = AppConfig.format_case_display_name(case)
+                print(f"警告：案件 {case_display_name} 資料夾結構建立失敗")
 
-            print(f"已新增案件：{case.case_id}")
+            case_display_name = AppConfig.format_case_display_name(case)
+            print(f"已新增案件：{case_display_name}")
             return True
 
         except Exception as e:
@@ -159,7 +161,7 @@ class CaseController:
             return False
 
     def update_case(self, case_id: str, updated_case: CaseData) -> bool:
-        """更新案件"""
+        """更新案件 - 使用統一顯示格式"""
         try:
             for i, case in enumerate(self.cases):
                 if case.case_id == case_id:
@@ -171,9 +173,11 @@ class CaseController:
                         # 更新案件資訊Excel檔案
                         excel_success = self.folder_manager.update_case_info_excel(updated_case)
                         if not excel_success:
-                            print(f"警告：案件 {case_id} Excel檔案更新失敗")
+                            case_display_name = AppConfig.format_case_display_name(updated_case)
+                            print(f"警告：案件 {case_display_name} Excel檔案更新失敗")
 
-                        print(f"已更新案件：{case_id}")
+                        case_display_name = AppConfig.format_case_display_name(updated_case)
+                        print(f"已更新案件：{case_display_name}")
 
                     return success
 
@@ -184,7 +188,7 @@ class CaseController:
             return False
 
     def update_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str) -> bool:
-        """更新案件進度階段"""
+        """更新案件進度階段 - 使用統一顯示格式"""
         try:
             case = self.get_case_by_id(case_id)
             if not case:
@@ -196,7 +200,8 @@ class CaseController:
             if success:
                 # 更新資料夾和Excel
                 self.folder_manager.update_case_info_excel(case)
-                print(f"已更新案件 {case_id} 的階段 {stage_name} 日期為 {stage_date}")
+                case_display_name = AppConfig.format_case_display_name(case)
+                print(f"已更新案件 {case_display_name} 的階段 {stage_name} 日期為 {stage_date}")
 
             return success
 
@@ -205,7 +210,7 @@ class CaseController:
             return False
 
     def add_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str = None) -> bool:
-        """新增案件進度階段"""
+        """新增案件進度階段 - 使用統一顯示格式"""
         try:
             case = self.get_case_by_id(case_id)
             if not case:
@@ -218,7 +223,8 @@ class CaseController:
                 # 建立對應的資料夾
                 self.folder_manager.create_progress_folder(case, stage_name)
                 self.folder_manager.update_case_info_excel(case)
-                print(f"已新增案件 {case_id} 的階段 {stage_name}")
+                case_display_name = AppConfig.format_case_display_name(case)
+                print(f"已新增案件 {case_display_name} 的階段 {stage_name}")
 
             return success
 
@@ -227,7 +233,7 @@ class CaseController:
             return False
 
     def remove_case_progress_stage(self, case_id: str, stage_name: str) -> bool:
-        """移除案件進度階段"""
+        """移除案件進度階段 - 使用統一顯示格式"""
         try:
             case = self.get_case_by_id(case_id)
             if not case:
@@ -250,7 +256,8 @@ class CaseController:
                 if save_success:
                     # 更新Excel檔案
                     self.folder_manager.update_case_info_excel(case)
-                    print(f"已移除案件 {case_id} 的階段 {stage_name}")
+                    case_display_name = AppConfig.format_case_display_name(case)
+                    print(f"已移除案件 {case_display_name} 的階段 {stage_name}")
 
                     if not folder_success:
                         print(f"警告：階段記錄已移除，但資料夾刪除失敗")
@@ -270,7 +277,7 @@ class CaseController:
             return False
 
     def delete_case(self, case_id: str, delete_folder: bool = True) -> bool:
-        """刪除案件"""
+        """刪除案件 - 使用統一顯示格式"""
         try:
             # 找到要刪除的案件
             case_to_delete = None
@@ -282,16 +289,18 @@ class CaseController:
             if not case_to_delete:
                 raise ValueError(f"找不到案件編號: {case_id}")
 
+            case_display_name = AppConfig.format_case_display_name(case_to_delete)
+
             # 如果需要刪除資料夾
             folder_success = True
             if delete_folder:
-                print(f"準備刪除案件 {case_id} 的資料夾...")
+                print(f"準備刪除案件 {case_display_name} 的資料夾...")
                 folder_success = self.folder_manager.delete_case_folder(case_to_delete)
 
                 if folder_success:
-                    print(f"案件資料夾刪除成功: {case_to_delete.client}")
+                    print(f"案件資料夾刪除成功: {case_display_name}")
                 else:
-                    print(f"案件資料夾刪除失敗或不存在: {case_to_delete.client}")
+                    print(f"案件資料夾刪除失敗或不存在: {case_display_name}")
 
             # 從列表中移除案件
             original_count = len(self.cases)
@@ -300,7 +309,7 @@ class CaseController:
             if len(self.cases) < original_count:
                 success = self.save_cases()
                 if success:
-                    print(f"已刪除案件：{case_id}")
+                    print(f"已刪除案件：{case_display_name}")
 
                     if delete_folder and not folder_success:
                         print(f"警告：案件記錄已刪除，但資料夾刪除失敗")
