@@ -1,47 +1,28 @@
 [
   {
     "case_id": "C20250001",
-    "case_type": "刑事",
-    "client": "李恩",
-    "lawyer": "羅妻",
-    "legal_affairs": "小小",
-    "progress": "執行中",
-    "case_reason": "哈哈",
-    "case_number": "12345",
-    "opposing_party": "789",
-    "court": "123",
-    "division": "123",
-    "progress_date": "2025-06-20",
-    "progress_history": {
-      "執行中": "2025-06-20"
-    },
-    "completed_stages": [
-      "執行中"
-    ],
-    "created_date": "2025-06-25T04:30:44.884348",
-    "updated_date": "2025-06-25T12:01:10.514571"
-  },
-  {
-    "case_id": "C20250002",
-    "case_type": "刑事",
-    "client": "233",
-    "lawyer": "44",
-    "legal_affairs": "55",
-    "progress": "起訴",
-    "case_reason": "77",
+    "case_type": "民事",
+    "client": "小恩",
+    "lawyer": "羅",
+    "legal_affairs": "大大",
+    "progress": "三審",
+    "case_reason": "99",
     "case_number": "88",
-    "opposing_party": "99+",
-    "court": "+",
-    "division": "52",
-    "progress_date": "2025-06-27",
+    "opposing_party": "77",
+    "court": "66",
+    "division": "55",
+    "progress_date": "2025-06-30",
     "progress_history": {
-      "偵查中": "2025-06-25",
-      "起訴": "2025-06-27"
+      "一審": "2025-06-17",
+      "二審": "2025-06-27",
+      "三審": "2025-06-30"
     },
-    "completed_stages": [
-      "起訴"
+    "experienced_stages": [
+      "一審",
+      "二審",
+      "三審"
     ],
-    "created_date": "2025-06-25T12:20:07.502499",
-    "updated_date": "2025-06-25T12:20:26.134355"
+    "created_date": "2025-06-25T12:42:54.093162",
+    "updated_date": "2025-06-25T12:51:58.269837"
   }
 ]

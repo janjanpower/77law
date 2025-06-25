@@ -30,7 +30,7 @@ class CaseController:
         self.load_cases()
 
     def _migrate_case_data(self, case_dict: dict) -> dict:
-        """遷移舊版案件資料到新版格式"""
+        """🔥 修正：遷移舊版案件資料到新版格式（支援 experienced_stages）"""
         # 確保所有新欄位都有預設值
         default_fields = {
             'case_reason': None,
@@ -40,7 +40,7 @@ class CaseController:
             'division': None,
             'progress_date': None,
             'progress_history': {},
-            'completed_stages': []  # 🔥 新增
+            'experienced_stages': []  # 🔥 使用新的欄位名稱
         }
 
         # 合併預設值和現有資料
@@ -48,11 +48,15 @@ class CaseController:
             if field not in case_dict:
                 case_dict[field] = default_value
 
-        # 🔥 修改：初始化已完成階段
-        if not case_dict.get('completed_stages') and case_dict.get('progress'):
-            case_dict['completed_stages'] = [case_dict['progress']]
+        # 🔥 處理向後相容性：將 completed_stages 轉換為 experienced_stages
+        if 'completed_stages' in case_dict and not case_dict.get('experienced_stages'):
+            case_dict['experienced_stages'] = case_dict['completed_stages']
 
-        # 🔥 新增：如果有進度但沒有進度歷史，建立基本歷史記錄
+        # 🔥 修正：初始化經歷階段
+        if not case_dict.get('experienced_stages') and case_dict.get('progress'):
+            case_dict['experienced_stages'] = [case_dict['progress']]
+
+        # 🔥 修正：如果有進度但沒有進度歷史，建立基本歷史記錄
         if (case_dict.get('progress') and
             case_dict.get('progress_date') and
             not case_dict.get('progress_history')):
@@ -62,9 +66,110 @@ class CaseController:
 
         return case_dict
 
+    def get_case_status_report(self, case_id: str) -> str:
+        """取得案件狀態報告（不包含百分比）"""
+        try:
+            from utils.progress_manager import ProgressManager
+
+            case = self.get_case_by_id(case_id)
+            if not case:
+                return "案件不存在"
+
+            report = f"案件編號：{case.case_id}\n"
+            report += f"當事人：{case.client}\n"
+            report += f"案件類型：{case.case_type}\n"
+            report += ProgressManager.format_progress_display(case, include_dates=True, include_percentage=False)
+
+            # 經歷階段資訊
+            experienced_stages = ProgressManager.get_experienced_stages(case)
+            if experienced_stages:
+                report += f"\n經歷階段：{' → '.join(experienced_stages)}"
+
+            return report
+
+        except Exception as e:
+            print(f"產生狀態報告失敗: {e}")
+            return "狀態報告產生失敗"
+
+    def _create_progress_summary(self, case_data):
+        """建立進度摘要（不包含百分比）"""
+        from utils.progress_manager import ProgressManager
+
+        summary_text = ProgressManager.format_progress_display(
+            case_data,
+            include_dates=True,
+            include_percentage=False  # 🔥 明確設定不包含百分比
+        )
+
+        return summary_text
+
+
+    def display_case_info_tooltip(self, case_data):
+        """顯示案件資訊提示（不包含百分比）"""
+        from utils.progress_manager import ProgressManager
+
+        tooltip_text = f"案件：{case_data.client}\n"
+        tooltip_text += ProgressManager.format_progress_display(
+            case_data,
+            include_dates=True,
+            include_percentage=False  # 🔥 確保不顯示百分比
+        )
+
+        return tooltip_text
+
+    def get_case_progress_summary(self, case_id: str) -> dict:
+        """
+        🔥 新增：取得案件進度摘要
+
+        Args:
+            case_id: 案件編號
+
+        Returns:
+            dict: 進度摘要
+        """
+        try:
+            from utils.progress_manager import ProgressManager
+
+            case = self.get_case_by_id(case_id)
+            if not case:
+                return {}
+
+            return ProgressManager.export_progress_summary(case)
+
+        except Exception as e:
+            print(f"取得進度摘要失敗: {e}")
+            return {}
+
+    def validate_all_case_progress(self) -> List[str]:
+        """
+        🔥 新增：驗證所有案件的進度一致性
+
+        Returns:
+            List[str]: 有問題的案件編號列表
+        """
+        problematic_cases = []
+
+        for case in self.cases:
+            if hasattr(case, 'validate_progress_consistency'):
+                if not case.validate_progress_consistency():
+                    problematic_cases.append(case.case_id)
+                    print(f"案件 {case.case_id} 進度資料不一致")
+
+                    # 自動修復
+                    if hasattr(case, 'repair_progress_data'):
+                        case.repair_progress_data()
+                        print(f"已自動修復案件 {case.case_id} 的進度資料")
+
+        if problematic_cases:
+            # 儲存修復後的資料
+            self.save_cases()
+            print(f"已修復 {len(problematic_cases)} 個案件的進度資料")
+
+        return problematic_cases
+
     def update_case_progress(self, case_id: str, new_progress: str, progress_date: str = None) -> bool:
         """
-        🔥 修改：漸進式更新案件進度和日期
+        🔥 修正：真正的漸進式更新案件進度
 
         Args:
             case_id: 案件編號
@@ -79,19 +184,20 @@ class CaseController:
             if not case:
                 raise ValueError(f"找不到案件編號: {case_id}")
 
-            # 🔥 記錄更新前的階段
-            old_stages = case.get_display_stages().copy()
+            # 記錄更新前的階段
+            old_stages = getattr(case, 'experienced_stages', []).copy()
+            old_progress = case.progress
 
-            # 更新進度（會自動更新completed_stages）
+            # 🔥 使用案件物件的 update_progress 方法（會自動處理漸進式邏輯）
             case.update_progress(new_progress, progress_date)
 
-            # 🔥 取得更新後的階段
-            new_stages = case.get_display_stages()
+            # 取得更新後的階段
+            new_stages = getattr(case, 'experienced_stages', [])
 
             # 儲存資料
             success = self.save_cases()
             if success:
-                # 🔥 新增：更新進度資料夾結構（漸進式）
+                # 🔥 更新進度資料夾結構（只建立新增的階段資料夾）
                 folder_success = self.folder_manager.update_progress_folders(case)
 
                 # 更新案件資訊Excel檔案
@@ -102,8 +208,14 @@ class CaseController:
                 if not folder_success:
                     print(f"警告：案件 {case_id} 進度資料夾更新失敗")
 
-                print(f"已更新案件 {case_id} 進度：{old_stages} → {new_stages}")
-                print(f"當前進度：{new_progress} ({progress_date or datetime.now().strftime('%Y-%m-%d')})")
+                print(f"已更新案件 {case_id} 進度：{old_progress} → {new_progress}")
+                print(f"階段變化：{old_stages} → {new_stages}")
+
+                # 🔥 新增：顯示新增的資料夾資訊
+                new_stages_added = [stage for stage in new_stages if stage not in old_stages]
+                if new_stages_added:
+                    print(f"新增進度資料夾：{new_stages_added}")
+
             return success
 
         except Exception as e:
@@ -250,11 +362,19 @@ class CaseController:
             return False
 
     def add_case(self, case: CaseData) -> bool:
-        """新增案件"""
+        """🔥 修正：新增案件（確保只建立當前進度的資料夾）"""
         try:
             # 檢查案件編號是否重複
             if any(c.case_id == case.case_id for c in self.cases):
                 raise ValueError(f"案件編號 {case.case_id} 已存在")
+
+            # 🔥 確保新案件的進度資料正確初始化
+            if not hasattr(case, 'experienced_stages') or not case.experienced_stages:
+                case.experienced_stages = [case.progress] if case.progress else []
+
+            if case.progress and case.progress_date:
+                if not hasattr(case, 'progress_history') or not case.progress_history:
+                    case.progress_history = {case.progress: case.progress_date}
 
             # 新增案件到列表
             self.cases.append(case)
@@ -266,14 +386,15 @@ class CaseController:
                 self.cases.remove(case)
                 return False
 
-            # 🔥 新增：建立案件資料夾結構
+            # 🔥 建立案件資料夾結構（只建立當前進度）
             folder_success = self.folder_manager.create_case_folder_structure(case)
             if not folder_success:
                 print(f"警告：案件 {case.case_id} 資料夾結構建立失敗")
                 # 注意：這裡不回傳False，因為案件資料已經成功儲存
-                # 只是資料夾建立失敗，可以後續手動處理
 
             print(f"已新增案件：{case.case_id}")
+            print(f"初始進度：{case.progress}")
+            print(f"初始階段：{case.experienced_stages}")
             return True
 
         except Exception as e:
@@ -281,22 +402,41 @@ class CaseController:
             return False
 
     def update_case(self, case_id: str, updated_case: CaseData) -> bool:
-        """更新案件"""
+        """🔥 修正：更新案件（處理進度變更和資料夾同步）"""
         try:
             for i, case in enumerate(self.cases):
                 if case.case_id == case_id:
+                    # 記錄更新前的階段
+                    old_stages = getattr(case, 'experienced_stages', []).copy()
+                    old_progress = case.progress
+
+                    # 更新案件資料
                     updated_case.updated_date = datetime.now()
                     self.cases[i] = updated_case
+
+                    # 取得更新後的階段
+                    new_stages = getattr(updated_case, 'experienced_stages', [])
+                    new_progress = updated_case.progress
 
                     # 儲存案件資料
                     success = self.save_cases()
                     if success:
-                        # 🔥 新增：更新案件資訊Excel檔案
+                        # 🔥 如果有新的進度階段，更新資料夾結構
+                        if old_progress != new_progress or old_stages != new_stages:
+                            folder_success = self.folder_manager.update_progress_folders(updated_case)
+                            if not folder_success:
+                                print(f"警告：案件 {case_id} 進度資料夾更新失敗")
+
+                        # 更新案件資訊Excel檔案
                         excel_success = self.folder_manager.update_case_info_excel(updated_case)
                         if not excel_success:
                             print(f"警告：案件 {case_id} Excel檔案更新失敗")
 
                         print(f"已更新案件：{case_id}")
+                        if old_progress != new_progress:
+                            print(f"進度變更：{old_progress} → {new_progress}")
+                            print(f"階段變化：{old_stages} → {new_stages}")
+
                     return success
 
             raise ValueError(f"找不到案件編號: {case_id}")
@@ -424,26 +564,20 @@ class CaseController:
             return f"C{datetime.now().year}0001"
 
     def get_statistics(self) -> dict:
-        """取得案件統計資訊（包含進度日期統計）"""
+        """取得案件統計資訊（使用 ProgressManager）"""
         try:
-            stats = {
-                'total_cases': len(self.cases),
-                'case_types': {},
-                'progress_stats': {},
+            from utils.progress_manager import ProgressManager
+
+            # 使用 ProgressManager 取得統計
+            stats = ProgressManager.get_progress_statistics(self.cases)
+
+            # 添加其他統計資訊
+            stats.update({
                 'lawyer_stats': {},
-                'legal_affairs_stats': {},
-                'progress_date_stats': {}  # 🔥 新增：進度日期統計
-            }
+                'legal_affairs_stats': {}
+            })
 
             for case in self.cases:
-                # 案件類型統計
-                case_type = case.case_type
-                stats['case_types'][case_type] = stats['case_types'].get(case_type, 0) + 1
-
-                # 進度統計
-                progress = case.progress
-                stats['progress_stats'][progress] = stats['progress_stats'].get(progress, 0) + 1
-
                 # 律師統計
                 lawyer = case.lawyer or '未指派'
                 stats['lawyer_stats'][lawyer] = stats['lawyer_stats'].get(lawyer, 0) + 1
@@ -452,15 +586,14 @@ class CaseController:
                 legal_affairs = case.legal_affairs or '未指派'
                 stats['legal_affairs_stats'][legal_affairs] = stats['legal_affairs_stats'].get(legal_affairs, 0) + 1
 
-                # 🔥 新增：進度日期統計（按月分組）
-                if case.progress_date:
-                    try:
-                        year_month = case.progress_date[:7]  # YYYY-MM
-                        stats['progress_date_stats'][year_month] = stats['progress_date_stats'].get(year_month, 0) + 1
-                    except:
-                        pass
-
             return stats
         except Exception as e:
             print(f"取得統計資訊失敗: {e}")
             return {}
+
+    def get_overdue_cases(self, days_threshold: int = 30) -> List[CaseData]:
+        """
+        🔥 新增：取得逾期案件（使用 ProgressManager）
+        """
+        from utils.progress_manager import ProgressManager
+        return ProgressManager.get_overdue_cases(self.cases, days_threshold)

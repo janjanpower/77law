@@ -67,7 +67,7 @@ class ProgressHistoryDialog(BaseWindow):
 
         # 案件基本資訊
         if self.case_data:
-            info_text = f"案件編號：{self.case_data.case_id} | 當事人：{self.case_data.client} | 案件類型：{self.case_data.case_type}"
+            info_text = f"案件編號：{self.case_data.case_number} | 當事人：{self.case_data.client} | 案件類型：{self.case_data.case_type}"
             tk.Label(
                 info_frame,
                 text=info_text,
@@ -340,7 +340,7 @@ class ProgressHistoryDialog(BaseWindow):
             self.case_data.progress_history = self.progress_history.copy()
             self.case_data.updated_date = datetime.now()
 
-            # 🔥 新增：重新計算已完成階段
+            # 🔥 新增：重新計算已完成階段和當前進度
             self._recalculate_completed_stages()
 
             # 呼叫更新回調
@@ -361,29 +361,53 @@ class ProgressHistoryDialog(BaseWindow):
         else:
             self.close()
 
+    def _recalculate_completed_stages(self):
+        """
+        🔥 修正：根據進度歷史重新計算經歷過的階段（真正漸進式）
+        """
+        if not self.case_data:
+            return
+
+        # 🔥 修正：重建經歷過的階段列表（按照實際添加的順序）
+        experienced_stages = []
+
+        # 如果有歷史記錄，根據日期排序來重建順序
+        if self.progress_history:
+            # 按日期排序階段
+            sorted_stages = sorted(
+                self.progress_history.items(),
+                key=lambda x: x[1]  # 按日期排序
+            )
+
+            experienced_stages = [stage for stage, date in sorted_stages]
+
+        # 確保當前進度在經歷階段中
+        current_progress = self.case_data.progress
+        if current_progress and current_progress not in experienced_stages:
+            experienced_stages.append(current_progress)
+
+        # 🔥 修正：更新經歷階段（不是completed_stages）
+        if hasattr(self.case_data, 'experienced_stages'):
+            self.case_data.experienced_stages = experienced_stages
+        else:
+            # 向後相容性
+            self.case_data.completed_stages = experienced_stages
+
+        # 找出最新的階段作為當前進度
+        if experienced_stages:
+            # 取最後一個階段作為當前進度
+            latest_stage = experienced_stages[-1]
+            latest_date = self.progress_history.get(latest_stage)
+
+            self.case_data.progress = latest_stage
+            if latest_date:
+                self.case_data.progress_date = latest_date
+
+        print(f"重新計算完成：經歷階段={experienced_stages}")
+        print(f"當前進度：{self.case_data.progress}")
+
     @staticmethod
     def show_dialog(parent, case_data: CaseData, on_update: Callable):
         """顯示進度歷史管理對話框"""
         dialog = ProgressHistoryDialog(parent, case_data, on_update)
         dialog.window.wait_window()
-
-    def _recalculate_completed_stages(self):
-        """
-        🔥 新增：根據進度歷史重新計算已完成階段
-        """
-        from config.settings import AppConfig
-
-        if not self.case_data:
-            return
-
-        # 取得該案件類型的完整進度順序
-        all_stages = AppConfig.get_progress_options(self.case_data.case_type)
-
-        # 找出歷史中存在的最高階段
-        max_stage_index = -1
-        for stage in self.progress_history.keys():
-            try:
-                stage_index = all_stages.index(stage)
-                max_stage_index = max(max_stage_index, stage_index)
-            except ValueError:
-                # 如果階段不在標

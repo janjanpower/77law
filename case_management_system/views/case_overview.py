@@ -468,7 +468,7 @@ class CaseOverviewWindow:
             self.progress_frame,
             bg=AppConfig.COLORS['window_bg']
         )
-        self.progress_display.pack(fill='both', expand=True, padx=20)
+        self.progress_display.pack(fill='both', expand=True, padx=10)
 
     def _on_tree_select(self, event):
         """樹狀圖選擇事件"""
@@ -502,7 +502,9 @@ class CaseOverviewWindow:
     # 修正 views/case_overview.py 中的 _display_case_progress 方法
 
     def _display_case_progress(self, case: 'CaseData'):
-        """🔥 修改：顯示案件進度 - 使用漸進式顯示邏輯"""
+        """🔥 修正：真正的漸進式進度顯示 - 只顯示實際經歷過的階段"""
+        from utils.progress_manager import ProgressManager
+
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
@@ -521,13 +523,13 @@ class CaseOverviewWindow:
             text=f"案號: {case_number}",
             bg=AppConfig.COLORS['window_bg'],
             fg='#4CAF50',  # 綠色突出顯示
-            font=AppConfig.FONTS['button'],  # 較大字體
+            font=AppConfig.FONTS['button'],
             wraplength=280
-        ).pack(anchor='w', pady=(0, 8))
+        ).pack(anchor='w', pady=(0, 4))
 
         # 第二排：案由、對造（並排顯示）
         row2_frame = tk.Frame(info_frame, bg=AppConfig.COLORS['window_bg'])
-        row2_frame.pack(fill='x', pady=(0, 5))
+        row2_frame.pack(fill='x', pady=(0, 4))
 
         case_reason = getattr(case, 'case_reason', None) or '未設定'
         opposing_party = getattr(case, 'opposing_party', None) or '未設定'
@@ -548,11 +550,11 @@ class CaseOverviewWindow:
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text'],
             wraplength=140
-        ).pack(side='left', anchor='nw', padx=(20, 0))
+        ).pack(side='left', anchor='nw', padx=(10, 0))
 
         # 第三排：負責法院、負責股別（並排顯示）
         row3_frame = tk.Frame(info_frame, bg=AppConfig.COLORS['window_bg'])
-        row3_frame.pack(fill='x', pady=(0, 8))
+        row3_frame.pack(fill='x', pady=(0, 4))
 
         court = getattr(case, 'court', None) or '未設定'
         division = getattr(case, 'division', None) or '未設定'
@@ -573,7 +575,7 @@ class CaseOverviewWindow:
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text'],
             wraplength=140
-        ).pack(side='left', anchor='nw', padx=(20, 0))
+        ).pack(side='left', anchor='nw', padx=(10, 0))
 
         # 分隔線
         tk.Label(
@@ -584,13 +586,8 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['text']
         ).pack(anchor='w', pady=(5, 5))
 
-        # 當前進度狀態和日期
-        current_stage = getattr(case, 'progress', '待處理')
-        current_date = getattr(case, 'progress_date', None)
-
-        progress_text = f"目前狀態: {current_stage}"
-        if current_date:
-            progress_text += f" ({current_date})"
+        # 🔥 修正：使用 ProgressManager 格式化進度顯示（不包含百分比）
+        progress_text = ProgressManager.format_progress_display(case, include_dates=True, include_percentage=False)
 
         tk.Label(
             info_frame,
@@ -600,58 +597,32 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['button']
         ).pack(anchor='w', pady=(0, 10))
 
-        # 🔥 修改：顯示漸進式進度歷史
+        # 🔥 修正：只顯示實際經歷過的階段
+        experienced_stages = ProgressManager.get_experienced_stages(case)
         progress_history = getattr(case, 'progress_history', {})
-        display_stages = case.get_display_stages() if hasattr(case, 'get_display_stages') else [current_stage]
 
-        if len(display_stages) > 1 or progress_history:
-            tk.Label(
-                info_frame,
-                text="進度歷史:",
-                bg=AppConfig.COLORS['window_bg'],
-                fg=AppConfig.COLORS['text_color'],
-                font=AppConfig.FONTS['button']
-            ).pack(anchor='w', pady=(5, 5))
-
-            # 🔥 修改：按照漸進式順序顯示歷史
-            for stage in display_stages:
-                stage_date = progress_history.get(stage, '未設定日期')
-                color = '#4CAF50' if stage == current_stage else '#B0B0B0'  # 當前階段用綠色
-
-                tk.Label(
-                    info_frame,
-                    text=f"  • {stage}: {stage_date}",
-                    bg=AppConfig.COLORS['window_bg'],
-                    fg=color,
-                    font=AppConfig.FONTS['text']
-                ).pack(anchor='w')
-
-        # 🔥 修改：右側進度條 - 漸進式顯示
+        # 🔥 修正：右側進度條 - 只顯示實際經歷過的階段
         progress_bar_frame = tk.Frame(
             self.progress_display,
             bg=AppConfig.COLORS['window_bg']
         )
         progress_bar_frame.pack(side='right', expand=True, fill='x', padx=20)
 
-        # 🔥 修改：根據案件類型取得完整進度階段，但只顯示已達到的部分
-        case_type = getattr(case, 'case_type', '')
-        all_stages = AppConfig.get_progress_options(case_type)
-        display_stages = case.get_display_stages() if hasattr(case, 'get_display_stages') else [current_stage]
+        # 🔥 關鍵修正：只顯示實際經歷過的階段
+        stages_to_show = experienced_stages
 
-        # 確定要顯示的階段範圍
-        if display_stages:
-            try:
-                # 找到最後一個階段在完整列表中的位置
-                last_stage = display_stages[-1]
-                last_index = all_stages.index(last_stage)
-                stages_to_show = all_stages[:last_index + 1]  # 只顯示到當前最新階段
-            except ValueError:
-                # 如果階段不在標準列表中，就直接使用 display_stages
-                stages_to_show = display_stages
-        else:
-            stages_to_show = [current_stage]
+        if not stages_to_show:
+            # 如果沒有經歷過的階段，顯示提示訊息
+            tk.Label(
+                progress_bar_frame,
+                text="尚無進度記錄",
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color'],
+                font=AppConfig.FONTS['text']
+            ).pack(expand=True)
+            return
 
-        # 🔥 修改：漸進式進度條顯示
+        # 進度條顯示
         for i, stage in enumerate(stages_to_show):
             # 每個階段的容器
             stage_container = tk.Frame(
@@ -667,22 +638,10 @@ class CaseOverviewWindow:
             )
             circle_frame.pack()
 
-            # 判斷階段狀態
-            if stage == current_stage:
-                bg_color = '#4CAF50'  # 綠色 - 當前階段
-                fg_color = 'white'
-            elif stage in display_stages:
-                stage_index_in_display = display_stages.index(stage)
-                current_index_in_display = display_stages.index(current_stage) if current_stage in display_stages else -1
-                if stage_index_in_display < current_index_in_display:
-                    bg_color = '#2196F3'  # 藍色 - 已完成
-                    fg_color = 'white'
-                else:
-                    bg_color = '#4CAF50'  # 綠色 - 當前階段
-                    fg_color = 'white'
-            else:
-                bg_color = '#E0E0E0'  # 灰色 - 未開始（這個情況在漸進式顯示中不應該出現）
-                fg_color = 'black'
+            # 🔥 修正：使用 ProgressManager 取得階段狀態和顏色
+            stage_status = ProgressManager.get_stage_status(case, stage)
+            bg_color = ProgressManager.get_stage_color(stage_status)
+            fg_color = 'white' if stage_status != 'pending' else 'black'
 
             # 進度圓圈
             circle = tk.Label(
@@ -702,7 +661,7 @@ class CaseOverviewWindow:
                 text=stage,
                 bg=AppConfig.COLORS['window_bg'],
                 fg=AppConfig.COLORS['text_color'],
-                font=('Microsoft JhengHei', 8)
+                font=('Microsoft JhengHei', 10)
             )
             stage_label.pack()
 
@@ -713,21 +672,30 @@ class CaseOverviewWindow:
                     circle_frame,
                     text=stage_date,
                     bg=AppConfig.COLORS['window_bg'],
-                    fg='#888888',  # 深灰色
-                    font=('Microsoft JhengHei', 7)
+                    fg="#FFFFFF",  # 深灰色
+                    font=('Microsoft JhengHei', 10)
                 )
                 date_label.pack()
 
-            # 🔥 修改：連接線（只在有下一個階段時顯示）
+            # 連接線（只在有下一個階段時顯示）
             if i < len(stages_to_show) - 1:
                 line_color = '#2196F3'  # 已完成的線用藍色
                 line_frame = tk.Frame(
                     progress_bar_frame,
                     bg=line_color,
-                    height=2,
-                    width=30
+                    height=1,
+                    width=25
                 )
-                line_frame.pack(side='left', pady=15)
+                line_frame.pack(side='left', pady=5)
+
+    def format_case_summary(self, case_data):
+        """格式化案件摘要（不包含百分比）"""
+        from utils.progress_manager import ProgressManager
+
+        summary = f"案件：{case_data.case_id} - {case_data.client}\n"
+        summary += ProgressManager.format_progress_display(case_data, include_dates=True, include_percentage=False)
+
+        return summary
 
     # 事件處理方法
     def _on_add_case(self):

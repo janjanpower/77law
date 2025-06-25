@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Optional, Callable
+from typing import List, Optional, Callable
 from config.settings import AppConfig
 from models.case_model import CaseData
 from views.base_window import BaseWindow
@@ -320,7 +320,7 @@ class CaseFormDialog(BaseWindow):
         return True
 
     def _on_save(self):
-        """儲存按鈕事件"""
+        """🔥 修正：儲存按鈕事件 - 支援真正的漸進式進度"""
         if not self._validate_form():
             return
 
@@ -359,18 +359,39 @@ class CaseFormDialog(BaseWindow):
                 progress_date=progress_date
             )
 
-            # 🔥 處理進度歷史記錄
-            if self.case_data and hasattr(self.case_data, 'progress_history'):
-                # 編輯模式：保留原有歷史記錄
-                case_data.progress_history = self.case_data.progress_history.copy()
-                case_data.created_date = self.case_data.created_date
-                # 更新當前進度的日期
-                if progress_date:
-                    case_data.progress_history[case_data.progress] = progress_date
-            else:
-                # 新增模式：建立新的歷史記錄
+            # 🔥 修正：處理進度歷史記錄
+            if self.mode == 'add':
+                # 🔥 新增模式：只包含當前選擇的進度
                 if progress_date:
                     case_data.progress_history = {case_data.progress: progress_date}
+                case_data.experienced_stages = [case_data.progress]
+
+                print(f"新增案件 - 初始階段: {case_data.progress}")
+                print(f"經歷階段: {case_data.experienced_stages}")
+
+            elif self.mode == 'edit' and self.case_data:
+                # 🔥 編輯模式：處理進度變更
+                old_progress = self.case_data.progress
+                new_progress = case_data.progress
+
+                # 保留原有的進度歷史和經歷階段
+                case_data.progress_history = self.case_data.progress_history.copy()
+                case_data.experienced_stages = getattr(self.case_data, 'experienced_stages', []).copy()
+                case_data.created_date = self.case_data.created_date
+
+                # 如果進度有變更，添加新階段
+                if old_progress != new_progress:
+                    # 使用 update_progress 方法來正確處理階段添加
+                    case_data.update_progress(new_progress, progress_date)
+
+                    print(f"編輯案件 - 進度變更: {old_progress} → {new_progress}")
+                    print(f"經歷階段: {case_data.experienced_stages}")
+                else:
+                    # 進度沒有變更，只更新日期
+                    if progress_date:
+                        case_data.progress_history[new_progress] = progress_date
+
+                    print(f"編輯案件 - 進度未變更，更新日期: {new_progress} ({progress_date})")
 
             self.result_data = case_data
 
@@ -394,6 +415,48 @@ class CaseFormDialog(BaseWindow):
         except Exception as e:
             print(f"建立案件資料時發生錯誤: {e}")
             messagebox.showerror("錯誤", f"資料處理失敗：{str(e)}")
+
+    # 🔥 新增：進度變更提示方法
+    def _show_progress_change_info(self, old_stages: List[str], new_stages: List[str]):
+        """
+        顯示進度變更資訊
+
+        Args:
+            old_stages: 原有階段列表
+            new_stages: 新的階段列表
+        """
+        if len(new_stages) > len(old_stages):
+            new_stage_names = [stage for stage in new_stages if stage not in old_stages]
+            if new_stage_names:
+                info_text = f"已新增進度階段：{', '.join(new_stage_names)}"
+                messagebox.showinfo("進度更新", info_text)
+
+    # 🔥 新增：驗證進度邏輯
+    def _validate_progress_logic(self, new_progress: str, case_type: str) -> bool:
+        """
+        驗證進度邏輯是否合理
+
+        Args:
+            new_progress: 新的進度
+            case_type: 案件類型
+
+        Returns:
+            bool: 是否合理
+        """
+        from config.settings import AppConfig
+
+        # 檢查進度是否在標準選項中
+        standard_options = AppConfig.get_progress_options(case_type)
+
+        if new_progress not in standard_options:
+            # 自訂進度，需要確認
+            result = messagebox.askyesno(
+                "自訂進度",
+                f"「{new_progress}」不在標準進度選項中，\n確定要使用此自訂進度嗎？"
+            )
+            return result
+
+        return True
 
     @staticmethod
     def show_add_dialog(parent, on_save: Callable) -> Optional[CaseData]:
