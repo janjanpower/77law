@@ -3,7 +3,7 @@ from .base_window import BaseWindow
 from .main_window import MainWindow
 from .case_overview import CaseOverviewWindow
 from .case_form import CaseFormDialog
-from .dialogs import ConfirmDialog, MessageDialog
+from .dialogs import ConfirmDialog, MessageDialog, UnifiedMessageDialog
 from .simple_progress_edit_dialog import SimpleProgressEditDialog
 from .upload_file_dialog import UploadFileDialog
 
@@ -14,6 +14,7 @@ __all__ = [
     'CaseFormDialog',
     'ConfirmDialog',
     'MessageDialog',
+    'UnifiedMessageDialog',
     'SimpleProgressEditDialog',
     'UploadFileDialog'
 ]

@@ -5,21 +5,21 @@ from typing import Dict, List, Optional
 import os
 from config.settings import AppConfig
 from models.case_model import CaseData
+from views.dialogs import UnifiedMessageDialog
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
-
     def __init__(self, parent=None, case_controller=None):
         self.parent = parent
         self.case_controller = case_controller
         self.visible_fields = AppConfig.OVERVIEW_FIELDS.copy()
         self.case_data: List[CaseData] = []
         self.drag_data = {"x": 0, "y": 0}
-        self.progress_widgets = {}  # 儲存進度小部件的參考
+        self.progress_widgets = {}
 
         # 新增：初始化搜尋相關變數
-        self.filtered_case_data = []  # 儲存過濾後的案件資料
-        self.search_var = tk.StringVar()  # 搜尋框變數
+        self.filtered_case_data = []
+        self.search_var = tk.StringVar()
 
         # 建立視窗
         self.window = tk.Toplevel(parent) if parent else tk.Tk()
@@ -31,13 +31,22 @@ class CaseOverviewWindow:
         if self.case_controller:
             self._load_cases()
 
+        # 確保視窗顯示
+        self.window.update()
+        self.window.deiconify()
+
     def _setup_window(self):
         """設定視窗基本屬性"""
         self.window.title(AppConfig.WINDOW_TITLES['overview'])
-        self.window.geometry("600x800")
+        self.window.geometry("800x600")  # 設定初始大小
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
         self.window.overrideredirect(True)
         self.window.minsize(1000, 700)
+
+        # 確保視窗可見
+        self.window.deiconify()
+        self.window.lift()
+
         self._center_window()
 
     def _center_window(self):
@@ -577,7 +586,7 @@ class CaseOverviewWindow:
 
         except Exception as e:
             print(f"載入案件資料失敗: {e}")
-            messagebox.showerror("錯誤", f"載入案件資料失敗：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window,  f"載入案件資料失敗：{str(e)}")
 
     def _refresh_tree_data(self):
         """重新整理樹狀圖資料（支援搜尋過濾）"""
@@ -940,11 +949,11 @@ class CaseOverviewWindow:
         # 檢查是否選擇了案件
         selection = self.tree.selection()
         if not selection:
-            messagebox.showwarning("提醒", "請先選擇一個案件")
+            UnifiedMessageDialog.show_warning(self.window,  "請先選擇一個案件")
             return
 
         if not self.case_controller:
-            messagebox.showwarning("提醒", "案件控制器未初始化")
+            UnifiedMessageDialog.show_warning(self.window,  "案件控制器未初始化")
             return
 
         try:
@@ -964,7 +973,7 @@ class CaseOverviewWindow:
                 # 檢查案件是否有資料夾
                 case_folder = self.case_controller.get_case_folder_path(case.case_id)
                 if not case_folder or not os.path.exists(case_folder):
-                    messagebox.showerror("錯誤", f"找不到案件 {case.client} 的資料夾，無法上傳檔案")
+                    UnifiedMessageDialog.show_error(self.window,  f"找不到案件 {case.client} 的資料夾，無法上傳檔案")
                     return
 
                 # 顯示上傳對話框
@@ -982,11 +991,11 @@ class CaseOverviewWindow:
                 )
             else:
                 print(f"無法取得有效的案件索引：tags={tags}")
-                messagebox.showerror("錯誤", "無法取得選中的案件資訊")
+                UnifiedMessageDialog.show_error(self.window,  "無法取得選中的案件資訊")
 
         except Exception as e:
             print(f"開啟上傳對話框失敗: {e}")
-            messagebox.showerror("錯誤", f"無法開啟上傳對話框：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window,  f"無法開啟上傳對話框：{str(e)}")
 
     def _on_stage_click(self, stage_name: str, case: CaseData):
         """階段點擊事件 - 開啟階段資料夾"""
@@ -996,11 +1005,11 @@ class CaseOverviewWindow:
                 os.startfile(stage_folder_path)  # Windows
                 print(f"開啟階段資料夾: {stage_folder_path}")
             else:
-                messagebox.showwarning("提醒", f"找不到階段「{stage_name}」的資料夾")
+                UnifiedMessageDialog.show_warning(self.window,  f"找不到階段「{stage_name}」的資料夾")
 
         except Exception as e:
             print(f"開啟階段資料夾失敗: {e}")
-            messagebox.showerror("錯誤", "無法開啟階段資料夾")
+            UnifiedMessageDialog.show_error(self.window,  "無法開啟階段資料夾")
 
     def _on_stage_right_click(self, event, stage_name: str, case: CaseData):
         """階段右鍵事件 - 顯示階段操作選單"""
@@ -1048,10 +1057,10 @@ class CaseOverviewWindow:
                     self._load_cases()  # 重新載入資料
                     # 重新選擇該案件以更新顯示
                     self._reselect_case(case.case_id)
-                    messagebox.showinfo("成功", f"已新增進度階段「{result['stage_name']}」")
+                    UnifiedMessageDialog.show_success(self.window,  f"已新增進度階段「{result['stage_name']}」")
                 return success
             except Exception as e:
-                messagebox.showerror("錯誤", f"新增階段失敗：{str(e)}")
+                UnifiedMessageDialog.show_error(self.window,  f"新增階段失敗：{str(e)}")
                 return False
 
         SimpleProgressEditDialog.show_add_dialog(self.window, case, save_new_stage)
@@ -1072,10 +1081,10 @@ class CaseOverviewWindow:
                 if success:
                     self._load_cases()
                     self._reselect_case(case.case_id)
-                    messagebox.showinfo("成功", f"已更新進度階段「{result['stage_name']}」")
+                    UnifiedMessageDialog.show_success(self.window,  f"已更新進度階段「{result['stage_name']}」")
                 return success
             except Exception as e:
-                messagebox.showerror("錯誤", f"更新階段失敗：{str(e)}")
+                UnifiedMessageDialog.show_error(self.window,  f"更新階段失敗：{str(e)}")
                 return False
 
         SimpleProgressEditDialog.show_edit_dialog(
@@ -1132,13 +1141,13 @@ class CaseOverviewWindow:
                     self._reselect_case(case.case_id)
 
                     if folder_exists:
-                        messagebox.showinfo("成功", f"已移除進度階段「{stage_name}」\n階段資料夾已同時刪除")
+                        UnifiedMessageDialog.show_success(self.window,  f"已移除進度階段「{stage_name}」\n階段資料夾已同時刪除")
                     else:
-                        messagebox.showinfo("成功", f"已移除進度階段「{stage_name}」")
+                        UnifiedMessageDialog.show_success(self.window,  f"已移除進度階段「{stage_name}」")
                 else:
-                    messagebox.showerror("錯誤", "無法移除當前進度階段")
+                    UnifiedMessageDialog.show_error(self.window,  "無法移除當前進度階段")
             except Exception as e:
-                messagebox.showerror("錯誤", f"移除階段失敗：{str(e)}")
+                UnifiedMessageDialog.show_error(self.window,  f"移除階段失敗：{str(e)}")
 
     def _reselect_case(self, case_id: str):
         """重新選擇指定的案件"""
@@ -1160,7 +1169,7 @@ class CaseOverviewWindow:
     def _on_add_case(self):
         """新增案件事件"""
         if not self.case_controller:
-            messagebox.showwarning("提醒", "案件控制器未初始化")
+            UnifiedMessageDialog.show_warning(self.window,  "案件控制器未初始化")
             return
 
         from views.case_form import CaseFormDialog
@@ -1189,32 +1198,32 @@ class CaseOverviewWindow:
                     else:
                         message = f"案件 {case_display_name} 新增成功！\n\n注意：資料夾結構建立失敗，請手動建立。"
 
-                    self.window.after(100, lambda: messagebox.showinfo("成功", message))
+                    self.window.after(100, lambda: UnifiedMessageDialog.show_success(self.window,  message))
                 else:
                     print(f"案件新增失敗")
-                    messagebox.showerror("錯誤", "案件新增失敗！")
+                    UnifiedMessageDialog.show_error(self.window,  "案件新增失敗！")
 
                 return success
 
             except Exception as e:
                 print(f"新增案件回調發生錯誤: {e}")
-                messagebox.showerror("錯誤", f"新增案件時發生錯誤：{str(e)}")
+                UnifiedMessageDialog.show_error(self.window,  f"新增案件時發生錯誤：{str(e)}")
                 return False
 
         try:
             CaseFormDialog.show_add_dialog(self.window, save_new_case)
         except Exception as e:
             print(f"開啟新增案件對話框失敗: {e}")
-            messagebox.showerror("錯誤", f"無法開啟新增案件對話框：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window,  f"無法開啟新增案件對話框：{str(e)}")
 
     def _on_export_excel(self):
         """匯出Excel事件"""
         if not self.case_controller:
-            messagebox.showwarning("提醒", "案件控制器未初始化")
+            UnifiedMessageDialog.show_warning(self.window,  "案件控制器未初始化")
             return
 
         if not self.case_data:
-            messagebox.showwarning("提醒", "沒有資料可以匯出")
+            UnifiedMessageDialog.show_warning(self.window,  "沒有資料可以匯出")
             return
 
         file_path = filedialog.asksaveasfilename(
@@ -1227,11 +1236,11 @@ class CaseOverviewWindow:
             try:
                 success = self.case_controller.export_to_excel(file_path)
                 if success:
-                    messagebox.showinfo("成功", f"資料已匯出到：\n{file_path}")
+                    UnifiedMessageDialog.show_success(self.window,  f"資料已匯出到：\n{file_path}")
                 else:
-                    messagebox.showerror("錯誤", "資料匯出失敗！")
+                    UnifiedMessageDialog.show_error(self.window,  "資料匯出失敗！")
             except Exception as e:
-                messagebox.showerror("錯誤", f"匯出過程發生錯誤：{str(e)}")
+                UnifiedMessageDialog.show_error(self.window,  f"匯出過程發生錯誤：{str(e)}")
 
     def _on_item_double_click(self, event):
         """項目雙擊事件 - 編輯案件"""
@@ -1261,9 +1270,9 @@ class CaseOverviewWindow:
 
                         # 使用統一的顯示格式
                         case_display_name = AppConfig.format_case_display_name(case_data)
-                        self.window.after(100, lambda: messagebox.showinfo("成功", f"案件 {case_display_name} 更新成功！"))
+                        self.window.after(100, lambda: UnifiedMessageDialog.show_success(self.window,  f"案件 {case_display_name} 更新成功！"))
                     else:
-                        messagebox.showerror("錯誤", "案件更新失敗！")
+                        UnifiedMessageDialog.show_error(self.window,  "案件更新失敗！")
                     return success
 
                 CaseFormDialog.show_edit_dialog(self.window, case, save_edited_case)
@@ -1272,7 +1281,7 @@ class CaseOverviewWindow:
 
         except (ValueError, IndexError) as e:
             print(f"取得案件索引失敗: {e}")
-            messagebox.showerror("錯誤", "無法開啟案件編輯")
+            UnifiedMessageDialog.show_error(self.window,  "無法開啟案件編輯")
 
     def _on_item_right_click(self, event):
         """項目右鍵事件 - 顯示案件操作選單"""
@@ -1343,19 +1352,19 @@ class CaseOverviewWindow:
                             self._load_cases()
 
                             if folder_info['exists']:
-                                messagebox.showinfo("成功", f"案件 {case_display_name} 已刪除\n案件資料夾已同時刪除")
+                                UnifiedMessageDialog.show_success(self.window,  f"案件 {case_display_name} 已刪除\n案件資料夾已同時刪除")
                             else:
-                                messagebox.showinfo("成功", f"案件 {case_display_name} 已刪除")
+                                UnifiedMessageDialog.show_success(self.window,  f"案件 {case_display_name} 已刪除")
                         else:
-                            messagebox.showerror("錯誤", "案件刪除失敗")
+                            UnifiedMessageDialog.show_error(self.window,  "案件刪除失敗")
                     except Exception as e:
-                        messagebox.showerror("錯誤", f"刪除案件失敗：{str(e)}")
+                        UnifiedMessageDialog.show_error(self.window,  f"刪除案件失敗：{str(e)}")
             else:
                 print(f"無法取得有效的案件索引：tags={tags}")
 
         except (ValueError, IndexError) as e:
             print(f"刪除案件失敗: {e}")
-            messagebox.showerror("錯誤", "無法刪除案件")
+            UnifiedMessageDialog.show_error(self.window,  "無法刪除案件")
 
     def _on_open_case_folder(self):
         """開啟案件資料夾"""
@@ -1380,13 +1389,13 @@ class CaseOverviewWindow:
                 if folder_path and os.path.exists(folder_path):
                     os.startfile(folder_path)  # Windows
                 else:
-                    messagebox.showwarning("提醒", "找不到案件資料夾")
+                    UnifiedMessageDialog.show_warning(self.window,  "找不到案件資料夾")
             else:
                 print(f"無法取得有效的案件索引：tags={tags}")
 
         except Exception as e:
             print(f"開啟資料夾失敗: {e}")
-            messagebox.showerror("錯誤", "無法開啟案件資料夾")
+            UnifiedMessageDialog.show_error(self.window,  "無法開啟案件資料夾")
 
     def add_case_data(self, case: CaseData):
         """新增案件資料"""
@@ -1404,12 +1413,24 @@ class CaseOverviewWindow:
 
     def close(self):
         """關閉視窗"""
+        # 先隱藏視窗
+        self.window.withdraw()
+
+        # 通知父視窗
+        if self.parent and hasattr(self.parent, 'master'):
+            # 如果父視窗是 Tkinter 視窗，直接調用其方法
+            parent_window = self.parent.master if hasattr(self.parent, 'master') else self.parent
+            if hasattr(parent_window, '_on_overview_close'):
+                parent_window._on_overview_close()
+
+        # 銷毀視窗
         self.window.destroy()
 
     def show(self):
         """顯示視窗"""
         self.window.deiconify()
-
+        self.window.lift()
+        self.window.focus_force()  # 強制取得焦點
     def hide(self):
         """隱藏視窗"""
         self.window.withdraw()

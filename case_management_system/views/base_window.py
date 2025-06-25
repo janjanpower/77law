@@ -8,13 +8,6 @@ class BaseWindow:
     def __init__(self, title="視窗", width=800, height=600, resizable=True, parent=None):
         """
         初始化基礎視窗
-
-        Args:
-            title: 視窗標題
-            width: 視窗寬度
-            height: 視窗高度
-            resizable: 是否可調整大小
-            parent: 父視窗
         """
         self.parent = parent
         self.window = tk.Toplevel(parent) if parent else tk.Tk()
@@ -22,11 +15,42 @@ class BaseWindow:
         self.width = width
         self.height = height
         self.resizable = resizable
+        self._grab_enabled = True  # 新增：控制是否啟用 grab
 
         self._setup_window()
         self._setup_styles()
         self._create_layout()
 
+        # 如果有父視窗，設定置頂
+        if parent:
+            self.window.transient(parent)
+            # 延遲設定grab_set，讓子控件有時間初始化
+            self.window.after(200, self._set_modal)
+
+    def _set_modal(self):
+        """設定模態對話框"""
+        try:
+            if self.window.winfo_exists() and self._grab_enabled:
+                self.window.grab_set()
+                self.window.lift()
+                self.window.focus_force()
+        except:
+            pass
+
+    def disable_grab_temporarily(self, duration=1000):
+        """暫時禁用 grab，用於特殊控件操作"""
+        try:
+            self.window.grab_release()
+            self._grab_enabled = False
+            # 在指定時間後重新啟用
+            self.window.after(duration, self._enable_grab)
+        except:
+            pass
+
+    def _enable_grab(self):
+        """重新啟用 grab"""
+        self._grab_enabled = True
+        self._set_modal()
     def _setup_window(self):
         """設定視窗基本屬性"""
         self.window.title(self.title)

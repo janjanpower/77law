@@ -6,7 +6,7 @@ from typing import Optional, Callable
 from config.settings import AppConfig
 from models.case_model import CaseData
 from views.base_window import BaseWindow
-
+from views.dialogs import UnifiedMessageDialog
 class UploadFileDialog(BaseWindow):
     """上傳資料對話框"""
 
@@ -29,6 +29,10 @@ class UploadFileDialog(BaseWindow):
 
         title = "上傳資料"
         super().__init__(title=title, width=500, height=475, resizable=False, parent=parent)
+        if parent:
+            self.window.lift()  # 確保視窗置頂
+            self.window.attributes('-topmost', True)  # 暫時設為最頂層
+            self.window.after(100, lambda: self.window.attributes('-topmost', False))  # 100ms後取消最頂層
 
     def _create_layout(self):
         """建立對話框佈局"""
@@ -220,7 +224,7 @@ class UploadFileDialog(BaseWindow):
                 self._update_file_list()
 
         except Exception as e:
-            messagebox.showerror("錯誤", f"選擇檔案時發生錯誤：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window, f"選擇檔案時發生錯誤：{str(e)}")
 
     def _clear_files(self):
         """清除已選擇的檔案"""
@@ -270,12 +274,12 @@ class UploadFileDialog(BaseWindow):
         try:
             # 驗證選擇
             if not self.selected_files:
-                messagebox.showwarning("提醒", "請先選擇要上傳的檔案")
+                UnifiedMessageDialog.show_success(self.window, "請先選擇要上傳的檔案")
                 return
 
             selected_folder = self.folder_var.get()
             if not selected_folder or selected_folder in ["錯誤：找不到案件資料夾", "無可用的子資料夾"]:
-                messagebox.showwarning("提醒", "請選擇目標資料夾")
+                UnifiedMessageDialog.show_success(self.window, "請選擇目標資料夾")
                 return
 
             # 建立目標路徑
@@ -283,7 +287,7 @@ class UploadFileDialog(BaseWindow):
             target_path = os.path.join(case_folder, selected_folder)
 
             if not os.path.exists(target_path):
-                messagebox.showerror("錯誤", f"目標資料夾不存在：{target_path}")
+                UnifiedMessageDialog.show_error(self.window, f"目標資料夾不存在：{target_path}")
                 return
 
             # 開始複製檔案
@@ -324,7 +328,7 @@ class UploadFileDialog(BaseWindow):
                     result_message += f"\n... 以及其他 {len(error_files) - 5} 個檔案"
 
             if success_count > 0:
-                messagebox.showinfo("上傳結果", result_message)
+                UnifiedMessageDialog.show_success(self.window, result_message)
 
                 # 呼叫完成回調
                 if self.on_upload_complete:
@@ -332,11 +336,11 @@ class UploadFileDialog(BaseWindow):
 
                 self.close()
             else:
-                messagebox.showerror("上傳失敗", "沒有檔案成功上傳。\n\n" + result_message)
+                UnifiedMessageDialog.show_error(self.window,"沒有檔案成功上傳。\n\n" + result_message)
 
         except Exception as e:
             print(f"上傳檔案時發生錯誤: {e}")
-            messagebox.showerror("錯誤", f"上傳過程發生錯誤：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window, f"上傳過程發生錯誤：{str(e)}")
 
     @staticmethod
     def show_upload_dialog(parent, case_data: CaseData, folder_manager, on_upload_complete: Callable = None):

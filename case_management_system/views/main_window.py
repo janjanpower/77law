@@ -3,6 +3,7 @@ from tkinter import filedialog, messagebox
 import os
 import json
 from config.settings import AppConfig
+from views.dialogs import UnifiedMessageDialog
 
 class MainWindow:
     """主應用程式視窗"""
@@ -241,7 +242,7 @@ class MainWindow:
             self.app_settings['data_folder'] = folder_path
             self._save_app_settings()
 
-            messagebox.showinfo("成功", f"已設定母資料夾：\n{folder_path}\n\n系統將在此資料夾內建立必要的子資料夾結構。")
+            UnifiedMessageDialog.show_success(self.window,  f"已設定母資料夾：\n{folder_path}\n\n系統將在此資料夾內建立必要的子資料夾結構。")
 
     def _create_data_structure(self, base_path):
         """建立資料夾結構"""
@@ -261,9 +262,10 @@ class MainWindow:
     def _on_confirm(self):
         """確認按鈕事件"""
         if hasattr(self, 'selected_folder') and self.selected_folder:
-            self._show_case_overview()
+            # 使用 after 方法延遲執行，確保視窗切換順序正確
+            self.window.after(50, self._show_case_overview)
         else:
-            messagebox.showwarning("提醒", "請先選擇母資料夾位置")
+            UnifiedMessageDialog.show_warning(self.window, "請先選擇母資料夾位置")
 
     def _show_case_overview(self):
         """顯示案件總覽"""
@@ -279,7 +281,21 @@ class MainWindow:
             # 建立總覽視窗
             self.case_overview = CaseOverviewWindow(self.window, case_controller)
 
+            # 綁定總覽視窗關閉事件
+            self.case_overview.window.protocol("WM_DELETE_WINDOW", self._on_overview_close)
+
+        # 先顯示總覽視窗
         self.case_overview.show()
+        # 再隱藏主視窗
+        self.window.after(100, self.hide)
+
+    def _on_overview_close(self):
+        """總覽視窗關閉事件"""
+        if self.case_overview:
+            self.case_overview.window.destroy()
+            self.case_overview = None
+        # 重新顯示主視窗
+        self.show()
 
     def close(self):
         """關閉視窗"""

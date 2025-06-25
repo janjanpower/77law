@@ -39,7 +39,10 @@ class SimpleProgressEditDialog(BaseWindow):
 
         title_text = "新增進度階段" if mode == 'add' else f"編輯進度階段 - {stage_name}"
         super().__init__(title=title_text, width=450, height=250, resizable=False, parent=parent)
-
+        if parent:
+            self.window.lift()  # 確保視窗置頂
+            self.window.attributes('-topmost', True)  # 暫時設為最頂層
+            self.window.after(100, lambda: self.window.attributes('-topmost', False))  # 100ms後取消最頂層
     def _create_layout(self):
         """建立對話框佈局"""
         super()._create_layout()
@@ -105,7 +108,7 @@ class SimpleProgressEditDialog(BaseWindow):
             )
             stage_label.grid(row=0, column=1, sticky='w', pady=10)
 
-        # 日期選擇
+         # 日期選擇
         tk.Label(
             edit_frame,
             text="階段日期：",
@@ -131,9 +134,13 @@ class SimpleProgressEditDialog(BaseWindow):
                 borderwidth=2,
                 date_pattern='yyyy-mm-dd',
                 locale='zh_TW',
-                font=AppConfig.FONTS['text']  # 使用統一字體
+                font=AppConfig.FONTS['text']
             )
             self.date_entry.set_date(initial_date)
+
+            # 重要：綁定 DateEntry 的特殊事件
+            self._setup_date_entry_events()
+
         else:
             # 回退方案
             self.date_entry = tk.Entry(
@@ -149,6 +156,163 @@ class SimpleProgressEditDialog(BaseWindow):
 
         # 按鈕區域
         self._create_buttons()
+
+    def _setup_date_entry_events(self):
+        """設定日期選擇器的事件處理"""
+        # 綁定按鈕點擊事件（展開日曆）
+        try:
+            # DateEntry 內部有一個按鈕用於展開日曆
+            for child in self.date_entry.winfo_children():
+                if isinstance(child, tk.Button):
+                    child.bind('<Button-1>', self._on_calendar_button_click, add='+')
+                    break
+        except:
+            pass
+
+        # 綁定其他相關事件
+        self.date_entry.bind('<Button-1>', self._on_date_entry_click, add='+')
+        self.date_entry.bind('<<DateEntrySelected>>', self._on_date_selected, add='+')
+        self.date_entry.bind('<<CalendarOpened>>', self._on_calendar_opened, add='+')
+        self.date_entry.bind('<<CalendarClosed>>', self._on_calendar_closed, add='+')
+
+    def _on_calendar_button_click(self, event):
+        """日曆按鈕點擊事件"""
+        # 完全釋放對話框的控制權，讓日曆優先
+        self._release_dialog_control()
+
+    def _release_dialog_control(self):
+        """釋放對話框控制權，讓日曆優先"""
+        try:
+            # 釋放 grab
+            self.window.grab_release()
+            # 取消置頂
+            self.window.attributes('-topmost', False)
+            # 降低對話框層級
+            self.window.lower()
+        except:
+            pass
+
+    def _ensure_calendar_topmost(self):
+        """確保日曆視窗置頂"""
+        try:
+            # 嘗試找到所有的 Toplevel 視窗
+            for widget in self.window.winfo_toplevel().winfo_children():
+                if isinstance(widget, tk.Toplevel):
+                    # 檢查是否是日曆視窗（通常會有特定的類名或標題）
+                    try:
+                        if 'calendar' in widget.winfo_class().lower() or 'date' in str(widget).lower():
+                            widget.lift()
+                            widget.attributes('-topmost', True)
+                            widget.focus_force()
+                            break
+                    except:
+                        continue
+
+            # 通用方法：將所有新的 Toplevel 視窗置頂
+            all_windows = self.window.tk.call('wm', 'stackorder', self.window._w)
+            if len(all_windows) > 1:
+                # 假設最新的視窗是日曆
+                latest_window = all_windows[-1]
+                try:
+                    latest_window_obj = self.window.nametowidget(latest_window)
+                    if latest_window_obj != self.window:
+                        latest_window_obj.lift()
+                        latest_window_obj.attributes('-topmost', True)
+                        latest_window_obj.focus_force()
+                except:
+                    pass
+
+        except Exception as e:
+            print(f"確保日曆置頂失敗: {e}")
+
+    def _on_date_entry_click(self, event):
+        """日期輸入框點擊事件"""
+        # 檢查是否點擊了下拉按鈕區域
+        widget_width = self.date_entry.winfo_width()
+        click_x = event.x
+
+        # 如果點擊在右側按鈕區域（通常是最右邊的20-30像素）
+        if click_x > widget_width - 30:
+            self._release_dialog_control()
+
+    def _on_calendar_opened(self, event):
+        """日曆展開事件"""
+        self._release_dialog_control()
+        # 嘗試找到日曆視窗並置頂
+        self.window.after(100, self._ensure_calendar_topmost)
+
+    def _on_calendar_closed(self, event):
+        """日曆關閉事件"""
+        # 日曆關閉後恢復對話框控制
+        self.window.after(100, self._restore_dialog_control)
+
+    def _on_date_selected(self, event):
+        """日期選擇完成事件"""
+        # 日期選擇完成後，恢復對話框控制
+        self.window.after(150, self._restore_dialog_control)
+
+    def _restore_dialog_control(self):
+        """恢復對話框控制權"""
+        try:
+            if self.window.winfo_exists():
+                # 重新設定對話框置頂
+                self.window.lift()
+                self.window.attributes('-topmost', True)
+                self.window.focus_force()
+                self.window.grab_set()
+
+                # 短暫置頂後取消，避免永遠置頂
+                self.window.after(200, lambda: self.window.attributes('-topmost', False))
+
+                # 確保日曆視窗已關閉
+                self._ensure_calendar_closed()
+        except:
+            pass
+
+    def _ensure_calendar_closed(self):
+        """確保日曆視窗已關閉"""
+        try:
+            # 移除任何殘留的置頂日曆視窗
+            all_windows = self.window.tk.call('wm', 'stackorder', self.window._w)
+            for window_name in all_windows:
+                try:
+                    window_obj = self.window.nametowidget(window_name)
+                    if (window_obj != self.window and
+                        isinstance(window_obj, tk.Toplevel) and
+                        ('calendar' in str(window_obj).lower() or 'date' in str(window_obj).lower())):
+                        window_obj.attributes('-topmost', False)
+                except:
+                    continue
+        except:
+            pass
+
+    def _restore_grab_after_calendar(self):
+        """日曆操作後恢復對話框控制"""
+        try:
+            if self.window.winfo_exists():
+                self.window.lift()
+                self.window.focus_force()
+                self.window.grab_set()
+                # 確保對話框在最前面
+                self.window.attributes('-topmost', True)
+                self.window.after(100, lambda: self.window.attributes('-topmost', False))
+        except:
+            pass
+
+    def _on_date_selected(self, event):
+        """日期選擇完成事件"""
+        # 重新設定焦點和grab
+        self.window.after(50, self._restore_grab)
+
+    def _restore_grab(self):
+        """恢復對話框的焦點控制"""
+        try:
+            self.window.lift()
+            self.window.focus_force()
+            self.window.grab_set()
+        except:
+            # 如果視窗已經關閉，忽略錯誤
+            pass
 
     def _create_buttons(self):
         """建立按鈕"""

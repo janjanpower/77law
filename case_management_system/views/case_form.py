@@ -5,6 +5,7 @@ from config.settings import AppConfig
 from models.case_model import CaseData
 from views.base_window import BaseWindow
 from datetime import datetime
+from views.dialogs import UnifiedMessageDialog
 
 class CaseFormDialog(BaseWindow):
     """案件表單對話框 - 用於新增和編輯案件"""
@@ -30,7 +31,12 @@ class CaseFormDialog(BaseWindow):
         self._init_form_data()
 
         title = AppConfig.WINDOW_TITLES['add_case'] if mode == 'add' else AppConfig.WINDOW_TITLES['edit_case']
-        super().__init__(title=title, width=600, height=600, resizable=False, parent=parent)
+        # 調整視窗高度，移除滾軸需要的空間
+        super().__init__(title=title, width=400, height=600, resizable=False, parent=parent)
+        if parent:
+            self.window.lift()  # 確保視窗置頂
+            self.window.attributes('-topmost', True)  # 暫時設為最頂層
+            self.window.after(100, lambda: self.window.attributes('-topmost', False))  # 100ms後取消最頂層
 
     def _init_form_data(self):
         """初始化表單資料"""
@@ -53,26 +59,18 @@ class CaseFormDialog(BaseWindow):
         self._create_form_content()
 
     def _create_form_content(self):
-        """建立表單內容"""
-        # 滾動區域
-        canvas = tk.Canvas(self.content_frame, bg=AppConfig.COLORS['window_bg'])
-        scrollbar = ttk.Scrollbar(self.content_frame, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas, bg=AppConfig.COLORS['window_bg'])
+        """建立表單內容 - 移除滾軸，使用置中佈局"""
+        # 主要內容框架 - 使用置中佈局
+        main_content_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        main_content_frame.pack(expand=True, fill='both')
 
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # 表單容器 - 置中顯示
+        form_container = tk.Frame(main_content_frame, bg=AppConfig.COLORS['window_bg'])
+        form_container.pack(expand=True, anchor='center')
 
         # 表單內容
-        form_frame = tk.Frame(scrollable_frame, bg=AppConfig.COLORS['window_bg'])
-        form_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        form_frame = tk.Frame(form_container, bg=AppConfig.COLORS['window_bg'])
+        form_frame.pack(padx=20, pady=20)
 
         # 基本資訊區塊
         self._create_basic_info_section(form_frame)
@@ -152,7 +150,7 @@ class CaseFormDialog(BaseWindow):
             width=12,
             anchor='w'
         )
-        label.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=5)
+        label.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=8)
 
         # 輸入控件
         if field_type == 'combobox':
@@ -161,7 +159,7 @@ class CaseFormDialog(BaseWindow):
                 textvariable=self.form_vars[var_name],
                 values=values or [],
                 state='readonly' if values else 'normal',
-                width=30,
+                width=15,
                 font=AppConfig.FONTS['text']  # 使用統一文字字體
             )
         else:
@@ -171,28 +169,28 @@ class CaseFormDialog(BaseWindow):
                 bg='white',
                 fg='black',
                 font=AppConfig.FONTS['text'],  # 使用統一文字字體
-                width=32
+                width=15
             )
 
-        widget.grid(row=row, column=1, sticky='ew', pady=5)
+        widget.grid(row=row, column=1, sticky='ew', pady=8)
         parent.grid_columnconfigure(1, weight=1)
 
     def _create_form_buttons(self, parent):
         """建立表單按鈕 - 使用統一的字體設定"""
         button_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
-        button_frame.pack(pady=20)
+        button_frame.pack(pady=30)
 
         save_btn = tk.Button(
             button_frame,
-            text='儲存',
+            text='新增',
             command=self._on_save,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
             font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
-            width=8,
-            height=1
+            width=10,
+            height=2
         )
-        save_btn.pack(side='left', padx=5)
+        save_btn.pack(side='left', padx=10)
 
         cancel_btn = tk.Button(
             button_frame,
@@ -201,19 +199,19 @@ class CaseFormDialog(BaseWindow):
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
             font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
-            width=8,
-            height=1
+            width=10,
+            height=2
         )
-        cancel_btn.pack(side='left', padx=5)
+        cancel_btn.pack(side='left', padx=10)
 
     def _validate_form(self) -> bool:
         """驗證表單資料"""
         if not self.form_vars['case_type'].get().strip():
-            messagebox.showerror("錯誤", "請選擇案件類型")
+            UnifiedMessageDialog.show_error("錯誤", "請選擇案件類型")
             return False
 
         if not self.form_vars['client'].get().strip():
-            messagebox.showerror("錯誤", "請輸入當事人")
+            UnifiedMessageDialog.show_error("錯誤", "請輸入當事人")
             return False
 
         return True
@@ -261,13 +259,13 @@ class CaseFormDialog(BaseWindow):
                         print(f"案件儲存失敗，保持對話框開啟")
                 except Exception as callback_error:
                     print(f"儲存回調函數發生錯誤: {callback_error}")
-                    messagebox.showerror("錯誤", f"儲存過程發生錯誤：{str(callback_error)}")
+                    UnifiedMessageDialog.show_error("錯誤", f"儲存過程發生錯誤：{str(callback_error)}")
             else:
                 self.close()
 
         except Exception as e:
             print(f"建立案件資料時發生錯誤: {e}")
-            messagebox.showerror("錯誤", f"資料處理失敗：{str(e)}")
+            UnifiedMessageDialog.show_error("錯誤", f"資料處理失敗：{str(e)}")
 
     @staticmethod
     def show_add_dialog(parent, on_save: Callable) -> Optional[CaseData]:
