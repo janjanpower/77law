@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from typing import Dict, List, Optional
+import os
 from config.settings import AppConfig
 from models.case_model import CaseData
 
@@ -10,10 +11,10 @@ class CaseOverviewWindow:
     def __init__(self, parent=None, case_controller=None):
         self.parent = parent
         self.case_controller = case_controller
-        # 🔥 修正：使用 OVERVIEW_FIELDS
         self.visible_fields = AppConfig.OVERVIEW_FIELDS.copy()
         self.case_data: List[CaseData] = []
         self.drag_data = {"x": 0, "y": 0}
+        self.progress_widgets = {}  # 儲存進度小部件的參考
 
         # 建立視窗
         self.window = tk.Toplevel(parent) if parent else tk.Tk()
@@ -27,18 +28,11 @@ class CaseOverviewWindow:
 
     def _setup_window(self):
         """設定視窗基本屬性"""
-        # 使用統一的標題
         self.window.title(AppConfig.WINDOW_TITLES['overview'])
-        self.window.geometry("1200x800")  # 增大總覽視窗尺寸
+        self.window.geometry("1200x800")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
-
-        # 移除系統標題欄
         self.window.overrideredirect(True)
-
-        # 設定最小尺寸
         self.window.minsize(1000, 700)
-
-        # 置中顯示
         self._center_window()
 
     def _center_window(self):
@@ -54,7 +48,6 @@ class CaseOverviewWindow:
         """設定 ttk 樣式"""
         self.style = ttk.Style()
 
-        # 按鈕樣式
         self.style.configure(
             'Custom.TButton',
             background=AppConfig.COLORS['button_bg'],
@@ -68,7 +61,6 @@ class CaseOverviewWindow:
             background=[('active', AppConfig.COLORS['button_hover'])]
         )
 
-        # 功能按鈕樣式
         self.style.configure(
             'Function.TButton',
             background=AppConfig.COLORS['button_bg'],
@@ -94,17 +86,15 @@ class CaseOverviewWindow:
         self.title_frame.pack(fill='x', pady=(0, 5))
         self.title_frame.pack_propagate(False)
 
-        # 標題標籤 - 使用統一字體和標題
         self.title_label = tk.Label(
             self.title_frame,
             text=AppConfig.WINDOW_TITLES['overview'],
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title']  # 使用統一字體設定
+            font=AppConfig.FONTS['title']
         )
         self.title_label.pack(side='left', padx=10)
 
-        # 關閉按鈕
         self.close_btn = tk.Button(
             self.title_frame,
             text="✕",
@@ -117,7 +107,6 @@ class CaseOverviewWindow:
         )
         self.close_btn.pack(side='right', padx=5)
 
-        # 設定拖曳功能
         self._setup_drag()
 
         # 內容區域
@@ -127,34 +116,9 @@ class CaseOverviewWindow:
         )
         self.content_frame.pack(fill='both', expand=True)
 
-        # 建立具體內容
         self._create_overview_layout()
         self._setup_treeview()
         self._create_field_controls()
-
-    def create_button(self, parent, text, command, style_type='Custom'):
-        """建立標準化按鈕"""
-        if style_type == 'Function':
-            return tk.Button(
-                parent,
-                text=text,
-                command=command,
-                bg=AppConfig.COLORS['button_bg'],
-                fg=AppConfig.COLORS['button_fg'],
-                font=AppConfig.FONTS['button'],  # 使用統一字體
-                width=15,
-                height=2
-            )
-        else:
-            return tk.Button(
-                parent,
-                text=text,
-                command=command,
-                bg=AppConfig.COLORS['button_bg'],
-                fg=AppConfig.COLORS['button_fg'],
-                font=AppConfig.FONTS['button'],  # 使用統一字體
-                width=10
-            )
 
     def _setup_drag(self):
         """設定視窗拖曳功能"""
@@ -167,7 +131,6 @@ class CaseOverviewWindow:
             y = self.window.winfo_y() + (event.y - self.drag_data["y"])
             self.window.geometry(f"+{x}+{y}")
 
-        # 綁定標題列拖曳事件
         self.title_frame.bind("<Button-1>", start_drag)
         self.title_frame.bind("<B1-Motion>", on_drag)
         self.title_label.bind("<Button-1>", start_drag)
@@ -184,7 +147,6 @@ class CaseOverviewWindow:
         self.toolbar_frame.pack(fill='x', pady=(0, 10))
         self.toolbar_frame.pack_propagate(False)
 
-        # 功能按鈕
         self._create_toolbar_buttons()
 
         # 樹狀圖區域
@@ -205,7 +167,6 @@ class CaseOverviewWindow:
 
     def _create_toolbar_buttons(self):
         """建立工具列按鈕"""
-        # 新增案件按鈕
         self.add_case_btn = self.create_button(
             self.toolbar_frame,
             '新增案件',
@@ -214,7 +175,6 @@ class CaseOverviewWindow:
         )
         self.add_case_btn.pack(side='left', padx=(10, 5))
 
-        # 上傳資料按鈕
         self.upload_btn = self.create_button(
             self.toolbar_frame,
             '匯入Excel',
@@ -223,7 +183,6 @@ class CaseOverviewWindow:
         )
         self.upload_btn.pack(side='left', padx=5)
 
-        # 匯出Excel按鈕
         self.export_btn = self.create_button(
             self.toolbar_frame,
             '匯出Excel',
@@ -232,7 +191,6 @@ class CaseOverviewWindow:
         )
         self.export_btn.pack(side='left', padx=5)
 
-        # 重新整理按鈕
         self.refresh_btn = self.create_button(
             self.toolbar_frame,
             '重新整理',
@@ -241,13 +199,35 @@ class CaseOverviewWindow:
         )
         self.refresh_btn.pack(side='right', padx=(5, 10))
 
+    def create_button(self, parent, text, command, style_type='Custom'):
+        """建立標準化按鈕"""
+        if style_type == 'Function':
+            return tk.Button(
+                parent,
+                text=text,
+                command=command,
+                bg=AppConfig.COLORS['button_bg'],
+                fg=AppConfig.COLORS['button_fg'],
+                font=AppConfig.FONTS['button'],
+                width=15,
+                height=2
+            )
+        else:
+            return tk.Button(
+                parent,
+                text=text,
+                command=command,
+                bg=AppConfig.COLORS['button_bg'],
+                fg=AppConfig.COLORS['button_fg'],
+                font=AppConfig.FONTS['button'],
+                width=10
+            )
+
     def _setup_treeview(self):
         """設定樹狀圖控件"""
-        # 建立樹狀圖容器
         tree_container = tk.Frame(self.tree_frame, bg=AppConfig.COLORS['window_bg'])
         tree_container.pack(fill='both', expand=True)
 
-        # 樹狀圖 - 移除滾動軸
         self.tree = ttk.Treeview(
             tree_container,
             selectmode='extended'
@@ -263,13 +243,8 @@ class CaseOverviewWindow:
         self.progress_frame.pack(side='bottom', fill='x', pady=2)
         self.progress_frame.pack_propagate(False)
 
-        # 設定樹狀圖樣式
         self._setup_tree_style()
-
-        # 設定欄位
         self._update_tree_columns()
-
-        # 設定進度可視化
         self._setup_progress_visualization()
 
         # 綁定事件
@@ -291,17 +266,15 @@ class CaseOverviewWindow:
             'Treeview.Heading',
             background=AppConfig.COLORS['title_bg'],
             foreground='black',
-            font=AppConfig.FONTS['button']  # 使用統一字體
+            font=AppConfig.FONTS['button']
         )
 
-        # 交替行顏色
         self.tree.tag_configure('oddrow', background='#F0F0F0')
         self.tree.tag_configure('evenrow', background='white')
 
     def _update_tree_columns(self):
         """更新樹狀圖欄位"""
         try:
-            # 🔥 修正：使用 OVERVIEW_FIELDS 而不是 CASE_FIELDS
             visible_fields = []
             for field_id, field_info in AppConfig.OVERVIEW_FIELDS.items():
                 if field_info['visible']:
@@ -309,11 +282,9 @@ class CaseOverviewWindow:
 
             print(f"更新欄位配置: 可見欄位 = {visible_fields}")
 
-            # 直接使用可見欄位作為樹狀圖欄位
             self.tree.configure(columns=visible_fields)
             self.tree['show'] = 'headings'
 
-            # 配置可見欄位
             for field_id in visible_fields:
                 field_info = AppConfig.OVERVIEW_FIELDS[field_id]
                 self.tree.heading(field_id, text=field_info['name'], anchor='center')
@@ -324,7 +295,6 @@ class CaseOverviewWindow:
 
     def _create_field_controls(self):
         """建立欄位顯示控制"""
-        # 控制標題
         control_title = tk.Label(
             self.field_control_frame,
             text="隱藏欄位：",
@@ -334,7 +304,6 @@ class CaseOverviewWindow:
         )
         control_title.pack(side='left', padx=(10, 10))
 
-        # 🔥 修正：使用 OVERVIEW_FIELDS
         self.field_vars = {}
         for field_id, field_info in AppConfig.OVERVIEW_FIELDS.items():
             var = tk.BooleanVar(value=not field_info['visible'])
@@ -356,15 +325,11 @@ class CaseOverviewWindow:
 
     def _toggle_field(self, field_id: str):
         """切換欄位顯示狀態"""
-        # 🔥 修正：使用 OVERVIEW_FIELDS
         is_hidden = self.field_vars[field_id].get()
-        # 修改實例變數而不是類別常數
         if not hasattr(self, 'visible_fields'):
             self.visible_fields = AppConfig.OVERVIEW_FIELDS.copy()
 
         self.visible_fields[field_id]['visible'] = not is_hidden
-
-        # 更新樹狀圖
         self._update_tree_columns()
         self._refresh_tree_data()
 
@@ -374,16 +339,13 @@ class CaseOverviewWindow:
             print("開始載入案件資料...")
 
             if self.case_controller:
-                # 🔥 修正：確保控制器資料是最新的
                 self.case_controller.load_cases()
                 self.case_data = self.case_controller.get_cases()
 
                 print(f"控制器中的案件數量: {len(self.case_controller.cases)}")
                 print(f"視圖中的案件數量: {len(self.case_data)}")
 
-                # 重新整理樹狀圖
                 self._refresh_tree_data()
-
                 print("案件資料載入完成")
             else:
                 print("案件控制器未初始化")
@@ -392,26 +354,21 @@ class CaseOverviewWindow:
             print(f"載入案件資料失敗: {e}")
             messagebox.showerror("錯誤", f"載入案件資料失敗：{str(e)}")
 
-
     def _refresh_tree_data(self):
         """重新整理樹狀圖資料"""
         try:
             print(f"開始重新整理樹狀圖，案件數量: {len(self.case_data)}")
 
-            # 清空現有資料
             for item in self.tree.get_children():
                 self.tree.delete(item)
 
-            # 取得當前樹狀圖的欄位配置
             current_columns = list(self.tree['columns'])
             print(f"當前樹狀圖欄位: {current_columns}")
 
-            # 重新載入資料
             for i, case in enumerate(self.case_data):
                 values = []
 
                 for col_id in current_columns:
-                    # 使用 getattr 安全存取屬性，避免 KeyError
                     if col_id == 'case_type':
                         values.append(getattr(case, 'case_type', ''))
                     elif col_id == 'client':
@@ -433,13 +390,9 @@ class CaseOverviewWindow:
                     else:
                         values.append('')
 
-                # 設定交替行顏色
                 tag = 'evenrow' if i % 2 == 0 else 'oddrow'
                 item_id = self.tree.insert('', 'end', values=values, tags=(tag,))
 
-                # 🔥 修正：使用 item 的 tag 來儲存索引，而不是設定隱藏欄位
-                # 原本錯誤的寫法：self.tree.set(item_id, '#0', str(i))
-                # 新的正確寫法：在 tags 中加入索引資訊
                 existing_tags = self.tree.item(item_id, 'tags')
                 new_tags = list(existing_tags) + [f'index_{i}']
                 self.tree.item(item_id, tags=new_tags)
@@ -453,7 +406,6 @@ class CaseOverviewWindow:
 
     def _setup_progress_visualization(self):
         """設定進度可視化區域"""
-        # 標題
         progress_title = tk.Label(
             self.progress_frame,
             text="案件追蹤進度",
@@ -463,7 +415,6 @@ class CaseOverviewWindow:
         )
         progress_title.pack(pady=5)
 
-        # 進度顯示區域
         self.progress_display = tk.Frame(
             self.progress_frame,
             bg=AppConfig.COLORS['window_bg']
@@ -477,11 +428,11 @@ class CaseOverviewWindow:
             # 清空進度顯示
             for widget in self.progress_display.winfo_children():
                 widget.destroy()
+            self.progress_widgets.clear()
 
             # 取得選中的案件
             item = selection[0]
             try:
-                # 🔥 修正：從 tags 中取得索引
                 tags = self.tree.item(item, 'tags')
                 case_index = None
 
@@ -499,15 +450,12 @@ class CaseOverviewWindow:
             except (ValueError, IndexError) as e:
                 print(f"取得案件索引失敗: {e}")
 
-    # 修正 views/case_overview.py 中的 _display_case_progress 方法
-
     def _display_case_progress(self, case: 'CaseData'):
-        """🔥 修正：真正的漸進式進度顯示 - 只顯示實際經歷過的階段"""
-        from utils.progress_manager import ProgressManager
-
+        """顯示案件進度 - 簡化版本，只顯示實際存在的階段"""
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
+        self.progress_widgets.clear()
 
         # 左側案件資訊
         info_frame = tk.Frame(
@@ -516,18 +464,18 @@ class CaseOverviewWindow:
         )
         info_frame.pack(side='left', padx=10, anchor='nw')
 
-        # 第一排：案號（單獨一排，突出顯示）
+        # 案件基本資訊顯示
         case_number = getattr(case, 'case_number', None) or '未設定'
         tk.Label(
             info_frame,
             text=f"案號: {case_number}",
             bg=AppConfig.COLORS['window_bg'],
-            fg='#4CAF50',  # 綠色突出顯示
+            fg='#4CAF50',
             font=AppConfig.FONTS['button'],
             wraplength=280
         ).pack(anchor='w', pady=(0, 4))
 
-        # 第二排：案由、對造（並排顯示）
+        # 其他資訊並排顯示
         row2_frame = tk.Frame(info_frame, bg=AppConfig.COLORS['window_bg'])
         row2_frame.pack(fill='x', pady=(0, 4))
 
@@ -552,7 +500,6 @@ class CaseOverviewWindow:
             wraplength=140
         ).pack(side='left', anchor='nw', padx=(10, 0))
 
-        # 第三排：負責法院、負責股別（並排顯示）
         row3_frame = tk.Frame(info_frame, bg=AppConfig.COLORS['window_bg'])
         row3_frame.pack(fill='x', pady=(0, 4))
 
@@ -586,33 +533,42 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['text']
         ).pack(anchor='w', pady=(5, 5))
 
-        # 🔥 修正：使用 ProgressManager 格式化進度顯示（不包含百分比）
-        progress_text = ProgressManager.format_progress_display(case, include_dates=True, include_percentage=False)
+        # 當前進度顯示
+        current_progress = f"目前狀態: {case.progress}"
+        if case.progress_date:
+            current_progress += f" ({case.progress_date})"
 
         tk.Label(
             info_frame,
-            text=progress_text,
+            text=current_progress,
             bg=AppConfig.COLORS['window_bg'],
-            fg='#FF9800',  # 橙色
+            fg='#FF9800',
             font=AppConfig.FONTS['button']
-        ).pack(anchor='w', pady=(0, 10))
+        ).pack(anchor='w', pady=(0, 5))
 
-        # 🔥 修正：只顯示實際經歷過的階段
-        experienced_stages = ProgressManager.get_experienced_stages(case)
-        progress_history = getattr(case, 'progress_history', {})
+        # 新增階段按鈕
+        add_stage_btn = tk.Button(
+            info_frame,
+            text='新增進度階段',
+            command=lambda: self._on_add_progress_stage(case),
+            bg='#4CAF50',
+            fg='white',
+            font=AppConfig.FONTS['text'],
+            width=20
+        )
+        add_stage_btn.pack(anchor='w', pady=5)
 
-        # 🔥 修正：右側進度條 - 只顯示實際經歷過的階段
+        # 右側進度階段顯示
         progress_bar_frame = tk.Frame(
             self.progress_display,
             bg=AppConfig.COLORS['window_bg']
         )
         progress_bar_frame.pack(side='right', expand=True, fill='x', padx=20)
 
-        # 🔥 關鍵修正：只顯示實際經歷過的階段
-        stages_to_show = experienced_stages
+        # 只顯示實際存在的進度階段
+        stages_to_show = list(case.progress_stages.keys()) if case.progress_stages else []
 
         if not stages_to_show:
-            # 如果沒有經歷過的階段，顯示提示訊息
             tk.Label(
                 progress_bar_frame,
                 text="尚無進度記錄",
@@ -622,8 +578,10 @@ class CaseOverviewWindow:
             ).pack(expand=True)
             return
 
-        # 進度條顯示
-        for i, stage in enumerate(stages_to_show):
+        # 按日期排序階段
+        sorted_stages = sorted(case.progress_stages.items(), key=lambda x: x[1])
+
+        for i, (stage, date) in enumerate(sorted_stages):
             # 每個階段的容器
             stage_container = tk.Frame(
                 progress_bar_frame,
@@ -631,23 +589,21 @@ class CaseOverviewWindow:
             )
             stage_container.pack(side='left', expand=True)
 
-            # 圓圈框架
+            # 階段方框
             circle_frame = tk.Frame(
                 stage_container,
                 bg=AppConfig.COLORS['window_bg']
             )
             circle_frame.pack()
 
-            # 🔥 修正：使用 ProgressManager 取得階段狀態和顏色
-            stage_status = ProgressManager.get_stage_status(case, stage)
-            bg_color = ProgressManager.get_stage_color(stage_status)
-            fg_color = 'white' if stage_status != 'pending' else 'black'
+            # 判斷階段狀態
+            is_current = (stage == case.progress)
+            bg_color = '#4CAF50' if is_current else '#2196F3'  # 當前階段用綠色，其他用藍色
+            fg_color = 'white'
 
-            # 🔥 修改：進度方框 - 顯示審理狀態而非數字
-            # 計算合適的字體大小和方框尺寸
-            stage_text = stage[:4] if len(stage) > 4 else stage  # 限制最多4個字
+            # 階段文字顯示
+            stage_text = stage[:4] if len(stage) > 4 else stage
 
-            # 根據文字長度調整方框尺寸
             if len(stage_text) <= 2:
                 box_width = 6
                 font_size = 10
@@ -658,62 +614,182 @@ class CaseOverviewWindow:
                 box_width = 10
                 font_size = 10
 
-            circle = tk.Label(
+            # 建立可點擊的階段標籤
+            stage_label = tk.Label(
                 circle_frame,
-                text=stage_text,  # 🔥 修改：顯示審理狀態文字
+                text=stage_text,
                 bg=bg_color,
                 fg=fg_color,
-                font=('Microsoft JhengHei', font_size, 'bold'),  # 🔥 修改：調整字體
-                width=box_width,  # 🔥 修改：根據文字長度調整寬度
-                height=2,  # 🔥 修改：增加高度以容納中文字
-                relief='solid', # 🔥 新增：添加邊框效果
-                borderwidth=0
+                font=('Microsoft JhengHei', font_size, 'bold'),
+                width=box_width,
+                height=2,
+                relief='solid',
+                borderwidth=0,
+                cursor='hand2'  # 滑鼠指標變為手型
             )
-            circle.pack(pady=2)
+            stage_label.pack(pady=2)
 
-            # # 階段名稱
-            # stage_label = tk.Label(
-            #     circle_frame,
-            #     text=stage,
-            #     bg=AppConfig.COLORS['window_bg'],
-            #     fg=AppConfig.COLORS['text_color'],
-            #     font=('Microsoft JhengHei', 10)
-            # )
-            # stage_label.pack()
+            # 綁定點擊和右鍵事件
+            stage_label.bind('<Button-1>', lambda e, s=stage, c=case: self._on_stage_click(s, c))
+            stage_label.bind('<Button-3>', lambda e, s=stage, c=case: self._on_stage_right_click(e, s, c))
 
-            # 顯示該階段的日期（如果有的話）
-            stage_date = progress_history.get(stage)
-            if stage_date:
+            # 儲存小部件參考
+            self.progress_widgets[stage] = stage_label
+
+            # 顯示日期
+            if date:
                 date_label = tk.Label(
                     circle_frame,
-                    text=stage_date,
+                    text=date,
                     bg=AppConfig.COLORS['window_bg'],
-                    fg="#FFFFFF",  # 深灰色
+                    fg="#FFFFFF",
                     font=('Microsoft JhengHei', 10)
                 )
-                date_label.pack(pady=(3,0))
+                date_label.pack(pady=(3, 0))
 
-            # 連接線（只在有下一個階段時顯示）
-            if i < len(stages_to_show) - 1:
-                line_color = '#2196F3'  # 已完成的線用藍色
+            # 連接線
+            if i < len(sorted_stages) - 1:
                 line_frame = tk.Frame(
                     progress_bar_frame,
-                    bg=line_color,
+                    bg='#2196F3',
                     height=1,
                     width=25
                 )
                 line_frame.pack(side='left', pady=5)
 
-    def format_case_summary(self, case_data):
-        """格式化案件摘要（不包含百分比）"""
-        from utils.progress_manager import ProgressManager
+    def _on_stage_click(self, stage_name: str, case: CaseData):
+        """階段點擊事件 - 開啟階段資料夾"""
+        try:
+            stage_folder_path = self.case_controller.get_case_stage_folder_path(case.case_id, stage_name)
+            if stage_folder_path and os.path.exists(stage_folder_path):
+                os.startfile(stage_folder_path)  # Windows
+                print(f"開啟階段資料夾: {stage_folder_path}")
+            else:
+                messagebox.showwarning("提醒", f"找不到階段「{stage_name}」的資料夾")
 
-        summary = f"案件：{case_data.case_id} - {case_data.client}\n"
-        summary += ProgressManager.format_progress_display(case_data, include_dates=True, include_percentage=False)
+        except Exception as e:
+            print(f"開啟階段資料夾失敗: {e}")
+            messagebox.showerror("錯誤", "無法開啟階段資料夾")
 
-        return summary
+    def _on_stage_right_click(self, event, stage_name: str, case: CaseData):
+        """階段右鍵事件 - 顯示階段操作選單"""
+        try:
+            # 建立右鍵選單
+            context_menu = tk.Menu(self.window, tearoff=0)
+            context_menu.add_command(
+                label="編輯階段",
+                command=lambda: self._on_edit_progress_stage(case, stage_name)
+            )
 
-    # 事件處理方法
+            # 只有非當前階段才能刪除
+            if stage_name != case.progress:
+                context_menu.add_command(
+                    label="移除階段",
+                    command=lambda: self._on_remove_progress_stage(case, stage_name)
+                )
+
+            context_menu.add_separator()
+            context_menu.add_command(
+                label="開啟資料夾",
+                command=lambda: self._on_stage_click(stage_name, case)
+            )
+
+            # 顯示選單
+            try:
+                context_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                context_menu.grab_release()
+
+        except Exception as e:
+            print(f"顯示階段右鍵選單失敗: {e}")
+
+    def _on_add_progress_stage(self, case: CaseData):
+        """新增進度階段"""
+        from views.simple_progress_edit_dialog import SimpleProgressEditDialog
+
+        def save_new_stage(result):
+            try:
+                success = self.case_controller.add_case_progress_stage(
+                    case.case_id,
+                    result['stage_name'],
+                    result['stage_date']
+                )
+                if success:
+                    self._load_cases()  # 重新載入資料
+                    # 重新選擇該案件以更新顯示
+                    self._reselect_case(case.case_id)
+                    messagebox.showinfo("成功", f"已新增進度階段「{result['stage_name']}」")
+                return success
+            except Exception as e:
+                messagebox.showerror("錯誤", f"新增階段失敗：{str(e)}")
+                return False
+
+        SimpleProgressEditDialog.show_add_dialog(self.window, case, save_new_stage)
+
+    def _on_edit_progress_stage(self, case: CaseData, stage_name: str):
+        """編輯進度階段"""
+        from views.simple_progress_edit_dialog import SimpleProgressEditDialog
+
+        stage_date = case.progress_stages.get(stage_name, '')
+
+        def save_edited_stage(result):
+            try:
+                success = self.case_controller.update_case_progress_stage(
+                    case.case_id,
+                    result['stage_name'],
+                    result['stage_date']
+                )
+                if success:
+                    self._load_cases()
+                    self._reselect_case(case.case_id)
+                    messagebox.showinfo("成功", f"已更新進度階段「{result['stage_name']}」")
+                return success
+            except Exception as e:
+                messagebox.showerror("錯誤", f"更新階段失敗：{str(e)}")
+                return False
+
+        SimpleProgressEditDialog.show_edit_dialog(
+            self.window, case, stage_name, stage_date, save_edited_stage
+        )
+
+    def _on_remove_progress_stage(self, case: CaseData, stage_name: str):
+        """移除進度階段"""
+        from views.dialogs import ConfirmDialog
+
+        if ConfirmDialog.ask(
+            self.window,
+            "確認移除",
+            f"確定要移除階段「{stage_name}」嗎？\n此操作將同時移除該階段的日期記錄。"
+        ):
+            try:
+                success = self.case_controller.remove_case_progress_stage(case.case_id, stage_name)
+                if success:
+                    self._load_cases()
+                    self._reselect_case(case.case_id)
+                    messagebox.showinfo("成功", f"已移除進度階段「{stage_name}」")
+                else:
+                    messagebox.showerror("錯誤", "無法移除當前進度階段")
+            except Exception as e:
+                messagebox.showerror("錯誤", f"移除階段失敗：{str(e)}")
+
+    def _reselect_case(self, case_id: str):
+        """重新選擇指定的案件"""
+        try:
+            for i, case in enumerate(self.case_data):
+                if case.case_id == case_id:
+                    # 找到對應的樹狀圖項目
+                    for item in self.tree.get_children():
+                        tags = self.tree.item(item, 'tags')
+                        for tag in tags:
+                            if tag == f'index_{i}':
+                                self.tree.selection_set(item)
+                                self.tree.focus(item)
+                                return
+                    break
+        except Exception as e:
+            print(f"重新選擇案件失敗: {e}")
+
+    # 以下是原有的事件處理方法，保持不變
     def _on_add_case(self):
         """新增案件事件"""
         if not self.case_controller:
@@ -723,37 +799,26 @@ class CaseOverviewWindow:
         from views.case_form import CaseFormDialog
 
         def save_new_case(case_data, mode):
-            """新增案件的回調函數"""
             try:
                 print(f"開始新增案件: {case_data.client}")
-
-                # 產生新的案件編號
                 case_data.case_id = self.case_controller.generate_case_id()
                 print(f"產生案件編號: {case_data.case_id}")
 
-                # 儲存案件並建立資料夾結構
                 success = self.case_controller.add_case(case_data)
 
                 if success:
                     print(f"案件新增成功，開始重新載入資料")
-
-                    # 🔥 修正：強制重新載入案件資料
-                    self.case_controller.load_cases()  # 重新載入控制器資料
-                    self._load_cases()  # 重新載入視圖資料
-
+                    self.case_controller.load_cases()
+                    self._load_cases()
                     print(f"資料重新載入完成，當前案件數量: {len(self.case_data)}")
 
-                    # 取得建立的資料夾路徑
                     folder_path = self.case_controller.get_case_folder_path(case_data.case_id)
-
                     if folder_path:
                         message = f"案件 {case_data.case_id} 新增成功！\n\n已建立資料夾結構：\n{folder_path}"
                     else:
                         message = f"案件 {case_data.case_id} 新增成功！\n\n注意：資料夾結構建立失敗，請手動建立。"
 
-                    # 🔥 修正：使用 after 方法延遲顯示訊息，確保對話框先關閉
                     self.window.after(100, lambda: messagebox.showinfo("成功", message))
-
                 else:
                     print(f"案件新增失敗")
                     messagebox.showerror("錯誤", "案件新增失敗！")
@@ -765,7 +830,6 @@ class CaseOverviewWindow:
                 messagebox.showerror("錯誤", f"新增案件時發生錯誤：{str(e)}")
                 return False
 
-        # 顯示新增案件對話框
         try:
             CaseFormDialog.show_add_dialog(self.window, save_new_case)
         except Exception as e:
@@ -838,8 +902,6 @@ class CaseOverviewWindow:
 
         try:
             item = selection[0]
-
-            # 🔥 修正：從 tags 中取得索引
             tags = self.tree.item(item, 'tags')
             case_index = None
 
@@ -857,7 +919,6 @@ class CaseOverviewWindow:
                     success = self.case_controller.update_case(case.case_id, case_data)
                     if success:
                         self._load_cases()
-                        # 使用 after 延遲顯示訊息
                         self.window.after(100, lambda: messagebox.showinfo("成功", f"案件 {case_data.case_id} 更新成功！"))
                     else:
                         messagebox.showerror("錯誤", "案件更新失敗！")
@@ -873,64 +934,22 @@ class CaseOverviewWindow:
 
     def _on_item_right_click(self, event):
         """項目右鍵事件 - 顯示案件操作選單"""
-        # 選取點擊的項目
         item = self.tree.identify_row(event.y)
         if item:
             self.tree.selection_set(item)
 
-            # 建立右鍵選單
             context_menu = tk.Menu(self.window, tearoff=0)
             context_menu.add_command(label="編輯案件", command=lambda: self._on_item_double_click(None))
-            context_menu.add_command(label="進度歷史管理", command=self._on_manage_progress_history)  # 🔥 新增
             context_menu.add_separator()
             context_menu.add_command(label="刪除案件", command=self._on_delete_case)
             context_menu.add_separator()
             context_menu.add_command(label="開啟案件資料夾", command=self._on_open_case_folder)
             context_menu.add_command(label="更新Excel檔案", command=self._on_update_case_excel)
 
-            # 顯示選單
             try:
                 context_menu.tk_popup(event.x_root, event.y_root)
             finally:
                 context_menu.grab_release()
-
-    def _on_manage_progress_history(self):
-        """🔥 新增：管理進度歷史"""
-        selection = self.tree.selection()
-        if not selection:
-            return
-
-        try:
-            item = selection[0]
-
-            # 從 tags 中取得索引
-            tags = self.tree.item(item, 'tags')
-            case_index = None
-
-            for tag in tags:
-                if tag.startswith('index_'):
-                    case_index = int(tag.replace('index_', ''))
-                    break
-
-            if case_index is not None and case_index < len(self.case_data):
-                case = self.case_data[case_index]
-
-                from views.progress_history_dialog import ProgressHistoryDialog
-
-                def update_case_progress_history(case_data):
-                    """更新案件進度歷史的回調函數"""
-                    success = self.case_controller.update_case(case.case_id, case_data)
-                    if success:
-                        self._load_cases()  # 重新載入資料
-                    return success
-
-                ProgressHistoryDialog.show_dialog(self.window, case, update_case_progress_history)
-            else:
-                print(f"無法取得有效的案件索引：tags={tags}")
-
-        except (ValueError, IndexError) as e:
-            print(f"管理進度歷史失敗: {e}")
-            messagebox.showerror("錯誤", "無法開啟進度歷史管理")
 
     def _on_delete_case(self):
         """刪除案件"""
@@ -940,8 +959,6 @@ class CaseOverviewWindow:
 
         try:
             item = selection[0]
-
-            # 🔥 修正：從 tags 中取得索引
             tags = self.tree.item(item, 'tags')
             case_index = None
 
@@ -976,8 +993,6 @@ class CaseOverviewWindow:
 
         try:
             item = selection[0]
-
-            # 🔥 修正：從 tags 中取得索引
             tags = self.tree.item(item, 'tags')
             case_index = None
 
@@ -1009,8 +1024,6 @@ class CaseOverviewWindow:
 
         try:
             item = selection[0]
-
-            # 🔥 修正：從 tags 中取得索引
             tags = self.tree.item(item, 'tags')
             case_index = None
 
@@ -1033,7 +1046,6 @@ class CaseOverviewWindow:
         except Exception as e:
             print(f"更新Excel檔案失敗: {e}")
             messagebox.showerror("錯誤", "無法更新Excel檔案")
-
 
     def add_case_data(self, case: CaseData):
         """新增案件資料"""

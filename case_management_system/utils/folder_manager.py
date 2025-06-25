@@ -8,54 +8,40 @@ class FolderManager:
     """案件資料夾管理工具"""
 
     def __init__(self, base_data_folder: str):
-        """
-        初始化資料夾管理器
-
-        Args:
-            base_data_folder: 基礎資料夾路徑
-        """
+        """初始化資料夾管理器"""
         self.base_data_folder = base_data_folder
 
     def create_case_folder_structure(self, case_data: CaseData) -> bool:
-        """
-        🔥 修正：為新增的案件建立完整的資料夾結構（只建立當前進度）
-
-        Args:
-            case_data: 案件資料
-
-        Returns:
-            bool: 是否成功建立
-        """
+        """為案件建立完整的資料夾結構"""
         try:
-            # 1. 取得案件類型對應的資料夾
+            # 取得案件類型對應的資料夾
             case_type_folder = self._get_case_type_folder(case_data.case_type)
             if not case_type_folder:
                 print(f"未知的案件類型: {case_data.case_type}")
                 return False
 
-            # 2. 建立當事人資料夾
+            # 建立當事人資料夾
             client_folder = self._create_client_folder(case_type_folder, case_data.client)
             if not client_folder:
                 return False
 
-            # 3. 建立子資料夾結構
+            # 建立子資料夾結構
             sub_folders = self._create_sub_folders(client_folder)
             if not sub_folders:
                 return False
 
-            # 4. 🔥 修正：只建立當前進度資料夾（漸進式）
-            progress_folder_success = self._create_current_progress_folder(
-                sub_folders['進度追蹤'], case_data.progress
+            # 建立現有的進度階段資料夾
+            progress_folder_success = self._create_progress_folders(
+                sub_folders['進度追蹤'], case_data.progress_stages
             )
 
-            # 5. 建立案件資訊Excel檔案
+            # 建立案件資訊Excel檔案
             case_info_folder = sub_folders['案件資訊']
             excel_success = self._create_case_info_excel(case_info_folder, case_data)
 
             if excel_success and progress_folder_success:
                 print(f"成功為案件 {case_data.case_id} 建立完整資料夾結構")
                 print(f"路徑: {client_folder}")
-                print(f"初始進度資料夾: {case_data.progress}")
                 return True
             else:
                 print(f"資料夾建立成功，但部分功能建立失敗")
@@ -65,139 +51,39 @@ class FolderManager:
             print(f"建立案件資料夾結構失敗: {e}")
             return False
 
-    def _create_current_progress_folder(self, progress_base_folder: str, current_progress: str) -> bool:
-        """
-        🔥 新增：只建立當前進度資料夾
-
-        Args:
-            progress_base_folder: 進度追蹤基礎資料夾路徑
-            current_progress: 當前進度
-
-        Returns:
-            bool: 是否成功建立
-        """
+    def _create_progress_folders(self, progress_base_folder: str, progress_stages: dict) -> bool:
+        """建立進度階段資料夾"""
         try:
-            if current_progress:
-                progress_folder_path = os.path.join(progress_base_folder, current_progress)
-
-                if not os.path.exists(progress_folder_path):
-                    os.makedirs(progress_folder_path)
-                    print(f"建立當前進度資料夾: {progress_folder_path}")
-                else:
-                    print(f"當前進度資料夾已存在: {progress_folder_path}")
-
-            return True
-
-        except Exception as e:
-            print(f"建立當前進度資料夾失敗: {e}")
-            return False
-
-    def update_progress_folders(self, case_data: CaseData) -> bool:
-        """
-        🔥 修正：漸進式更新進度資料夾（只建立實際經歷過的階段）
-
-        Args:
-            case_data: 案件資料
-
-        Returns:
-            bool: 是否成功更新
-        """
-        try:
-            # 取得案件資料夾路徑
-            case_folder = self.get_case_folder_path(case_data)
-            if not case_folder:
-                print(f"找不到案件資料夾: {case_data.client}")
-                return False
-
-            progress_base_folder = os.path.join(case_folder, '進度追蹤')
-            if not os.path.exists(progress_base_folder):
-                print(f"找不到進度追蹤資料夾: {progress_base_folder}")
-                return False
-
-            # 🔥 修正：只建立實際經歷過的進度資料夾
-            experienced_stages = case_data.get_display_stages()
-
-            for stage in experienced_stages:
-                stage_folder_path = os.path.join(progress_base_folder, stage)
-
+            for stage_name in progress_stages.keys():
+                stage_folder_path = os.path.join(progress_base_folder, stage_name)
                 if not os.path.exists(stage_folder_path):
                     os.makedirs(stage_folder_path)
-                    print(f"建立新進度資料夾: {stage_folder_path}")
+                    print(f"建立進度資料夾: {stage_folder_path}")
 
-            print(f"已更新案件 {case_data.case_id} 的進度資料夾結構")
-            print(f"經歷過的階段: {experienced_stages}")
             return True
 
         except Exception as e:
-            print(f"更新進度資料夾失敗: {e}")
+            print(f"建立進度資料夾失敗: {e}")
             return False
 
-    def get_existing_progress_folders(self, case_data: CaseData) -> List[str]:
-        """
-        取得已存在的進度資料夾列表
-
-        Args:
-            case_data: 案件資料
-
-        Returns:
-            List[str]: 已存在的進度資料夾名稱列表
-        """
+    def create_progress_folder(self, case_data: CaseData, stage_name: str) -> bool:
+        """為案件建立特定進度階段資料夾"""
         try:
             case_folder = self.get_case_folder_path(case_data)
             if not case_folder:
-                return []
+                return False
 
             progress_base_folder = os.path.join(case_folder, '進度追蹤')
-            if not os.path.exists(progress_base_folder):
-                return []
+            stage_folder_path = os.path.join(progress_base_folder, stage_name)
 
-            # 取得所有子資料夾
-            folders = []
-            for item in os.listdir(progress_base_folder):
-                item_path = os.path.join(progress_base_folder, item)
-                if os.path.isdir(item_path):
-                    folders.append(item)
-
-            return folders
-
-        except Exception as e:
-            print(f"取得進度資料夾列表失敗: {e}")
-            return []
-
-    def sync_progress_folders_with_case(self, case_data: CaseData) -> bool:
-        """
-        🔥 新增：同步進度資料夾與案件資料（移除多餘的資料夾）
-
-        Args:
-            case_data: 案件資料
-
-        Returns:
-            bool: 是否成功同步
-        """
-        try:
-            existing_folders = self.get_existing_progress_folders(case_data)
-            expected_folders = case_data.get_display_stages()
-
-            case_folder = self.get_case_folder_path(case_data)
-            progress_base_folder = os.path.join(case_folder, '進度追蹤')
-
-            # 建立缺少的資料夾
-            for stage in expected_folders:
-                stage_folder_path = os.path.join(progress_base_folder, stage)
-                if not os.path.exists(stage_folder_path):
-                    os.makedirs(stage_folder_path)
-                    print(f"補建進度資料夾: {stage_folder_path}")
-
-            # 可選：移除多餘的資料夾（謹慎使用）
-            # for folder in existing_folders:
-            #     if folder not in expected_folders:
-            #         # 這裡可以選擇是否刪除多餘的資料夾
-            #         pass
+            if not os.path.exists(stage_folder_path):
+                os.makedirs(stage_folder_path)
+                print(f"建立進度資料夾: {stage_folder_path}")
 
             return True
 
         except Exception as e:
-            print(f"同步進度資料夾失敗: {e}")
+            print(f"建立進度資料夾失敗: {e}")
             return False
 
     def _get_case_type_folder(self, case_type: str) -> Optional[str]:
@@ -209,7 +95,6 @@ class FolderManager:
 
             case_type_path = os.path.join(self.base_data_folder, folder_name)
 
-            # 確保案件類型資料夾存在
             if not os.path.exists(case_type_path):
                 os.makedirs(case_type_path)
                 print(f"建立案件類型資料夾: {case_type_path}")
@@ -223,16 +108,12 @@ class FolderManager:
     def _create_client_folder(self, case_type_folder: str, client_name: str) -> Optional[str]:
         """建立當事人資料夾"""
         try:
-            # 清理檔案名稱，移除不允許的字元
             safe_client_name = self._sanitize_folder_name(client_name)
             client_folder_path = os.path.join(case_type_folder, safe_client_name)
 
-            # 如果資料夾已存在，就直接使用
             if not os.path.exists(client_folder_path):
                 os.makedirs(client_folder_path)
                 print(f"建立當事人資料夾: {client_folder_path}")
-            else:
-                print(f"當事人資料夾已存在: {client_folder_path}")
 
             return client_folder_path
 
@@ -252,8 +133,6 @@ class FolderManager:
                 if not os.path.exists(folder_path):
                     os.makedirs(folder_path)
                     print(f"建立子資料夾: {folder_path}")
-                else:
-                    print(f"子資料夾已存在: {folder_path}")
 
                 created_folders[folder_name] = folder_path
 
@@ -266,11 +145,10 @@ class FolderManager:
     def _create_case_info_excel(self, case_info_folder: str, case_data: CaseData) -> bool:
         """建立案件資訊Excel檔案"""
         try:
-            # Excel檔案名稱
             excel_filename = f"{case_data.case_id}_{case_data.client}_案件資訊.xlsx"
             excel_path = os.path.join(case_info_folder, excel_filename)
 
-            # 準備詳細資訊資料 (A1-A5)
+            # 準備詳細資訊資料
             detail_info = [
                 ['案由', getattr(case_data, 'case_reason', '') or ''],
                 ['案號', getattr(case_data, 'case_number', '') or ''],
@@ -279,10 +157,8 @@ class FolderManager:
                 ['負責股別', getattr(case_data, 'division', '') or '']
             ]
 
-            # 建立DataFrame
             df = pd.DataFrame(detail_info, columns=['項目', '內容'])
 
-            # 使用ExcelWriter建立多個工作表
             with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
                 # 詳細資訊工作表
                 df.to_excel(writer, sheet_name='詳細資訊', index=False, startrow=0, startcol=0)
@@ -303,29 +179,22 @@ class FolderManager:
                 df_basic = pd.DataFrame(basic_info, columns=['項目', '內容'])
                 df_basic.to_excel(writer, sheet_name='基本資訊', index=False, startrow=0, startcol=0)
 
-                # 🔥 修正：進度歷史工作表（只包含實際經歷過的階段）
-                if case_data.progress_history:
+                # 進度階段工作表
+                if case_data.progress_stages:
                     progress_info = []
-
-                    # 🔥 修正：按照經歷順序排列
-                    experienced_stages = case_data.get_display_stages()
-                    for progress in experienced_stages:
-                        date = case_data.progress_history.get(progress, '未設定日期')
-                        progress_info.append([progress, date])
+                    for stage, date in sorted(case_data.progress_stages.items(), key=lambda x: x[1]):
+                        progress_info.append([stage, date])
 
                     if progress_info:
-                        df_progress = pd.DataFrame(progress_info, columns=['進度', '日期'])
-                        df_progress.to_excel(writer, sheet_name='進度歷史', index=False, startrow=0, startcol=0)
+                        df_progress = pd.DataFrame(progress_info, columns=['進度階段', '日期'])
+                        df_progress.to_excel(writer, sheet_name='進度階段', index=False, startrow=0, startcol=0)
 
                 # 調整欄位寬度
                 for sheet_name in writer.sheets:
                     worksheet = writer.sheets[sheet_name]
+                    worksheet.column_dimensions['A'].width = 15
+                    worksheet.column_dimensions['B'].width = 30
 
-                    # 設定欄位寬度
-                    worksheet.column_dimensions['A'].width = 15  # 項目欄位
-                    worksheet.column_dimensions['B'].width = 30  # 內容欄位
-
-                    # 設定標題行樣式
                     for cell in worksheet[1]:
                         cell.font = cell.font.copy(bold=True)
 
@@ -338,17 +207,14 @@ class FolderManager:
 
     def _sanitize_folder_name(self, name: str) -> str:
         """清理資料夾名稱，移除不允許的字元"""
-        # Windows不允許的字元
         invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
 
         clean_name = name
         for char in invalid_chars:
             clean_name = clean_name.replace(char, '_')
 
-        # 移除前後空白和點
         clean_name = clean_name.strip(' .')
 
-        # 如果名稱為空或太長，使用預設名稱
         if not clean_name or len(clean_name) > 100:
             clean_name = f"案件_unknown"
 
@@ -370,6 +236,20 @@ class FolderManager:
             print(f"取得案件資料夾路徑失敗: {e}")
             return None
 
+    def get_stage_folder_path(self, case_data: CaseData, stage_name: str) -> Optional[str]:
+        """取得特定階段的資料夾路徑"""
+        try:
+            case_folder = self.get_case_folder_path(case_data)
+            if not case_folder:
+                return None
+
+            stage_folder_path = os.path.join(case_folder, '進度追蹤', stage_name)
+            return stage_folder_path if os.path.exists(stage_folder_path) else None
+
+        except Exception as e:
+            print(f"取得階段資料夾路徑失敗: {e}")
+            return None
+
     def update_case_info_excel(self, case_data: CaseData) -> bool:
         """更新案件資訊Excel檔案"""
         try:
@@ -383,13 +263,7 @@ class FolderManager:
                 print(f"找不到案件資訊資料夾: {case_info_folder}")
                 return False
 
-            # 重新建立Excel檔案
-            excel_success = self._create_case_info_excel(case_info_folder, case_data)
-
-            # 🔥 修正：同時更新進度資料夾（漸進式）
-            folder_success = self.update_progress_folders(case_data)
-
-            return excel_success and folder_success
+            return self._create_case_info_excel(case_info_folder, case_data)
 
         except Exception as e:
             print(f"更新案件資訊Excel檔案失敗: {e}")

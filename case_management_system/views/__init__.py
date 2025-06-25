@@ -4,7 +4,7 @@ from .main_window import MainWindow
 from .case_overview import CaseOverviewWindow
 from .case_form import CaseFormDialog
 from .dialogs import ConfirmDialog, MessageDialog
-from .progress_history_dialog import ProgressHistoryDialog  # 🔥 新增
+from .simple_progress_edit_dialog import SimpleProgressEditDialog
 
 __all__ = [
     'BaseWindow',
@@ -13,5 +13,5 @@ __all__ = [
     'CaseFormDialog',
     'ConfirmDialog',
     'MessageDialog',
-    'ProgressHistoryDialog'  # 🔥 新增
+    'SimpleProgressEditDialog'
 ]

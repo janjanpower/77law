@@ -10,7 +10,6 @@ try:
     from tkcalendar import DateEntry
 except ImportError:
     print("警告：tkcalendar 套件未安裝，請執行：pip install tkcalendar")
-    # 提供替代的日期輸入方式
     DateEntry = None
 
 class CaseFormDialog(BaseWindow):
@@ -32,14 +31,14 @@ class CaseFormDialog(BaseWindow):
         self.mode = mode
         self.result_data = None
 
-        # 🔥 關鍵修正：先初始化表單變數，再調用父類別初始化
+        # 先初始化表單變數，再調用父類別初始化
         self.form_vars = {}
-        self.progress_combobox = None  # 儲存進度選項組合框的參考
-        self.progress_date_entry = None  # 🔥 新增：儲存進度日期選擇器的參考
+        self.progress_combobox = None
+        self.progress_date_entry = None
         self._init_form_data()
 
         title = AppConfig.WINDOW_TITLES['add_case'] if mode == 'add' else AppConfig.WINDOW_TITLES['edit_case']
-        super().__init__(title=title, width=600, height=750, resizable=False, parent=parent)  # 增加高度
+        super().__init__(title=title, width=600, height=750, resizable=False, parent=parent)
 
     def _init_form_data(self):
         """初始化表單資料"""
@@ -50,7 +49,7 @@ class CaseFormDialog(BaseWindow):
         self.form_vars['legal_affairs'] = tk.StringVar(value=self.case_data.legal_affairs if self.case_data else '')
         self.form_vars['progress'] = tk.StringVar(value=self.case_data.progress if self.case_data else '待處理')
 
-        # 🔥 新增：進度日期
+        # 進度日期
         current_date = datetime.now().date()
         if self.case_data and self.case_data.progress_date:
             try:
@@ -66,14 +65,12 @@ class CaseFormDialog(BaseWindow):
         self.form_vars['court'] = tk.StringVar(value=getattr(self.case_data, 'court', '') if self.case_data else '')
         self.form_vars['division'] = tk.StringVar(value=getattr(self.case_data, 'division', '') if self.case_data else '')
 
-        # 🔥 案件類型變更事件綁定
+        # 案件類型變更事件綁定
         self.form_vars['case_type'].trace_add('write', self._on_case_type_changed)
 
     def _create_layout(self):
         """建立表單佈局"""
         super()._create_layout()
-
-        # 建立表單內容
         self._create_form_content()
 
     def _create_form_content(self):
@@ -109,7 +106,6 @@ class CaseFormDialog(BaseWindow):
 
     def _create_basic_info_section(self, parent):
         """建立基本資訊區塊"""
-        # 基本資訊標題
         basic_title = tk.Label(
             parent,
             text="基本資訊",
@@ -119,7 +115,6 @@ class CaseFormDialog(BaseWindow):
         )
         basic_title.pack(anchor='w', pady=(0, 10))
 
-        # 基本資訊表單
         basic_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
         basic_frame.pack(fill='x', pady=(0, 20))
 
@@ -136,19 +131,18 @@ class CaseFormDialog(BaseWindow):
         # 法務
         self._create_field(basic_frame, "法務", 'legal_affairs', 3)
 
-        # 🔥 修改：進度追蹤 - 動態選項
+        # 進度追蹤 - 動態選項
         initial_case_type = self.form_vars['case_type'].get()
         progress_options = AppConfig.get_progress_options(initial_case_type)
         self._create_field(basic_frame, "進度追蹤", 'progress', 4, field_type='combobox',
                           values=progress_options, store_widget=True)
 
-        # 🔥 新增：進度日期
+        # 進度日期
         self._create_field(basic_frame, "進度日期", 'progress_date', 5, field_type='date',
                           store_widget=True)
 
     def _create_detail_info_section(self, parent):
         """建立詳細資訊區塊"""
-        # 詳細資訊標題
         detail_title = tk.Label(
             parent,
             text="詳細資訊",
@@ -158,7 +152,6 @@ class CaseFormDialog(BaseWindow):
         )
         detail_title.pack(anchor='w', pady=(0, 10))
 
-        # 詳細資訊表單
         detail_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
         detail_frame.pack(fill='x', pady=(0, 20))
 
@@ -201,11 +194,9 @@ class CaseFormDialog(BaseWindow):
                 state='readonly' if values else 'normal',
                 width=30
             )
-            # 特殊處理進度選項組合框
             if store_widget and var_name == 'progress':
                 self.progress_combobox = widget
         elif field_type == 'date':
-            # 🔥 日期選擇器（支援回退方案）
             if DateEntry is not None:
                 widget = DateEntry(
                     parent,
@@ -216,10 +207,8 @@ class CaseFormDialog(BaseWindow):
                     date_pattern='yyyy-mm-dd',
                     locale='zh_TW'
                 )
-                # 設定初始日期
                 widget.set_date(self.form_vars[var_name])
             else:
-                # 回退方案：使用普通的文字輸入框
                 widget = tk.Entry(
                     parent,
                     bg='white',
@@ -227,11 +216,9 @@ class CaseFormDialog(BaseWindow):
                     font=AppConfig.FONTS['text'],
                     width=32
                 )
-                # 設定初始值為日期字串
                 initial_date = self.form_vars[var_name]
                 widget.insert(0, initial_date.strftime('%Y-%m-%d') if hasattr(initial_date, 'strftime') else str(initial_date))
 
-            # 特殊處理進度日期選擇器
             if store_widget and var_name == 'progress_date':
                 self.progress_date_entry = widget
         else:
@@ -245,31 +232,21 @@ class CaseFormDialog(BaseWindow):
             )
 
         widget.grid(row=row, column=1, sticky='ew', pady=5)
-
-        # 設定欄位權重
         parent.grid_columnconfigure(1, weight=1)
 
     def _on_case_type_changed(self, *args):
-        """🔥 案件類型變更事件處理"""
+        """案件類型變更事件處理"""
         if self.progress_combobox is None:
             return
 
         try:
-            # 取得新的案件類型
             new_case_type = self.form_vars['case_type'].get()
-
-            # 取得對應的進度選項
             new_progress_options = AppConfig.get_progress_options(new_case_type)
-
-            # 保存當前進度值
             current_progress = self.form_vars['progress'].get()
 
-            # 更新組合框選項
             self.progress_combobox['values'] = new_progress_options
 
-            # 檢查當前進度是否在新選項中
             if current_progress not in new_progress_options:
-                # 如果當前進度不在新選項中，重設為第一個選項
                 self.form_vars['progress'].set(new_progress_options[0] if new_progress_options else '待處理')
 
             print(f"案件類型變更為：{new_case_type}，進度選項更新為：{new_progress_options}")
@@ -282,7 +259,6 @@ class CaseFormDialog(BaseWindow):
         button_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
         button_frame.pack(pady=20)
 
-        # 確定按鈕
         save_btn = tk.Button(
             button_frame,
             text='儲存',
@@ -294,7 +270,6 @@ class CaseFormDialog(BaseWindow):
         )
         save_btn.pack(side='left', padx=5)
 
-        # 取消按鈕
         cancel_btn = tk.Button(
             button_frame,
             text='取消',
@@ -308,7 +283,6 @@ class CaseFormDialog(BaseWindow):
 
     def _validate_form(self) -> bool:
         """驗證表單資料"""
-        # 檢查必填欄位
         if not self.form_vars['case_type'].get().strip():
             messagebox.showerror("錯誤", "請選擇案件類型")
             return False
@@ -320,23 +294,20 @@ class CaseFormDialog(BaseWindow):
         return True
 
     def _on_save(self):
-        """🔥 修正：儲存按鈕事件 - 支援真正的漸進式進度"""
+        """儲存按鈕事件"""
         if not self._validate_form():
             return
 
         try:
-            # 🔥 取得進度日期（支援回退方案）
+            # 取得進度日期
             progress_date = None
             if self.progress_date_entry:
                 if DateEntry is not None and hasattr(self.progress_date_entry, 'get_date'):
-                    # 使用 DateEntry
                     progress_date = self.progress_date_entry.get_date().strftime('%Y-%m-%d')
                 else:
-                    # 使用普通文字輸入框
                     date_str = self.progress_date_entry.get().strip()
                     if date_str:
                         try:
-                            # 驗證日期格式
                             datetime.strptime(date_str, '%Y-%m-%d')
                             progress_date = date_str
                         except ValueError:
@@ -359,39 +330,24 @@ class CaseFormDialog(BaseWindow):
                 progress_date=progress_date
             )
 
-            # 🔥 修正：處理進度歷史記錄
+            # 處理進度階段記錄
             if self.mode == 'add':
-                # 🔥 新增模式：只包含當前選擇的進度
+                # 新增模式：只包含當前選擇的進度
                 if progress_date:
-                    case_data.progress_history = {case_data.progress: progress_date}
-                case_data.experienced_stages = [case_data.progress]
+                    case_data.progress_stages = {case_data.progress: progress_date}
 
                 print(f"新增案件 - 初始階段: {case_data.progress}")
-                print(f"經歷階段: {case_data.experienced_stages}")
 
             elif self.mode == 'edit' and self.case_data:
-                # 🔥 編輯模式：處理進度變更
-                old_progress = self.case_data.progress
-                new_progress = case_data.progress
-
-                # 保留原有的進度歷史和經歷階段
-                case_data.progress_history = self.case_data.progress_history.copy()
-                case_data.experienced_stages = getattr(self.case_data, 'experienced_stages', []).copy()
+                # 編輯模式：保留原有的進度階段記錄
+                case_data.progress_stages = self.case_data.progress_stages.copy()
                 case_data.created_date = self.case_data.created_date
 
-                # 如果進度有變更，添加新階段
-                if old_progress != new_progress:
-                    # 使用 update_progress 方法來正確處理階段添加
-                    case_data.update_progress(new_progress, progress_date)
+                # 更新當前進度的日期
+                if progress_date:
+                    case_data.progress_stages[case_data.progress] = progress_date
 
-                    print(f"編輯案件 - 進度變更: {old_progress} → {new_progress}")
-                    print(f"經歷階段: {case_data.experienced_stages}")
-                else:
-                    # 進度沒有變更，只更新日期
-                    if progress_date:
-                        case_data.progress_history[new_progress] = progress_date
-
-                    print(f"編輯案件 - 進度未變更，更新日期: {new_progress} ({progress_date})")
+                print(f"編輯案件 - 當前進度: {case_data.progress}")
 
             self.result_data = case_data
 
@@ -404,59 +360,15 @@ class CaseFormDialog(BaseWindow):
                         self.close()
                     else:
                         print(f"案件儲存失敗，保持對話框開啟")
-                        # 不關閉對話框，讓使用者可以重試
                 except Exception as callback_error:
                     print(f"儲存回調函數發生錯誤: {callback_error}")
                     messagebox.showerror("錯誤", f"儲存過程發生錯誤：{str(callback_error)}")
             else:
-                # 沒有回調函數時直接關閉
                 self.close()
 
         except Exception as e:
             print(f"建立案件資料時發生錯誤: {e}")
             messagebox.showerror("錯誤", f"資料處理失敗：{str(e)}")
-
-    # 🔥 新增：進度變更提示方法
-    def _show_progress_change_info(self, old_stages: List[str], new_stages: List[str]):
-        """
-        顯示進度變更資訊
-
-        Args:
-            old_stages: 原有階段列表
-            new_stages: 新的階段列表
-        """
-        if len(new_stages) > len(old_stages):
-            new_stage_names = [stage for stage in new_stages if stage not in old_stages]
-            if new_stage_names:
-                info_text = f"已新增進度階段：{', '.join(new_stage_names)}"
-                messagebox.showinfo("進度更新", info_text)
-
-    # 🔥 新增：驗證進度邏輯
-    def _validate_progress_logic(self, new_progress: str, case_type: str) -> bool:
-        """
-        驗證進度邏輯是否合理
-
-        Args:
-            new_progress: 新的進度
-            case_type: 案件類型
-
-        Returns:
-            bool: 是否合理
-        """
-        from config.settings import AppConfig
-
-        # 檢查進度是否在標準選項中
-        standard_options = AppConfig.get_progress_options(case_type)
-
-        if new_progress not in standard_options:
-            # 自訂進度，需要確認
-            result = messagebox.askyesno(
-                "自訂進度",
-                f"「{new_progress}」不在標準進度選項中，\n確定要使用此自訂進度嗎？"
-            )
-            return result
-
-        return True
 
     @staticmethod
     def show_add_dialog(parent, on_save: Callable) -> Optional[CaseData]:

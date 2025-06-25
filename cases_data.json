@@ -5,24 +5,18 @@
     "client": "小恩",
     "lawyer": "羅",
     "legal_affairs": "大大",
-    "progress": "三審",
+    "progress": "二審",
     "case_reason": "99",
     "case_number": "88",
     "opposing_party": "77",
-    "court": "66",
-    "division": "55",
+    "court": "99",
+    "division": "678",
     "progress_date": "2025-06-30",
-    "progress_history": {
-      "一審": "2025-06-17",
-      "二審": "2025-06-27",
-      "三審": "2025-06-30"
+    "progress_stages": {
+      "三審": "2025-07-02",
+      "二審": "2025-06-30"
     },
-    "experienced_stages": [
-      "一審",
-      "二審",
-      "三審"
-    ],
     "created_date": "2025-06-25T12:42:54.093162",
-    "updated_date": "2025-06-25T12:51:58.269837"
+    "updated_date": "2025-06-25T13:51:54.539406"
   }
 ]
