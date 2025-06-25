@@ -198,7 +198,7 @@ class CaseOverviewWindow:
         self.field_control_frame = tk.Frame(
             self.content_frame,
             bg=AppConfig.COLORS['window_bg'],
-            height=100
+            height=25
         )
         self.field_control_frame.pack(fill='x')
         self.field_control_frame.pack_propagate(False)
@@ -332,7 +332,7 @@ class CaseOverviewWindow:
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['button']
         )
-        control_title.pack(side='left', padx=(10, 20))
+        control_title.pack(side='left', padx=(10, 10))
 
         # 🔥 修正：使用 OVERVIEW_FIELDS
         self.field_vars = {}
@@ -643,27 +643,43 @@ class CaseOverviewWindow:
             bg_color = ProgressManager.get_stage_color(stage_status)
             fg_color = 'white' if stage_status != 'pending' else 'black'
 
-            # 進度圓圈
+            # 🔥 修改：進度方框 - 顯示審理狀態而非數字
+            # 計算合適的字體大小和方框尺寸
+            stage_text = stage[:4] if len(stage) > 4 else stage  # 限制最多4個字
+
+            # 根據文字長度調整方框尺寸
+            if len(stage_text) <= 2:
+                box_width = 6
+                font_size = 10
+            elif len(stage_text) == 3:
+                box_width = 8
+                font_size = 10
+            else:
+                box_width = 10
+                font_size = 10
+
             circle = tk.Label(
                 circle_frame,
-                text=str(i+1),
+                text=stage_text,  # 🔥 修改：顯示審理狀態文字
                 bg=bg_color,
                 fg=fg_color,
-                font=AppConfig.FONTS['text'],
-                width=3,
-                height=1
+                font=('Microsoft JhengHei', font_size, 'bold'),  # 🔥 修改：調整字體
+                width=box_width,  # 🔥 修改：根據文字長度調整寬度
+                height=2,  # 🔥 修改：增加高度以容納中文字
+                relief='solid', # 🔥 新增：添加邊框效果
+                borderwidth=0
             )
-            circle.pack()
+            circle.pack(pady=2)
 
-            # 階段名稱
-            stage_label = tk.Label(
-                circle_frame,
-                text=stage,
-                bg=AppConfig.COLORS['window_bg'],
-                fg=AppConfig.COLORS['text_color'],
-                font=('Microsoft JhengHei', 10)
-            )
-            stage_label.pack()
+            # # 階段名稱
+            # stage_label = tk.Label(
+            #     circle_frame,
+            #     text=stage,
+            #     bg=AppConfig.COLORS['window_bg'],
+            #     fg=AppConfig.COLORS['text_color'],
+            #     font=('Microsoft JhengHei', 10)
+            # )
+            # stage_label.pack()
 
             # 顯示該階段的日期（如果有的話）
             stage_date = progress_history.get(stage)
@@ -675,7 +691,7 @@ class CaseOverviewWindow:
                     fg="#FFFFFF",  # 深灰色
                     font=('Microsoft JhengHei', 10)
                 )
-                date_label.pack()
+                date_label.pack(pady=(3,0))
 
             # 連接線（只在有下一個階段時顯示）
             if i < len(stages_to_show) - 1:
