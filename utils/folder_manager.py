@@ -172,7 +172,7 @@ class FolderManager:
             return None
 
     def _create_case_info_excel(self, case_info_folder: str, case_data: CaseData) -> bool:
-        """建立案件資訊Excel檔案"""
+        """建立案件資訊Excel檔案 - 🔥 修改：包含備註資訊"""
         try:
             excel_filename = f"{case_data.case_id}_{case_data.client}_案件資訊.xlsx"
             excel_path = os.path.join(case_info_folder, excel_filename)
@@ -208,14 +208,25 @@ class FolderManager:
                 df_basic = pd.DataFrame(basic_info, columns=['項目', '內容'])
                 df_basic.to_excel(writer, sheet_name='基本資訊', index=False, startrow=0, startcol=0)
 
-                # 進度階段工作表
+                # 🔥 修改：進度階段工作表 - 包含備註和時間
                 if case_data.progress_stages:
                     progress_info = []
                     for stage, date in sorted(case_data.progress_stages.items(), key=lambda x: x[1]):
-                        progress_info.append([stage, date])
+                        # 🔥 新增：取得備註
+                        note = ""
+                        if hasattr(case_data, 'progress_notes') and case_data.progress_notes:
+                            note = case_data.progress_notes.get(stage, "")
+
+                        # 🔥 新增：取得時間
+                        time = ""
+                        if hasattr(case_data, 'progress_times') and case_data.progress_times:
+                            time = case_data.progress_times.get(stage, "")
+
+                        progress_info.append([stage, date, time, note])
 
                     if progress_info:
-                        df_progress = pd.DataFrame(progress_info, columns=['進度階段', '日期'])
+                        # 🔥 修改：增加時間和備註欄位
+                        df_progress = pd.DataFrame(progress_info, columns=['進度階段', '日期', '時間', '備註'])
                         df_progress.to_excel(writer, sheet_name='進度階段', index=False, startrow=0, startcol=0)
 
                 # 調整欄位寬度
@@ -223,6 +234,11 @@ class FolderManager:
                     worksheet = writer.sheets[sheet_name]
                     worksheet.column_dimensions['A'].width = 15
                     worksheet.column_dimensions['B'].width = 30
+
+                    # 🔥 新增：如果是進度階段工作表，調整時間和備註欄位寬度
+                    if sheet_name == '進度階段':
+                        worksheet.column_dimensions['C'].width = 15  # 時間欄位
+                        worksheet.column_dimensions['D'].width = 40  # 備註欄位
 
                     for cell in worksheet[1]:
                         cell.font = cell.font.copy(bold=True)

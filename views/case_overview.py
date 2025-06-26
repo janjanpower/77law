@@ -1,12 +1,14 @@
-from datetime import datetime
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-from typing import Dict, List, Optional
 import os
+import tkinter as tk
+from datetime import datetime
+from tkinter import ttk
+from typing import List
+
 from config.settings import AppConfig
 from models.case_model import CaseData
 from views.dialogs import UnifiedMessageDialog
 from views.import_data_dialog import ImportDataDialog
+
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
@@ -210,7 +212,7 @@ class CaseOverviewWindow:
             bg='white',
             fg='black',
             font=AppConfig.FONTS['text'],
-            width=30
+            width=40
         )
         self.search_entry.pack(side='left', padx=5)
 
@@ -1056,7 +1058,7 @@ class CaseOverviewWindow:
             return ('#2196F3', 'white')
 
     def _display_case_progress(self, case: 'CaseData'):
-        """顯示案件進度 - 使用統一的顯示格式"""
+        """顯示案件進度 - 🔥 修改：支援便籤圖示顯示"""
         # 清空進度顯示
         for widget in self.progress_display.winfo_children():
             widget.destroy()
@@ -1138,19 +1140,6 @@ class CaseOverviewWindow:
             font=AppConfig.FONTS['text']
         ).pack(anchor='w', pady=(5, 5))
 
-        # 當前進度顯示
-        current_progress = f"目前狀態: {case.progress}"
-        if case.progress_date:
-            current_progress += f" ({case.progress_date})"
-
-        tk.Label(
-            info_frame,
-            text=current_progress,
-            bg=AppConfig.COLORS['window_bg'],
-            fg='#FF9800',
-            font=AppConfig.FONTS['button']
-        ).pack(anchor='w', pady=(0, 5))
-
         # 新增階段按鈕
         add_stage_btn = tk.Button(
             info_frame,
@@ -1158,7 +1147,7 @@ class CaseOverviewWindow:
             command=lambda: self._on_add_progress_stage(case),
             bg='#4CAF50',
             fg='white',
-            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
+            font=AppConfig.FONTS['button'],
             width=15,
             height=1
         )
@@ -1169,7 +1158,7 @@ class CaseOverviewWindow:
             self.progress_display,
             bg=AppConfig.COLORS['window_bg']
         )
-        progress_bar_frame.pack(side='right', expand=True, fill='x', padx=20)
+        progress_bar_frame.pack(side='right', expand=True, fill='x', padx=5)
 
         # 只顯示實際存在的進度階段
         stages_to_show = list(case.progress_stages.keys()) if case.progress_stages else []
@@ -1194,6 +1183,34 @@ class CaseOverviewWindow:
                 bg=AppConfig.COLORS['window_bg']
             )
             stage_container.pack(side='left', expand=True)
+
+            # 🔥 修改：固定高度的上方區域（用於便籤圖示）
+            note_frame = tk.Frame(
+                stage_container,
+                bg=AppConfig.COLORS['window_bg'],
+                height=35  # 固定高度確保水平對齊
+            )
+            note_frame.pack(fill='x')
+            note_frame.pack_propagate(False)  # 🔥 重要：防止框架縮小
+
+            # 檢查是否有備註
+            if hasattr(case, 'has_stage_note') and case.has_stage_note(stage):
+                note_icon = tk.Label(
+                    note_frame,
+                    text="📄",  # 便籤圖示
+                    bg=AppConfig.COLORS['window_bg'],
+                    fg='white',
+                    font=('Microsoft JhengHei', 14),
+                    cursor='hand2'
+                )
+                note_icon.pack(anchor='center')  # 🔥 修改：置中顯示
+
+                # 🔥 新增：綁定點擊事件顯示備註內容
+                note_content = case.get_stage_note(stage)
+                note_icon.bind('<Button-1>', lambda e, note=note_content: self._show_stage_note(note))
+
+                # 🔥 新增：滑鼠懸停提示
+                self._create_tooltip(note_icon, f"{note_content[:50]}{'...' if len(note_content) > 50 else ''}")
 
             # 階段方框
             circle_frame = tk.Frame(
@@ -1241,26 +1258,82 @@ class CaseOverviewWindow:
             # 儲存小部件參考
             self.progress_widgets[stage] = stage_label
 
+            # 🔥 修改：固定高度的日期時間區域
+            datetime_frame = tk.Frame(
+                stage_container,
+                bg=AppConfig.COLORS['window_bg'],
+                height=40  # 固定高度確保水平對齊
+            )
+            datetime_frame.pack(fill='x')
+            datetime_frame.pack_propagate(False)  # 防止框架縮小
+
             # 顯示日期
             if date:
                 date_label = tk.Label(
                     circle_frame,
                     text=date,
                     bg=AppConfig.COLORS['window_bg'],
-                    fg="#FFFFFF",
+                    fg="white",
                     font=('Microsoft JhengHei', 10)
                 )
                 date_label.pack(pady=(3, 0))
+
+            # 🔥 修改：顯示時間（在固定區域內）
+            if hasattr(case, 'progress_times') and case.progress_times:
+                stage_time = case.progress_times.get(stage, '')
+                if stage_time:
+                    time_label = tk.Label(
+                        datetime_frame,
+                        text=stage_time,
+                        bg=AppConfig.COLORS['window_bg'],
+                        fg="white",
+                        font=('Microsoft JhengHei', 9)
+                    )
+                    time_label.pack(pady=(1, 0))
 
             # 連接線
             if i < len(sorted_stages) - 1:
                 line_frame = tk.Frame(
                     progress_bar_frame,
-                    bg='#2196F3',
+                    bg='white',
                     height=1,
-                    width=25
+                    width=15
                 )
                 line_frame.pack(side='left', pady=5)
+
+    def _show_stage_note(self, note_content: str):
+        """🔥 新增：顯示階段備註內容"""
+        from views.dialogs import UnifiedMessageDialog
+        UnifiedMessageDialog.show_info(self.window, note_content, "階段備註")
+
+    def _create_tooltip(self, widget, text):
+        """🔥 新增：建立工具提示"""
+        def on_enter(event):
+            tooltip = tk.Toplevel()
+            tooltip.wm_overrideredirect(True)
+            tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+
+            label = tk.Label(
+                tooltip,
+                text=text,
+                background='#FFFFCC',
+                foreground='black',
+                font=AppConfig.FONTS['text'],
+                relief='solid',
+                borderwidth=1,
+                wraplength=200
+            )
+            label.pack()
+
+            widget.tooltip = tooltip
+
+        def on_leave(event):
+            if hasattr(widget, 'tooltip'):
+                widget.tooltip.destroy()
+                del widget.tooltip
+
+        widget.bind('<Enter>', on_enter)
+        widget.bind('<Leave>', on_leave)
 
     def _on_upload_data(self):
         """上傳資料事件"""
@@ -1361,7 +1434,7 @@ class CaseOverviewWindow:
             print(f"顯示階段右鍵選單失敗: {e}")
 
     def _on_add_progress_stage(self, case: CaseData):
-        """新增進度階段"""
+        """新增進度階段 - 🔥 修改：支援備註和時間"""
         from views.simple_progress_edit_dialog import SimpleProgressEditDialog
 
         def save_new_stage(result):
@@ -1369,22 +1442,25 @@ class CaseOverviewWindow:
                 success = self.case_controller.add_case_progress_stage(
                     case.case_id,
                     result['stage_name'],
-                    result['stage_date']
+                    result['stage_date'],
+                    result.get('note', ''),
+                    result.get('time', '')
                 )
                 if success:
-                    self._load_cases()  # 重新載入資料
-                    # 重新選擇該案件以更新顯示
+                    self._load_cases()
                     self._reselect_case(case.case_id)
-                    UnifiedMessageDialog.show_success(self.window,  f"已新增進度階段「{result['stage_name']}」")
+                    from views.dialogs import UnifiedMessageDialog
+                    UnifiedMessageDialog.show_success(self.window, f"已新增進度階段「{result['stage_name']}」")
                 return success
             except Exception as e:
-                UnifiedMessageDialog.show_error(self.window,  f"新增階段失敗：{str(e)}")
+                from views.dialogs import UnifiedMessageDialog
+                UnifiedMessageDialog.show_error(self.window, f"新增階段失敗：{str(e)}")
                 return False
 
         SimpleProgressEditDialog.show_add_dialog(self.window, case, save_new_stage)
 
     def _on_edit_progress_stage(self, case: CaseData, stage_name: str):
-        """編輯進度階段"""
+        """編輯進度階段 - 🔥 修改：支援備註和時間"""
         from views.simple_progress_edit_dialog import SimpleProgressEditDialog
 
         stage_date = case.progress_stages.get(stage_name, '')
@@ -1394,21 +1470,24 @@ class CaseOverviewWindow:
                 success = self.case_controller.update_case_progress_stage(
                     case.case_id,
                     result['stage_name'],
-                    result['stage_date']
+                    result['stage_date'],
+                    result.get('note', ''),
+                    result.get('time', '')
                 )
                 if success:
                     self._load_cases()
                     self._reselect_case(case.case_id)
-                    UnifiedMessageDialog.show_success(self.window,  f"已更新進度階段「{result['stage_name']}」")
+                    from views.dialogs import UnifiedMessageDialog
+                    UnifiedMessageDialog.show_success(self.window, f"已更新進度階段「{result['stage_name']}」")
                 return success
             except Exception as e:
-                UnifiedMessageDialog.show_error(self.window,  f"更新階段失敗：{str(e)}")
+                from views.dialogs import UnifiedMessageDialog
+                UnifiedMessageDialog.show_error(self.window, f"更新階段失敗：{str(e)}")
                 return False
 
         SimpleProgressEditDialog.show_edit_dialog(
             self.window, case, stage_name, stage_date, save_edited_stage
         )
-
     def _on_remove_progress_stage(self, case: CaseData, stage_name: str):
         """移除進度階段（含刪除確認對話框）"""
         from views.dialogs import ConfirmDialog

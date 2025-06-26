@@ -30,7 +30,7 @@ class CaseController:
         self.load_cases()
 
     def _migrate_case_data(self, case_dict: dict) -> dict:
-        """遷移舊版案件資料到新版格式"""
+        """遷移舊版案件資料到新版格式 - 🔥 修改：新增備註欄位"""
         # 確保所有新欄位都有預設值
         default_fields = {
             'case_reason': None,
@@ -39,7 +39,9 @@ class CaseController:
             'court': None,
             'division': None,
             'progress_date': None,
-            'progress_stages': {}
+            'progress_stages': {},
+            'progress_notes': {},  # 🔥 新增：備註欄位預設值
+            'progress_times': {}   # 🔥 新增：時間欄位預設值
         }
 
         # 合併預設值和現有資料
@@ -59,6 +61,12 @@ class CaseController:
                 progress_stages = {case_dict['progress']: case_dict['progress_date']}
 
             case_dict['progress_stages'] = progress_stages
+
+        # 🔥 新增：確保備註和時間欄位存在
+        if not case_dict.get('progress_notes'):
+            case_dict['progress_notes'] = {}
+        if not case_dict.get('progress_times'):
+            case_dict['progress_times'] = {}
 
         return case_dict
 
@@ -187,36 +195,14 @@ class CaseController:
             print(f"更新案件失敗: {e}")
             return False
 
-    def update_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str) -> bool:
-        """更新案件進度階段 - 使用統一顯示格式"""
+    def add_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str = None, note: str = None, time: str = None) -> bool:
+        """新增案件進度階段 - 🔥 修改：支援備註和時間"""
         try:
             case = self.get_case_by_id(case_id)
             if not case:
                 raise ValueError(f"找不到案件編號: {case_id}")
 
-            case.update_stage_date(stage_name, stage_date)
-
-            success = self.save_cases()
-            if success:
-                # 更新資料夾和Excel
-                self.folder_manager.update_case_info_excel(case)
-                case_display_name = AppConfig.format_case_display_name(case)
-                print(f"已更新案件 {case_display_name} 的階段 {stage_name} 日期為 {stage_date}")
-
-            return success
-
-        except Exception as e:
-            print(f"更新案件進度階段失敗: {e}")
-            return False
-
-    def add_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str = None) -> bool:
-        """新增案件進度階段 - 使用統一顯示格式"""
-        try:
-            case = self.get_case_by_id(case_id)
-            if not case:
-                raise ValueError(f"找不到案件編號: {case_id}")
-
-            case.add_progress_stage(stage_name, stage_date)
+            case.add_progress_stage(stage_name, stage_date, note, time)  # 🔥 修改：傳入時間
 
             success = self.save_cases()
             if success:
@@ -230,6 +216,40 @@ class CaseController:
 
         except Exception as e:
             print(f"新增案件進度階段失敗: {e}")
+            return False
+
+    def update_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str, note: str = None, time: str = None) -> bool:
+        """更新案件進度階段 - 🔥 修改：支援備註和時間"""
+        try:
+            case = self.get_case_by_id(case_id)
+            if not case:
+                raise ValueError(f"找不到案件編號: {case_id}")
+
+            case.update_stage_date(stage_name, stage_date)
+
+            # 🔥 新增：更新備註
+            if note is not None:  # 允許空字串來清除備註
+                case.update_stage_note(stage_name, note)
+
+            # 🔥 新增：更新時間
+            if time is not None:  # 允許空字串來清除時間
+                case.update_stage_time(stage_name, time)
+
+            success = self.save_cases()
+            if success:
+                # 更新資料夾和Excel
+                self.folder_manager.update_case_info_excel(case)
+                case_display_name = AppConfig.format_case_display_name(case)
+                print(f"已更新案件 {case_display_name} 的階段 {stage_name} 日期為 {stage_date}")
+                if note:
+                    print(f"同時更新備註：{note[:20]}...")
+                if time:
+                    print(f"同時更新時間：{time}")
+
+            return success
+
+        except Exception as e:
+            print(f"更新案件進度階段失敗: {e}")
             return False
 
     def remove_case_progress_stage(self, case_id: str, stage_name: str) -> bool:
