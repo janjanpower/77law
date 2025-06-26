@@ -277,19 +277,25 @@ class MainWindow:
     def _show_case_overview(self):
         """顯示案件總覽"""
         if self.case_overview is None:
-            # 動態導入避免循環導入
-            from views.case_overview import CaseOverviewWindow
-            from controllers.case_controller import CaseController
+            # 🔥 修正：動態導入避免循環導入
+            try:
+                from views.case_overview import CaseOverviewWindow
+                from controllers.case_controller import CaseController
 
-            # 建立控制器，使用選定的資料夾
-            data_file = os.path.join(self.selected_folder, AppConfig.DATA_CONFIG['case_data_file'])
-            case_controller = CaseController(data_file)
+                # 建立控制器，使用選定的資料夾
+                data_file = os.path.join(self.selected_folder, AppConfig.DATA_CONFIG['case_data_file'])
+                case_controller = CaseController(data_file)
 
-            # 建立總覽視窗
-            self.case_overview = CaseOverviewWindow(self.window, case_controller)
+                # 建立總覽視窗
+                self.case_overview = CaseOverviewWindow(self.window, case_controller)
 
-            # 綁定總覽視窗關閉事件
-            self.case_overview.window.protocol("WM_DELETE_WINDOW", self._on_overview_close)
+                # 綁定總覽視窗關閉事件
+                self.case_overview.window.protocol("WM_DELETE_WINDOW", self._on_overview_close)
+
+            except ImportError as e:
+                print(f"無法載入案件總覽視窗: {e}")
+                UnifiedMessageDialog.show_error(self.window, f"載入失敗：{str(e)}")
+                return
 
         # 先顯示總覽視窗
         self.case_overview.show()

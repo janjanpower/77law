@@ -8,7 +8,7 @@ from config.settings import AppConfig
 from models.case_model import CaseData
 from views.dialogs import UnifiedMessageDialog
 from views.import_data_dialog import ImportDataDialog
-
+from views.date_reminder_widget import DateReminderWidget
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
@@ -33,6 +33,9 @@ class CaseOverviewWindow:
         # 載入案件資料
         if self.case_controller:
             self._load_cases()
+
+        # 新增：初始化日期提醒控件變數
+        self.date_reminder_widget = None
 
         # 確保視窗顯示
         self.window.update()
@@ -166,11 +169,11 @@ class CaseOverviewWindow:
 
         self._create_toolbar_buttons()
 
-        # 搜尋區域 - 新增
+        # 🔥 修改：搜尋區域 - 調整高度以容納日期提醒控件
         self.search_frame = tk.Frame(
             self.content_frame,
             bg=AppConfig.COLORS['window_bg'],
-            height=40
+            height=60  # 增加高度
         )
         self.search_frame.pack(fill='x', pady=(0, 10))
         self.search_frame.pack_propagate(False)
@@ -194,10 +197,14 @@ class CaseOverviewWindow:
         self.field_control_frame.pack_propagate(False)
 
     def _create_search_bar(self):
-        """建立搜尋條"""
+        """建立搜尋條 - 包含跑馬燈式日期提醒和 placeholder 功能"""
+        # 左側搜尋區域
+        left_search_frame = tk.Frame(self.search_frame, bg=AppConfig.COLORS['window_bg'])
+        left_search_frame.pack(side='left', fill='x', expand=True)
+
         # 搜尋標籤
         search_label = tk.Label(
-            self.search_frame,
+            left_search_frame,
             text="搜尋：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
@@ -205,34 +212,33 @@ class CaseOverviewWindow:
         )
         search_label.pack(side='left', padx=(10, 5))
 
-        # 搜尋輸入框
+        # 🔥 修改：搜尋輸入框 - 添加 placeholder 功能
         self.search_entry = tk.Entry(
-            self.search_frame,
+            left_search_frame,
             textvariable=self.search_var,
             bg='white',
             fg='black',
             font=AppConfig.FONTS['text'],
-            width=40
+            width=30
         )
         self.search_entry.pack(side='left', padx=5)
 
-        # 綁定搜尋事件
-        self.search_var.trace_add('write', self._on_search_changed)
-        self.search_entry.bind('<Return>', self._on_search_enter)
+        # 🔥 新增：placeholder 相關設定
+        self.placeholder_text = "可搜尋：案件編號、當事人、案號、案件類型"
+        self.placeholder_active = True
 
-        # 搜尋說明（更新）
-        search_help = tk.Label(
-            self.search_frame,
-            text="（可搜尋：案件編號、當事人、案號、案件類型）",
-            bg=AppConfig.COLORS['window_bg'],
-            fg='#AAAAAA',
-            font=('Microsoft JhengHei', 8)
-        )
-        search_help.pack(side='left', padx=(10, 0))
+        # 設定初始 placeholder
+        self._set_placeholder()
+
+        # 🔥 修改：綁定搜尋事件 - 處理 placeholder
+        self.search_var.trace_add('write', self._on_search_changed_with_placeholder)
+        self.search_entry.bind('<FocusIn>', self._on_search_focus_in)
+        self.search_entry.bind('<FocusOut>', self._on_search_focus_out)
+        self.search_entry.bind('<Return>', self._on_search_enter)
 
         # 清除搜尋按鈕
         clear_btn = tk.Button(
-            self.search_frame,
+            left_search_frame,
             text="清除",
             command=self._clear_search,
             bg=AppConfig.COLORS['button_bg'],
@@ -244,13 +250,118 @@ class CaseOverviewWindow:
 
         # 搜尋結果統計
         self.search_result_label = tk.Label(
-            self.search_frame,
+            left_search_frame,
             text="",
             bg=AppConfig.COLORS['window_bg'],
             fg='#4CAF50',
             font=AppConfig.FONTS['text']
         )
-        self.search_result_label.pack(side='right', padx=(0, 10))
+        self.search_result_label.pack(side='left', padx=(10, 0))
+
+        # 右側跑馬燈式日期提醒控件
+        try:
+            from views.date_reminder_widget import DateReminderWidget
+            self.date_reminder_widget = DateReminderWidget(
+                self.search_frame,
+                case_data=self.case_data,
+                on_case_select=self._on_reminder_case_select
+            )
+        except ImportError as e:
+            print(f"無法載入日期提醒控件: {e}")
+            self.date_reminder_widget = None
+
+    def _set_placeholder(self):
+        """設定 placeholder"""
+        if self.placeholder_active:
+            self.search_entry.config(fg="#414141")
+            self.search_var.set(self.placeholder_text)
+
+    def _clear_placeholder(self):
+        """清除 placeholder"""
+        if self.placeholder_active:
+            self.placeholder_active = False
+            self.search_var.set("")
+            self.search_entry.config(fg='black')
+
+    def _restore_placeholder(self):
+        """恢復 placeholder"""
+        if not self.search_var.get().strip():
+            self.placeholder_active = True
+            self._set_placeholder()
+
+    def _on_search_focus_in(self, event):
+        """搜尋框獲得焦點時"""
+        self._clear_placeholder()
+
+    def _on_search_focus_out(self, event):
+        """搜尋框失去焦點時"""
+        self._restore_placeholder()
+
+    def _on_search_changed_with_placeholder(self, *args):
+        """搜尋內容變更時的處理（包含 placeholder 邏輯）"""
+        # 如果是 placeholder 狀態，不執行搜尋
+        if self.placeholder_active:
+            return
+
+        # 執行原有的搜尋邏輯
+        if hasattr(self, '_search_after_id'):
+            self.window.after_cancel(self._search_after_id)
+
+        self._search_after_id = self.window.after(300, self._perform_search)
+
+
+    def _on_reminder_case_select(self, case):
+        """日期提醒控件的案件選擇回調 - 修正選擇穩定性"""
+        try:
+            # 清除當前搜尋（如果有）
+            self.placeholder_active = False
+            self.search_var.set("")
+            self.search_entry.config(fg='black')
+            self.filtered_case_data = self.case_data.copy()
+            self._refresh_filtered_tree_data()
+
+            # 找到並選擇對應的案件
+            case_index = None
+            for i, current_case in enumerate(self.case_data):
+                if current_case.case_id == case.case_id:
+                    case_index = i
+                    break
+
+            if case_index is not None:
+                # 🔥 修正：延遲執行選擇，確保樹狀圖已更新
+                self.window.after(100, lambda: self._select_case_in_tree(case_index))
+            else:
+                print(f"未找到案件：{case.case_id}")
+
+        except Exception as e:
+            print(f"選擇案件失敗: {e}")
+
+    def _select_case_in_tree(self, case_index):
+        """在樹狀圖中選擇案件"""
+        try:
+            # 在樹狀圖中找到對應項目並選擇
+            for item in self.tree.get_children():
+                tags = self.tree.item(item, 'tags')
+                for tag in tags:
+                    if tag == f'index_{case_index}':
+                        # 清除現有選擇
+                        self.tree.selection_remove(self.tree.selection())
+
+                        # 選擇並聚焦到該項目
+                        self.tree.selection_set(item)
+                        self.tree.focus(item)
+                        self.tree.see(item)  # 確保項目可見
+
+                        # 🔥 修正：強制觸發選擇事件
+                        self.tree.event_generate('<<TreeviewSelect>>')
+
+                        print(f"已選擇案件索引: {case_index}")
+                        return
+
+            print(f"在樹狀圖中未找到案件索引: {case_index}")
+
+        except Exception as e:
+            print(f"在樹狀圖中選擇案件失敗: {e}")
 
     def _on_search_changed(self, *args):
         """搜尋內容變更時的即時搜尋"""
@@ -268,16 +379,20 @@ class CaseOverviewWindow:
         self._perform_search()
 
     def _perform_search(self):
-        """執行搜尋"""
+        """執行搜尋 - 修改：處理 placeholder 狀態"""
         try:
-            search_text = self.search_var.get().strip().lower()
+            # 如果是 placeholder 狀態，視為空搜尋
+            if self.placeholder_active:
+                search_text = ""
+            else:
+                search_text = self.search_var.get().strip().lower()
 
             if not search_text:
                 # 沒有搜尋文字時顯示所有資料
                 self.filtered_case_data = self.case_data.copy()
                 self.search_result_label.config(text="")
             else:
-                # 執行搜尋
+                # 執行搜尋 - 現有搜尋邏輯保持不變
                 self.filtered_case_data = []
 
                 for case in self.case_data:
@@ -330,6 +445,15 @@ class CaseOverviewWindow:
             # 更新樹狀圖顯示
             self._refresh_filtered_tree_data()
 
+            # 安全更新日期提醒控件的資料
+            if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget is not None:
+                try:
+                    # 使用過濾後的資料更新日期提醒
+                    display_data = self.filtered_case_data if search_text else self.case_data
+                    self.date_reminder_widget.update_case_data(display_data)
+                except Exception as e:
+                    print(f"更新日期提醒控件失敗: {e}")
+
             # 清空進度顯示（因為搜尋後選擇會改變）
             for widget in self.progress_display.winfo_children():
                 widget.destroy()
@@ -340,10 +464,21 @@ class CaseOverviewWindow:
             import traceback
             traceback.print_exc()
 
+
     def _clear_search(self):
-        """清除搜尋"""
+        """清除搜尋 - 修改：處理 placeholder"""
+        self.placeholder_active = False
         self.search_var.set("")
+        self.search_entry.config(fg='black')
         self.search_entry.focus()
+
+        # 安全重置日期提醒控件資料
+        if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget is not None:
+            try:
+                self.date_reminder_widget.update_case_data(self.case_data)
+            except Exception as e:
+                print(f"重置日期提醒控件失敗: {e}")
+
 
     def _refresh_filtered_tree_data(self):
         """重新整理樹狀圖資料（使用過濾後的資料）- 修正欄位對應"""
@@ -871,7 +1006,7 @@ class CaseOverviewWindow:
         self._refresh_tree_data()
 
     def _load_cases(self):
-        """載入案件資料（修改原有方法）"""
+        """載入案件資料（修改原有方法）- 添加日期提醒更新"""
         try:
             print("開始載入案件資料...")
 
@@ -891,13 +1026,20 @@ class CaseOverviewWindow:
                 else:
                     self._refresh_filtered_tree_data()
 
+                # 🔥 修正：安全更新日期提醒控件
+                if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget is not None:
+                    try:
+                        self.date_reminder_widget.update_case_data(self.case_data)
+                    except Exception as e:
+                        print(f"更新日期提醒控件失敗: {e}")
+
                 print("案件資料載入完成")
             else:
                 print("案件控制器未初始化")
 
         except Exception as e:
             print(f"載入案件資料失敗: {e}")
-            UnifiedMessageDialog.show_error(self.window,  f"載入案件資料失敗：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window, f"載入案件資料失敗：{str(e)}")
 
     def _refresh_tree_data(self):
         """重新整理樹狀圖資料（支援搜尋過濾）- 修正欄位對應"""
