@@ -1,6 +1,6 @@
 """
-📍 3. 統一主程式（客戶使用）
-客戶執行這個程式，系統自動識別授權類型
+📍 統一主程式（客戶使用）
+整合專案授權系統，使用統一樣式
 """
 
 import base64
@@ -26,6 +26,50 @@ def fix_import_path():
     if base_path not in sys.path:
         sys.path.insert(0, base_path)
 
+
+# 修正路徑並嘗試導入專案模組
+fix_import_path()
+
+try:
+    from utils.hardware_utils import HardwareUtils
+    from config.settings import AppConfig
+    from views.dialogs import UnifiedMessageDialog
+    USE_PROJECT_STYLE = True
+except ImportError:
+    # 如果無法導入專案模組，使用獨立實作
+    import platform
+
+    class HardwareUtils:
+        @staticmethod
+        def get_hardware_id():
+            try:
+                mac = uuid.getnode()
+                computer_name = platform.node()
+                unique_string = f"{mac}_{computer_name}"
+                return hashlib.sha256(unique_string.encode()).hexdigest()[:16]
+            except:
+                return hashlib.sha256(str(uuid.getnode()).encode()).hexdigest()[:16]
+
+        @staticmethod
+        def get_device_name():
+            return f"{platform.node()}_{platform.system()}"
+
+    class AppConfig:
+        COLORS = {
+            'window_bg': '#383838',
+            'title_bg': '#8B8B8B',
+            'title_fg': 'white',
+            'button_bg': '#8B8B8B',
+            'button_fg': 'white',
+            'text_color': 'white'
+        }
+        FONTS = {
+            'title': ('Microsoft JhengHei', 11, 'bold'),
+            'button': ('Microsoft JhengHei', 9),
+            'text': ('Microsoft JhengHei', 9)
+        }
+
+    USE_PROJECT_STYLE = False
 class UnifiedLicenseManager:
     """統一授權管理器"""
 
@@ -33,7 +77,11 @@ class UnifiedLicenseManager:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         self.license_file = os.path.join(script_dir, ".license_data")
         self.secret_salt = "CaseManagement2024"
-        self.hardware_id = self._get_hardware_id()
+        self.hardware_id = HardwareUtils.get_hardware_id()  # 使用統一工具類
+
+    def _get_device_name(self):
+        """取得設備名稱"""
+        return HardwareUtils.get_device_name()  # 使用統一工具類
 
     def _get_hardware_id(self):
         """取得硬體ID"""
