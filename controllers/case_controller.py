@@ -433,20 +433,111 @@ class CaseController:
             return False
 
     def generate_case_id(self) -> str:
-        """產生新的案件編號"""
+        """產生新的案件編號 - 民國年分(三碼)+XXX(三碼)格式"""
         try:
+            import datetime
+
+            # 計算民國年分
+            current_year = datetime.datetime.now().year
+            minguo_year = current_year - 1911
+
+            # 取得現有所有案件編號
             existing_ids = {case.case_id for case in self.cases}
-            year = datetime.now().year
 
-            for i in range(1, 10000):
-                case_id = f"C{year}{i:04d}"
-                if case_id not in existing_ids:
-                    return case_id
+            # 找出當年度最大編號
+            current_year_prefix = f"{minguo_year:03d}"
+            max_number = 0
 
-            raise RuntimeError("無法產生唯一的案件編號")
+            for case_id in existing_ids:
+                if case_id.startswith(current_year_prefix) and len(case_id) == 6:
+                    try:
+                        number = int(case_id[3:])
+                        max_number = max(max_number, number)
+                    except ValueError:
+                        continue
+
+            # 產生新編號
+            new_number = max_number + 1
+            new_case_id = f"{current_year_prefix}{new_number:03d}"
+
+            return new_case_id
+
         except Exception as e:
             print(f"產生案件編號失敗: {e}")
-            return f"C{datetime.now().year}0001"
+            # 備用方案
+            import datetime
+            current_year = datetime.datetime.now().year
+            minguo_year = current_year - 1911
+            return f"{minguo_year:03d}001"
+
+    def validate_case_id_format(self, case_id: str) -> bool:
+        """驗證案件編號格式"""
+        if not case_id or len(case_id) != 6:
+            return False
+
+        try:
+            # 檢查前三碼是否為數字（民國年分）
+            year_part = int(case_id[:3])
+            # 檢查後三碼是否為數字（流水號）
+            number_part = int(case_id[3:])
+
+            # 基本範圍檢查
+            if year_part < 100 or year_part > 200:  # 民國100-200年合理範圍
+                return False
+            if number_part < 1 or number_part > 999:
+                return False
+
+            return True
+        except ValueError:
+            return False
+
+    def check_case_id_duplicate(self, case_id: str, exclude_case_id: str = None) -> bool:
+        """檢查案件編號是否重複"""
+        for case in self.cases:
+            if case.case_id == case_id and case.case_id != exclude_case_id:
+                return True
+        return False
+
+    def update_case_id(self, old_case_id: str, new_case_id: str) -> tuple:
+        """更新案件編號 - 修正返回值處理"""
+        try:
+            # 驗證新編號格式
+            if not self.validate_case_id_format(new_case_id):
+                return False, "案件編號格式錯誤，應為6位數字(民國年分3碼+流水號3碼)"
+
+            # 檢查是否重複
+            if self.check_case_id_duplicate(new_case_id, old_case_id):
+                return False, f"案件編號 {new_case_id} 已存在"
+
+            # 找到並更新案件
+            for case in self.cases:
+                if case.case_id == old_case_id:
+                    case.case_id = new_case_id
+                    from datetime import datetime
+                    case.updated_date = datetime.now()
+
+                    success = self.save_cases()
+                    if success:
+                        # 更新案件資訊Excel檔案
+                        try:
+                            self.folder_manager.update_case_info_excel(case)
+                        except Exception as e:
+                            print(f"更新Excel失敗: {e}")
+
+                        case_display_name = AppConfig.format_case_display_name(case)
+                        print(f"已更新案件編號：{old_case_id} → {new_case_id} ({case_display_name})")
+                        return True, "案件編號更新成功"
+                    else:
+                        return False, "儲存案件資料失敗"
+
+            return False, f"找不到案件編號: {old_case_id}"
+
+        except Exception as e:
+            print(f"更新案件編號失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, f"更新失敗: {str(e)}"
+
 
     def get_statistics(self) -> dict:
         """取得案件統計資訊"""

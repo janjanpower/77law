@@ -217,10 +217,10 @@ class CaseOverviewWindow:
         self.search_var.trace_add('write', self._on_search_changed)
         self.search_entry.bind('<Return>', self._on_search_enter)
 
-        # 搜尋說明
+        # 搜尋說明（更新）
         search_help = tk.Label(
             self.search_frame,
-            text="（可搜尋：當事人、案號、案件類型）",
+            text="（可搜尋：案件編號、當事人、案號、案件類型）",
             bg=AppConfig.COLORS['window_bg'],
             fg='#AAAAAA',
             font=('Microsoft JhengHei', 8)
@@ -278,6 +278,11 @@ class CaseOverviewWindow:
                 self.filtered_case_data = []
 
                 for case in self.case_data:
+                    # 搜尋案件編號
+                    if search_text in case.case_id.lower():
+                        self.filtered_case_data.append(case)
+                        continue
+
                     # 搜尋當事人
                     if search_text in case.client.lower():
                         self.filtered_case_data.append(case)
@@ -291,11 +296,6 @@ class CaseOverviewWindow:
 
                     # 搜尋案件類型
                     if search_text in case.case_type.lower():
-                        self.filtered_case_data.append(case)
-                        continue
-
-                    # 搜尋案件編號
-                    if search_text in case.case_id.lower():
                         self.filtered_case_data.append(case)
                         continue
 
@@ -343,7 +343,7 @@ class CaseOverviewWindow:
         self.search_entry.focus()
 
     def _refresh_filtered_tree_data(self):
-        """重新整理樹狀圖資料（使用過濾後的資料）"""
+        """重新整理樹狀圖資料（使用過濾後的資料）- 修正欄位對應"""
         try:
             # 使用過濾後的資料
             data_to_display = self.filtered_case_data if hasattr(self, 'filtered_case_data') else self.case_data
@@ -354,6 +354,7 @@ class CaseOverviewWindow:
             for item in self.tree.get_children():
                 self.tree.delete(item)
 
+            # 取得當前顯示的欄位（按順序）
             current_columns = list(self.tree['columns'])
             print(f"當前樹狀圖欄位: {current_columns}")
 
@@ -361,27 +362,10 @@ class CaseOverviewWindow:
             for i, case in enumerate(data_to_display):
                 values = []
 
+                # 重要：使用統一的欄位值獲取方法
                 for col_id in current_columns:
-                    if col_id == 'case_type':
-                        values.append(getattr(case, 'case_type', ''))
-                    elif col_id == 'client':
-                        values.append(getattr(case, 'client', ''))
-                    elif col_id == 'lawyer':
-                        values.append(getattr(case, 'lawyer', '') or '')
-                    elif col_id == 'legal_affairs':
-                        values.append(getattr(case, 'legal_affairs', '') or '')
-                    elif col_id == 'case_reason':
-                        values.append(getattr(case, 'case_reason', '') or '')
-                    elif col_id == 'case_number':
-                        values.append(getattr(case, 'case_number', '') or '')
-                    elif col_id == 'opposing_party':
-                        values.append(getattr(case, 'opposing_party', '') or '')
-                    elif col_id == 'court':
-                        values.append(getattr(case, 'court', '') or '')
-                    elif col_id == 'division':
-                        values.append(getattr(case, 'division', '') or '')
-                    else:
-                        values.append('')
+                    value = self._get_case_field_value(case, col_id)
+                    values.append(value)
 
                 tag = 'evenrow' if i % 2 == 0 else 'oddrow'
                 item_id = self.tree.insert('', 'end', values=values, tags=(tag,))
@@ -473,10 +457,281 @@ class CaseOverviewWindow:
         self._update_tree_columns()
         self._setup_progress_visualization()
 
-        # 綁定事件
-        self.tree.bind('<Double-1>', self._on_item_double_click)
+        # 綁定事件 - 修正事件綁定順序
+        self.tree.bind('<Double-1>', self._on_tree_double_click)
         self.tree.bind('<Button-3>', self._on_item_right_click)
         self.tree.bind('<<TreeviewSelect>>', self._on_tree_select)
+
+        # 編輯相關變數
+        self.edit_item = None
+        self.edit_entry = None
+        self.is_editing = False  # 新增：編輯狀態標記
+
+
+    def _on_tree_double_click(self, event):
+        """樹狀圖雙擊事件 - 修正欄位識別"""
+        # 如果正在編輯，先完成當前編輯
+        if self.is_editing:
+            self._finish_edit_case_id()
+            return
+
+        region = self.tree.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+
+        item = self.tree.identify_row(event.y)
+        column = self.tree.identify_column(event.x)
+
+        if not item:
+            return
+
+        # 修正：根據實際欄位位置判斷是否為案件編號欄位
+        current_columns = list(self.tree['columns'])
+        if column == '#1' and current_columns and current_columns[0] == 'case_id':
+            # 延遲執行編輯，確保事件處理完成
+            self.window.after(10, lambda: self._start_edit_case_id(item, event))
+        else:
+            # 原有的編輯案件功能
+            self._edit_selected_case(item)
+
+    def _edit_selected_case(self, item):
+        """編輯選中的案件（原有功能）- 確保不在編輯狀態時才執行"""
+        if self.is_editing:
+            return
+
+        try:
+            tags = self.tree.item(item, 'tags')
+            case_index = None
+
+            for tag in tags:
+                if tag.startswith('index_'):
+                    case_index = int(tag.replace('index_', ''))
+                    break
+
+            if case_index is not None and case_index < len(self.case_data):
+                case = self.case_data[case_index]
+
+                from views.case_form import CaseFormDialog
+
+                def save_edited_case(case_data, mode):
+                    success = self.case_controller.update_case(case.case_id, case_data)
+                    if success:
+                        self._load_cases()
+                        case_display_name = AppConfig.format_case_display_name(case_data)
+                        self.window.after(100, lambda: UnifiedMessageDialog.show_success(self.window, f"案件 {case_display_name} 更新成功！"))
+                    else:
+                        UnifiedMessageDialog.show_error(self.window, "案件更新失敗！")
+                    return success
+
+                CaseFormDialog.show_edit_dialog(self.window, case, save_edited_case)
+            else:
+                print(f"無法取得有效的案件索引：tags={tags}")
+
+        except (ValueError, IndexError) as e:
+            print(f"編輯案件失敗: {e}")
+            UnifiedMessageDialog.show_error(self.window, "無法開啟案件編輯")
+
+    def _start_edit_case_id(self, item, event):
+        """開始編輯案件編號 - 修正焦點問題"""
+        try:
+            # 設定編輯狀態
+            self.is_editing = True
+
+            # 如果已經在編輯其他項目，先完成編輯
+            if self.edit_entry:
+                self._cancel_edit_case_id()
+
+            # 取得當前案件編號
+            values = self.tree.item(item, 'values')
+            if not values:
+                self.is_editing = False
+                return
+
+            current_case_id = values[0]
+
+            # 取得欄位位置和大小
+            try:
+                x, y, width, height = self.tree.bbox(item, '#1')
+            except tk.TclError:
+                # 如果無法取得bbox，使用預設位置
+                self.is_editing = False
+                return
+
+            # 建立編輯輸入框
+            self.edit_item = item
+            self.edit_entry = tk.Entry(
+                self.tree,
+                font=AppConfig.FONTS['text'],
+                justify='center',
+                borderwidth=1,
+                relief='solid'
+            )
+
+            # 設定位置和內容
+            self.edit_entry.place(x=x, y=y, width=width, height=height)
+            self.edit_entry.insert(0, current_case_id)
+            self.edit_entry.select_range(0, tk.END)
+
+            # 重要：延遲設定焦點，確保輸入框已經顯示
+            self.window.after(50, self._set_edit_focus)
+
+            # 綁定事件 - 修正事件處理
+            self.edit_entry.bind('<Return>', self._on_edit_return)
+            self.edit_entry.bind('<Escape>', self._on_edit_escape)
+            self.edit_entry.bind('<FocusOut>', self._on_edit_focus_out)
+
+            # 綁定點擊其他位置完成編輯
+            self.tree.bind('<Button-1>', self._on_tree_click_while_editing, add='+')
+
+        except Exception as e:
+            print(f"開始編輯案件編號失敗: {e}")
+            self.is_editing = False
+
+    def _set_edit_focus(self):
+        """設定編輯框焦點"""
+        if self.edit_entry and self.edit_entry.winfo_exists():
+            self.edit_entry.focus_force()
+            self.edit_entry.icursor(tk.END)
+
+    def _on_edit_return(self, event):
+        """處理Enter鍵"""
+        self._finish_edit_case_id()
+        return 'break'  # 阻止事件繼續傳播
+
+    def _on_edit_escape(self, event):
+        """處理Escape鍵"""
+        self._cancel_edit_case_id()
+        return 'break'
+
+    def _on_edit_focus_out(self, event):
+        """處理失去焦點 - 延遲處理避免衝突"""
+        if self.is_editing:
+            # 延遲處理，給其他事件處理的時間
+            self.window.after(100, self._check_and_finish_edit)
+
+    def _on_tree_click_while_editing(self, event):
+        """編輯時點擊樹狀圖其他位置"""
+        if self.is_editing and self.edit_entry:
+            # 檢查是否點擊在編輯框內
+            try:
+                edit_x = self.edit_entry.winfo_x()
+                edit_y = self.edit_entry.winfo_y()
+                edit_width = self.edit_entry.winfo_width()
+                edit_height = self.edit_entry.winfo_height()
+
+                if not (edit_x <= event.x <= edit_x + edit_width and
+                    edit_y <= event.y <= edit_y + edit_height):
+                    # 點擊在編輯框外，完成編輯
+                    self._finish_edit_case_id()
+            except:
+                pass
+
+    def _check_and_finish_edit(self):
+        """檢查並完成編輯"""
+        if self.is_editing and self.edit_entry:
+            # 檢查焦點是否還在編輯框
+            try:
+                focused_widget = self.window.focus_get()
+                if focused_widget != self.edit_entry:
+                    self._finish_edit_case_id()
+            except:
+                self._finish_edit_case_id()
+
+    def _finish_edit_case_id(self):
+        """完成編輯案件編號 - 修正重複訊息問題"""
+        if not self.edit_entry or not self.edit_item or not self.is_editing:
+            return
+
+        # 立即設定編輯狀態為False，避免重複執行
+        self.is_editing = False
+
+        try:
+            new_case_id = self.edit_entry.get().strip().upper()
+
+            # 取得原始案件編號
+            tags = self.tree.item(self.edit_item, 'tags')
+            case_index = None
+            for tag in tags:
+                if tag.startswith('index_'):
+                    case_index = int(tag.replace('index_', ''))
+                    break
+
+            if case_index is not None and case_index < len(self.case_data):
+                old_case_id = self.case_data[case_index].case_id
+
+                # 如果沒有變更，直接結束編輯
+                if new_case_id == old_case_id:
+                    self._cleanup_edit()
+                    return
+
+                # 驗證並更新
+                success, message = self.case_controller.update_case_id(old_case_id, new_case_id)
+
+                # 先清理編輯組件
+                self._cleanup_edit()
+
+                # 再顯示結果訊息
+                if success:
+                    # 重新載入資料
+                    self._load_cases()
+                    # 重新選擇該案件
+                    self._reselect_case_by_id(new_case_id)
+                    UnifiedMessageDialog.show_success(self.window, f"案件編號更新成功：{old_case_id} → {new_case_id}")
+                else:
+                    UnifiedMessageDialog.show_error(self.window, f"案件編號更新失敗：{message}")
+            else:
+                self._cleanup_edit()
+                UnifiedMessageDialog.show_error(self.window, "無法找到對應的案件資料")
+
+        except Exception as e:
+            print(f"完成編輯案件編號失敗: {e}")
+            self._cleanup_edit()
+            UnifiedMessageDialog.show_error(self.window, f"編輯失敗：{str(e)}")
+
+    def _cancel_edit_case_id(self):
+        """取消編輯案件編號"""
+        self.is_editing = False
+        self._cleanup_edit()
+
+    def _cleanup_edit(self):
+        """清理編輯相關組件和事件"""
+        # 解除樹狀圖點擊事件綁定
+        try:
+            self.tree.unbind('<Button-1>')
+            # 重新綁定原始事件（如果需要）
+            # self.tree.bind('<Button-1>', self._some_other_handler)
+        except:
+            pass
+
+        # 銷毀編輯輸入框
+        if self.edit_entry:
+            try:
+                self.edit_entry.destroy()
+            except:
+                pass
+            self.edit_entry = None
+
+        # 清理編輯項目
+        self.edit_item = None
+
+    def _reselect_case_by_id(self, case_id: str):
+        """根據案件編號重新選擇案件"""
+        try:
+            for i, case in enumerate(self.case_data):
+                if case.case_id == case_id:
+                    # 找到對應的樹狀圖項目
+                    for item in self.tree.get_children():
+                        tags = self.tree.item(item, 'tags')
+                        for tag in tags:
+                            if tag == f'index_{i}':
+                                self.tree.selection_set(item)
+                                self.tree.focus(item)
+                                # 確保項目可見
+                                self.tree.see(item)
+                                return
+                    break
+        except Exception as e:
+            print(f"重新選擇案件失敗: {e}")
 
     def _setup_tree_style(self):
         """設定樹狀圖樣式"""
@@ -499,10 +754,12 @@ class CaseOverviewWindow:
         self.tree.tag_configure('evenrow', background='white')
 
     def _update_tree_columns(self):
-        """更新樹狀圖欄位"""
+        """更新樹狀圖欄位 - 修正欄位順序問題"""
         try:
+            # 按照 order 順序排序可見欄位
             visible_fields = []
-            for field_id, field_info in AppConfig.OVERVIEW_FIELDS.items():
+            for field_id, field_info in sorted(AppConfig.OVERVIEW_FIELDS.items(),
+                                            key=lambda x: x[1]['order']):
                 if field_info['visible']:
                     visible_fields.append(field_id)
 
@@ -520,7 +777,7 @@ class CaseOverviewWindow:
             print(f"更新樹狀圖欄位失敗: {e}")
 
     def _create_field_controls(self):
-        """建立欄位顯示控制"""
+        """建立欄位顯示控制 - 修正初始化邏輯"""
         control_title = tk.Label(
             self.field_control_frame,
             text="隱藏欄位：",
@@ -531,7 +788,10 @@ class CaseOverviewWindow:
         control_title.pack(side='left', padx=(10, 10))
 
         self.field_vars = {}
-        for field_id, field_info in AppConfig.OVERVIEW_FIELDS.items():
+
+        # 按照 order 順序建立控制項
+        for field_id, field_info in sorted(AppConfig.OVERVIEW_FIELDS.items(),
+                                        key=lambda x: x[1]['order']):
             var = tk.BooleanVar(value=not field_info['visible'])
             self.field_vars[field_id] = var
 
@@ -549,14 +809,40 @@ class CaseOverviewWindow:
             )
             checkbox.pack(side='left', padx=10)
 
-    def _toggle_field(self, field_id: str):
-        """切換欄位顯示狀態"""
-        is_hidden = self.field_vars[field_id].get()
-        if not hasattr(self, 'visible_fields'):
-            self.visible_fields = AppConfig.OVERVIEW_FIELDS.copy()
+    def _update_tree_columns(self):
+        """更新樹狀圖欄位 - 修正欄位順序問題"""
+        try:
+            # 按照 order 順序排序可見欄位
+            visible_fields = []
+            for field_id, field_info in sorted(AppConfig.OVERVIEW_FIELDS.items(),
+                                            key=lambda x: x[1]['order']):
+                if field_info['visible']:
+                    visible_fields.append(field_id)
 
-        self.visible_fields[field_id]['visible'] = not is_hidden
+            print(f"更新欄位配置: 可見欄位 = {visible_fields}")
+
+            self.tree.configure(columns=visible_fields)
+            self.tree['show'] = 'headings'
+
+            for field_id in visible_fields:
+                field_info = AppConfig.OVERVIEW_FIELDS[field_id]
+                self.tree.heading(field_id, text=field_info['name'], anchor='center')
+                self.tree.column(field_id, width=field_info['width'], minwidth=80, anchor='center')
+
+        except Exception as e:
+            print(f"更新樹狀圖欄位失敗: {e}")
+
+    def _toggle_field(self, field_id: str):
+        """切換欄位顯示狀態 - 修正欄位控制邏輯"""
+        is_hidden = self.field_vars[field_id].get()
+
+        # 更新可見狀態
+        AppConfig.OVERVIEW_FIELDS[field_id]['visible'] = not is_hidden
+
+        # 重新設定樹狀圖欄位
         self._update_tree_columns()
+
+        # 重新載入資料以確保欄位對應正確
         self._refresh_tree_data()
 
     def _load_cases(self):
@@ -589,7 +875,7 @@ class CaseOverviewWindow:
             UnifiedMessageDialog.show_error(self.window,  f"載入案件資料失敗：{str(e)}")
 
     def _refresh_tree_data(self):
-        """重新整理樹狀圖資料（支援搜尋過濾）"""
+        """重新整理樹狀圖資料（支援搜尋過濾）- 修正欄位對應"""
         try:
             # 決定要顯示的資料：如果有過濾資料就用過濾資料，否則用全部資料
             data_to_display = getattr(self, 'filtered_case_data', self.case_data)
@@ -600,6 +886,7 @@ class CaseOverviewWindow:
             for item in self.tree.get_children():
                 self.tree.delete(item)
 
+            # 取得當前顯示的欄位（按順序）
             current_columns = list(self.tree['columns'])
             print(f"當前樹狀圖欄位: {current_columns}")
 
@@ -607,27 +894,10 @@ class CaseOverviewWindow:
             for display_index, case in enumerate(data_to_display):
                 values = []
 
+                # 重要：按照當前欄位順序填入資料
                 for col_id in current_columns:
-                    if col_id == 'case_type':
-                        values.append(getattr(case, 'case_type', ''))
-                    elif col_id == 'client':
-                        values.append(getattr(case, 'client', ''))
-                    elif col_id == 'lawyer':
-                        values.append(getattr(case, 'lawyer', '') or '')
-                    elif col_id == 'legal_affairs':
-                        values.append(getattr(case, 'legal_affairs', '') or '')
-                    elif col_id == 'case_reason':
-                        values.append(getattr(case, 'case_reason', '') or '')
-                    elif col_id == 'case_number':
-                        values.append(getattr(case, 'case_number', '') or '')
-                    elif col_id == 'opposing_party':
-                        values.append(getattr(case, 'opposing_party', '') or '')
-                    elif col_id == 'court':
-                        values.append(getattr(case, 'court', '') or '')
-                    elif col_id == 'division':
-                        values.append(getattr(case, 'division', '') or '')
-                    else:
-                        values.append('')
+                    value = self._get_case_field_value(case, col_id)
+                    values.append(value)
 
                 tag = 'evenrow' if display_index % 2 == 0 else 'oddrow'
                 item_id = self.tree.insert('', 'end', values=values, tags=(tag,))
@@ -651,6 +921,31 @@ class CaseOverviewWindow:
             print(f"重新整理樹狀圖資料失敗: {e}")
             import traceback
             traceback.print_exc()
+
+    def _get_case_field_value(self, case, field_id):
+        """取得案件指定欄位的值 - 統一欄位值獲取邏輯"""
+        if field_id == 'case_id':
+            return getattr(case, 'case_id', '')
+        elif field_id == 'case_type':
+            return getattr(case, 'case_type', '')
+        elif field_id == 'client':
+            return getattr(case, 'client', '')
+        elif field_id == 'lawyer':
+            return getattr(case, 'lawyer', '') or ''
+        elif field_id == 'legal_affairs':
+            return getattr(case, 'legal_affairs', '') or ''
+        elif field_id == 'case_reason':
+            return getattr(case, 'case_reason', '') or ''
+        elif field_id == 'case_number':
+            return getattr(case, 'case_number', '') or ''
+        elif field_id == 'opposing_party':
+            return getattr(case, 'opposing_party', '') or ''
+        elif field_id == 'court':
+            return getattr(case, 'court', '') or ''
+        elif field_id == 'division':
+            return getattr(case, 'division', '') or ''
+        else:
+            return ''
 
     def _setup_progress_visualization(self):
         """設定進度可視化區域"""

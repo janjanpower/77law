@@ -11,9 +11,10 @@ import sys
 import tkinter as tk
 import uuid
 from datetime import datetime, timedelta
-from tkinter import messagebox
 
 from cryptography.fernet import Fernet
+from views.base_window import BaseWindow
+from views.dialogs import UnifiedMessageDialog
 
 
 def fix_import_path():
@@ -26,6 +27,20 @@ def fix_import_path():
     if base_path not in sys.path:
         sys.path.insert(0, base_path)
 
+    # 確保可以導入自訂義模組
+    try:
+        from views.base_window import BaseWindow
+        from views.dialogs import UnifiedMessageDialog
+        from config.settings import AppConfig
+        globals()['BaseWindow'] = BaseWindow
+        globals()['UnifiedMessageDialog'] = UnifiedMessageDialog
+        globals()['AppConfig'] = AppConfig
+    except ImportError as e:
+        print(f"警告：無法導入自訂義模組，將使用預設樣式: {e}")
+        # 設定預設值，避免程式崩潰
+        globals()['BaseWindow'] = object
+        globals()['UnifiedMessageDialog'] = None
+        globals()['AppConfig'] = None
 
 # 修正路徑並嘗試導入專案模組
 fix_import_path()
@@ -468,117 +483,130 @@ class UnifiedLicenseManager:
         except:
             return False, "設備註冊資訊錯誤"
 
-class UnifiedLicenseDialog:
+class UnifiedLicenseDialog(BaseWindow):
     """統一授權對話框"""
 
     def __init__(self, parent=None):
         self.result = None
         self.license_key = ""
 
-        self.window = tk.Toplevel(parent) if parent else tk.Tk()
-        self.window.title("🎫 軟體授權驗證")
-        self.window.geometry("700x600")
-        self.window.resizable(False, False)
+        super().__init__(title="🎫 軟體授權驗證", width=600, height=500, resizable=False, parent=parent)
 
-        # 置中顯示
-        x = (self.window.winfo_screenwidth() // 2) - 350
-        y = (self.window.winfo_screenheight() // 2) - 300
-        self.window.geometry(f"700x1000+{x}+{y}")
+    def _create_layout(self):
+        """建立授權對話框佈局"""
+        super()._create_layout()
+        self._create_license_content()
 
-        self._create_ui()
-
-        if parent:
-            self.window.transient(parent)
-            self.window.grab_set()
-
-    def _create_ui(self):
-        """建立UI介面"""
-        # 標題
-        title_label = tk.Label(self.window, text="🎫 案件管理系統 - 授權驗證",
-                              font=("Arial", 16, "bold"))
-        title_label.pack(pady=20)
+    def _create_license_content(self):
+        """建立授權內容 - 使用統一樣式"""
+        # 歡迎標籤
+        welcome_label = tk.Label(
+            self.content_frame,
+            text="歡迎使用案件管理系統！",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['welcome']
+        )
+        welcome_label.pack(pady=20)
 
         # 說明文字
-        info_text = """
-歡迎使用案件管理系統！
+        info_text = """本系統支援三種授權類型，請輸入您的授權碼：
 
-本系統支援三種授權類型，請輸入您的授權碼：
+💻 單設備授權 - 僅限一台電腦使用
+🖥️🖥️🖥️ 多設備授權 - 可在多台電腦使用
+🚀 升級授權 - 單設備用戶升級專用
 
-💻 單設備授權
-   • 僅限一台電腦使用
-   • 與硬體綁定，安全性高
-   • 適合個人用戶
+系統會自動識別您的授權類型並進行相應處理。"""
 
-🖥️🖥️🖥️ 多設備授權
-   • 可在多台電腦使用
-   • 支援團隊協作
-   • 靈活設備管理
-
-🚀 升級授權
-   • 單設備用戶升級專用
-   • 保持原有授權時間
-   • 平滑升級體驗
-
-系統會自動識別您的授權類型並進行相應處理。
-        """
-
-        info_label = tk.Label(self.window, text=info_text, font=("Arial", 11),
-                             justify='left', wraplength=650)
+        info_label = tk.Label(
+            self.content_frame,
+            text=info_text,
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['text'],
+            justify='left',
+            wraplength=650
+        )
         info_label.pack(pady=10, padx=20)
 
         # 授權碼輸入區域
-        input_frame = tk.Frame(self.window)
+        input_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
         input_frame.pack(pady=20)
 
-        tk.Label(input_frame, text="請輸入授權碼：", font=("Arial", 12),
-                fg='#2196F3').pack(anchor='w')
+        tk.Label(
+            input_frame,
+            text="請輸入授權碼：",
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#2196F3',
+            font=AppConfig.FONTS['button']
+        ).pack(anchor='w')
 
-        self.license_entry = tk.Entry(input_frame, width=70, font=("Arial", 11))
+        self.license_entry = tk.Entry(
+            input_frame,
+            width=70,
+            font=AppConfig.FONTS['text'],
+            bg='white',
+            fg='black'
+        )
         self.license_entry.pack(pady=10)
         self.license_entry.focus()
 
-        # 授權碼格式示例
-        example_frame = tk.LabelFrame(self.window, text="授權碼格式示例", font=("Arial", 10))
-        example_frame.pack(pady=10, padx=40, fill='x')
-
-        examples = [
-            ("💻 單設備", "U0lOR0xFfEFCQ0RFRkdIMTIzNHwuLi4="),
-            ("🖥️ 多設備", "TUNMVElmQUJDREVGRzEyMzR8M3wuLi4="),
-            ("🚀 升級", "VVBHUkFERXxBQkNERUZHSDF8NXwuLi4=")
-        ]
-
-        for i, (type_name, example) in enumerate(examples):
-            row_frame = tk.Frame(example_frame)
-            row_frame.pack(fill='x', padx=10, pady=2)
-
-            tk.Label(row_frame, text=f"{type_name}：",
-                    font=("Arial", 9), width=8).pack(side='left')
-            tk.Label(row_frame, text=example,
-                    font=("Arial", 9), fg='blue').pack(side='left')
-
         # 按鈕區域
-        button_frame = tk.Frame(self.window)
-        button_frame.pack(pady=30)
-
-        tk.Button(button_frame, text="🎫 驗證授權", command=self._validate_license,
-                 width=15, height=2, font=("Arial", 12),
-                 bg='#4CAF50', fg='white').pack(side='left', padx=10)
-
-        tk.Button(button_frame, text="🔧 取得硬體ID", command=self._show_hardware_info,
-                 width=15, height=2, font=("Arial", 12)).pack(side='left', padx=10)
-
-        tk.Button(button_frame, text="❌ 取消", command=self._cancel,
-                 width=15, height=2, font=("Arial", 12)).pack(side='left', padx=10)
+        self._create_license_buttons(input_frame)
 
         # 綁定Enter鍵
         self.license_entry.bind('<Return>', lambda e: self._validate_license())
+
+    def _create_license_buttons(self, parent):
+        """建立授權按鈕"""
+        button_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
+        button_frame.pack(pady=30)
+
+        # 驗證授權按鈕
+        verify_btn = tk.Button(
+            button_frame,
+            text='🎫 驗證授權',
+            command=self._validate_license,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=15,
+            height=2
+        )
+        verify_btn.pack(side='left', padx=10)
+
+        # 取得硬體ID按鈕
+        hardware_btn = tk.Button(
+            button_frame,
+            text='🔧 取得硬體ID',
+            command=self._show_hardware_info,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=15,
+            height=2
+        )
+        hardware_btn.pack(side='left', padx=10)
+
+        # 取消按鈕
+        cancel_btn = tk.Button(
+            button_frame,
+            text='❌ 取消',
+            command=self.close,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=15,
+            height=2
+        )
+        cancel_btn.pack(side='left', padx=10)
 
     def _validate_license(self):
         """驗證授權碼"""
         license_key = self.license_entry.get().strip()
 
         if not license_key:
-            messagebox.showerror("❌ 錯誤", "請輸入授權碼")
+            UnifiedMessageDialog.show_error(self.window, "請輸入授權碼")
             return
 
         try:
@@ -586,15 +614,15 @@ class UnifiedLicenseDialog:
             success, message = license_manager.validate_and_activate_license(license_key)
 
             if success:
-                messagebox.showinfo("✅ 授權成功", message)
+                UnifiedMessageDialog.show_success(self.window, message)
                 self.result = True
                 self.license_key = license_key
-                self.window.destroy()
+                self.close()
             else:
-                messagebox.showerror("❌ 授權失敗", message)
+                UnifiedMessageDialog.show_error(self.window, message)
 
         except Exception as e:
-            messagebox.showerror("❌ 錯誤", f"授權驗證過程發生錯誤：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window, f"授權驗證過程發生錯誤：{str(e)}")
 
     def _show_hardware_info(self):
         """顯示硬體ID資訊"""
@@ -602,56 +630,16 @@ class UnifiedLicenseDialog:
             license_manager = UnifiedLicenseManager()
             hardware_id = license_manager.hardware_id
 
-            info_text = f"""
-🖥️ 您的硬體ID：{hardware_id}
+            info_text = f"""🖥️ 您的硬體ID：{hardware_id}
 
-💡 使用說明：
-• 如需申請單設備授權，請將此硬體ID提供給供應商
-• 如需升級授權，也需要提供此硬體ID
-• 多設備授權不需要硬體ID
+如需申請單設備授權，請將此硬體ID提供給供應商
+"""
 
-📋 您也可以執行「硬體ID查詢工具」來取得此資訊
-            """
-
-            # 建立硬體ID顯示視窗
-            hw_window = tk.Toplevel(self.window)
-            hw_window.title("🔧 硬體ID資訊")
-            hw_window.geometry("500x300")
-            hw_window.resizable(False, False)
-
-            # 置中顯示
-            x = (hw_window.winfo_screenwidth() // 2) - 250
-            y = (hw_window.winfo_screenheight() // 2) - 150
-            hw_window.geometry(f"500x300+{x}+{y}")
-
-            tk.Label(hw_window, text=info_text, font=("Arial", 11),
-                    justify='left').pack(pady=20, padx=20)
-
-            # 硬體ID複製區域
-            copy_frame = tk.Frame(hw_window)
-            copy_frame.pack(pady=10)
-
-            id_entry = tk.Entry(copy_frame, width=25, font=("Arial", 12, "bold"),
-                               justify='center', state='readonly', bg='#f0f0f0')
-            id_entry.pack(side='left', padx=5)
-
-            id_entry.config(state='normal')
-            id_entry.insert(0, hardware_id)
-            id_entry.config(state='readonly')
-
-            def copy_hardware_id():
-                hw_window.clipboard_clear()
-                hw_window.clipboard_append(hardware_id)
-                messagebox.showinfo("✅ 成功", "硬體ID已複製到剪貼簿", parent=hw_window)
-
-            tk.Button(copy_frame, text="📋 複製", command=copy_hardware_id,
-                     font=("Arial", 10)).pack(side='left', padx=5)
-
-            tk.Button(hw_window, text="關閉", command=hw_window.destroy,
-                     width=10, font=("Arial", 11)).pack(pady=20)
+            # 使用統一的訊息對話框
+            UnifiedMessageDialog.show_info(self.window, info_text, "🔧 硬體ID資訊")
 
         except Exception as e:
-            messagebox.showerror("❌ 錯誤", f"無法取得硬體ID：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window, f"無法取得硬體ID：{str(e)}")
 
     def _cancel(self):
         """取消"""
@@ -686,10 +674,12 @@ def check_license():
 
                 warning_msg += "\n\n請及時聯繫供應商續期"
 
-                root = tk.Tk()
-                root.withdraw()
-                messagebox.showwarning("授權提醒", warning_msg)
-                root.destroy()
+                # 建立臨時父視窗用於顯示統一樣式對話框
+                temp_root = tk.Tk()
+                temp_root.withdraw()
+
+                UnifiedMessageDialog.show_warning(temp_root, warning_msg, "授權提醒")
+                temp_root.destroy()
 
             return True, "授權有效"
         else:
@@ -704,6 +694,157 @@ def show_license_input():
     dialog.window.wait_window()
     return dialog.result
 
+# main_unified.py - 新增授權檢查對話框類別
+
+class LicenseCheckDialog(BaseWindow):
+    """授權檢查對話框"""
+
+    def __init__(self, message):
+        self.message = message
+        self.result = False
+
+        super().__init__(title="🎫 授權檢查", width=450, height=250, resizable=False, parent=None)
+
+    def _create_layout(self):
+        """建立對話框佈局"""
+        super()._create_layout()
+        self._create_check_content()
+
+    def _create_check_content(self):
+        """建立授權檢查內容"""
+        # 主容器
+        main_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # 訊息顯示
+        message_label = tk.Label(
+            main_frame,
+            text=self.message,
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['text'],
+            wraplength=400,
+            justify='center'
+        )
+        message_label.pack(expand=True, pady=(0, 10))
+
+        # 詢問文字
+        question_label = tk.Label(
+            main_frame,
+            text="是否要輸入授權碼？",
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#4CAF50',
+            font=AppConfig.FONTS['button']
+        )
+        question_label.pack(pady=(0, 20))
+
+        # 按鈕區域
+        button_frame = tk.Frame(main_frame, bg=AppConfig.COLORS['window_bg'])
+        button_frame.pack(side='bottom')
+
+        # 是按鈕
+        yes_btn = tk.Button(
+            button_frame,
+            text='是',
+            command=self._on_yes,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=8,
+            height=1
+        )
+        yes_btn.pack(side='left', padx=5)
+
+        # 否按鈕
+        no_btn = tk.Button(
+            button_frame,
+            text='否',
+            command=self._on_no,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=8,
+            height=1
+        )
+        no_btn.pack(side='left', padx=5)
+
+    def _on_yes(self):
+        """是按鈕事件"""
+        self.result = True
+        self.close()
+
+    def _on_no(self):
+        """否按鈕事件"""
+        self.result = False
+        self.close()
+
+def show_license_check_dialog(message):
+    """顯示授權檢查對話框"""
+    dialog = LicenseCheckDialog(message)
+    dialog.window.wait_window()
+    return dialog.result
+
+# main_unified.py - 新增退出對話框類別
+
+class ExitDialog(BaseWindow):
+    """程式退出對話框"""
+
+    def __init__(self):
+        super().__init__(title="提示", width=350, height=200, resizable=False, parent=None)
+
+    def _create_layout(self):
+        """建立對話框佈局"""
+        super()._create_layout()
+        self._create_exit_content()
+
+    def _create_exit_content(self):
+        """建立退出內容"""
+        # 主容器
+        main_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        main_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # 圖示和訊息
+        icon_frame = tk.Frame(main_frame, bg=AppConfig.COLORS['window_bg'])
+        icon_frame.pack(expand=True)
+
+        # 退出圖示
+        icon_label = tk.Label(
+            icon_frame,
+            text="👋",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=('Arial', 24)
+        )
+        icon_label.pack(pady=(0, 10))
+
+        # 退出訊息
+        message_label = tk.Label(
+            icon_frame,
+            text="程式已退出",
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS['button']
+        )
+        message_label.pack()
+
+        # 確定按鈕
+        ok_btn = tk.Button(
+            main_frame,
+            text='確定',
+            command=self.close,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=10,
+            height=1
+        )
+        ok_btn.pack(side='bottom', pady=(20, 0))
+
+def show_exit_dialog():
+    """顯示退出對話框"""
+    dialog = ExitDialog()
+    dialog.window.wait_window()
+
 def main():
     """統一主程式入口"""
     try:
@@ -714,48 +855,42 @@ def main():
         is_valid, message = check_license()
 
         if not is_valid:
-            # 建立臨時根視窗
-            temp_root = tk.Tk()
-            temp_root.withdraw()
-
-            # 顯示授權狀態訊息
-            result = messagebox.askyesno("🎫 授權檢查",
-                f"{message}\n\n是否要輸入授權碼？",
-                parent=temp_root)
+            # 使用自訂義確認對話框
+            result = show_license_check_dialog(message)
 
             if result:
                 # 顯示授權輸入對話框
                 if not show_license_input():
-                    messagebox.showinfo("提示", "程式將退出", parent=temp_root)
-                    temp_root.destroy()
+                    show_exit_dialog()
                     return
 
                 # 重新檢查授權
                 is_valid, new_message = check_license()
                 if not is_valid:
-                    messagebox.showerror("❌ 錯誤", f"授權驗證失敗：{new_message}", parent=temp_root)
+                    # 建立臨時父視窗用於錯誤顯示
+                    temp_root = tk.Tk()
+                    temp_root.withdraw()
+                    UnifiedMessageDialog.show_error(temp_root, f"授權驗證失敗：{new_message}")
                     temp_root.destroy()
                     return
             else:
-                messagebox.showinfo("提示", "程式將退出", parent=temp_root)
-                temp_root.destroy()
+                show_exit_dialog()
                 return
-
-            temp_root.destroy()
 
         # 授權有效，載入主程式
         try:
-            # 嘗試載入您的主程式
             from views.main_window import MainWindow
             app = MainWindow()
             app.run()
         except ImportError:
             # 如果找不到主程式，顯示成功訊息
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showinfo("✅ 授權成功",
-                "授權驗證成功！\n\n您現在可以正常使用軟體了。\n\n（註：此為演示版本，請將此檔案與您的主程式整合）")
-            root.destroy()
+            temp_root = tk.Tk()
+            temp_root.withdraw()
+            UnifiedMessageDialog.show_success(
+                temp_root,
+                "授權驗證成功！\n\n您現在可以正常使用軟體了。\n\n（註：此為演示版本，請將此檔案與您的主程式整合）"
+            )
+            temp_root.destroy()
 
     except Exception as e:
         print(f"程式執行錯誤: {e}")

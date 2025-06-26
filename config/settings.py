@@ -31,8 +31,9 @@ class AppConfig:
         'button_spacing': 10
     }
 
-    # 總覽樹狀圖顯示欄位（只顯示主要資訊）
+    # 總覽樹狀圖顯示欄位（確保order值正確）
     OVERVIEW_FIELDS = {
+        'case_id': {'name': '案件編號', 'width': 100, 'visible': True, 'order': 0},
         'case_type': {'name': '案件類型', 'width': 100, 'visible': True, 'order': 1},
         'client': {'name': '當事人', 'width': 150, 'visible': True, 'order': 2},
         'lawyer': {'name': '委任律師', 'width': 120, 'visible': True, 'order': 3},
