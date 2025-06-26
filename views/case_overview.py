@@ -6,6 +6,7 @@ import os
 from config.settings import AppConfig
 from models.case_model import CaseData
 from views.dialogs import UnifiedMessageDialog
+from views.import_data_dialog import ImportDataDialog
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
@@ -401,13 +402,21 @@ class CaseOverviewWindow:
         )
         self.upload_btn.pack(side='left', padx=5)
 
-        self.export_btn = self.create_button(
+        self.import_btn = self.create_button(
             self.toolbar_frame,
-            '匯出案件資訊',
-            self._on_export_excel,
+            '匯入資料',
+            self._on_import_data,
             'Function'
         )
-        self.export_btn.pack(side='left', padx=5)
+        self.import_btn.pack(side='right', padx=(5, 10))
+
+        # self.export_btn = self.create_button(
+        #     self.toolbar_frame,
+        #     '匯出案件資訊',
+        #     self._on_export_excel,
+        #     'Function'
+        # )
+        # self.export_btn.pack(side='left', padx=5)
 
     def create_button(self, parent, text, command, style_type='Custom'):
         """建立標準化按鈕"""
@@ -432,6 +441,20 @@ class CaseOverviewWindow:
                 font=AppConfig.FONTS['button'],
                 width=10
             )
+
+    def _on_import_data(self):
+        """匯入資料事件"""
+        if not self.case_controller:
+            UnifiedMessageDialog.show_warning(self.window, "案件控制器未初始化")
+            return
+
+        # 顯示匯入對話框
+        ImportDataDialog.show_import_dialog(self.window, self.case_controller, self._on_import_complete)
+
+    def _on_import_complete(self):
+        """匯入完成後的回調"""
+        print("Excel資料匯入完成，重新載入案件列表")
+        self._load_cases()
 
     def _setup_treeview(self):
         """設定樹狀圖控件"""
@@ -1047,7 +1070,7 @@ class CaseOverviewWindow:
         info_frame.pack(side='left', padx=10, anchor='nw')
 
         # 案件資訊顯示 - 只顯示案號
-        case_number = getattr(case, 'case_number', None) or '未設定'
+        case_number = getattr(case, 'case_number', None) or '無'
         tk.Label(
             info_frame,
             text=f"案號: {case_number}",
@@ -1061,8 +1084,8 @@ class CaseOverviewWindow:
         row2_frame = tk.Frame(info_frame, bg=AppConfig.COLORS['window_bg'])
         row2_frame.pack(fill='x', pady=(0, 4))
 
-        case_reason = getattr(case, 'case_reason', None) or '未設定'
-        opposing_party = getattr(case, 'opposing_party', None) or '未設定'
+        case_reason = getattr(case, 'case_reason', None) or '無'
+        opposing_party = getattr(case, 'opposing_party', None) or '無'
 
         tk.Label(
             row2_frame,
@@ -1085,8 +1108,8 @@ class CaseOverviewWindow:
         row3_frame = tk.Frame(info_frame, bg=AppConfig.COLORS['window_bg'])
         row3_frame.pack(fill='x', pady=(0, 4))
 
-        court = getattr(case, 'court', None) or '未設定'
-        division = getattr(case, 'division', None) or '未設定'
+        court = getattr(case, 'court', None) or '無'
+        division = getattr(case, 'division', None) or '無'
 
         tk.Label(
             row3_frame,
@@ -1511,31 +1534,31 @@ class CaseOverviewWindow:
             print(f"開啟新增案件對話框失敗: {e}")
             UnifiedMessageDialog.show_error(self.window,  f"無法開啟新增案件對話框：{str(e)}")
 
-    def _on_export_excel(self):
-        """匯出Excel事件"""
-        if not self.case_controller:
-            UnifiedMessageDialog.show_warning(self.window,  "案件控制器未初始化")
-            return
+    # def _on_export_excel(self):
+    #     """匯出Excel事件"""
+    #     if not self.case_controller:
+    #         UnifiedMessageDialog.show_warning(self.window,  "案件控制器未初始化")
+    #         return
 
-        if not self.case_data:
-            UnifiedMessageDialog.show_warning(self.window,  "沒有資料可以匯出")
-            return
+    #     if not self.case_data:
+    #         UnifiedMessageDialog.show_warning(self.window,  "沒有資料可以匯出")
+    #         return
 
-        file_path = filedialog.asksaveasfilename(
-            title="儲存Excel檔案",
-            defaultextension=".xlsx",
-            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
-        )
+    #     file_path = filedialog.asksaveasfilename(
+    #         title="儲存Excel檔案",
+    #         defaultextension=".xlsx",
+    #         filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+    #     )
 
-        if file_path:
-            try:
-                success = self.case_controller.export_to_excel(file_path)
-                if success:
-                    UnifiedMessageDialog.show_success(self.window,  f"資料已匯出到：\n{file_path}")
-                else:
-                    UnifiedMessageDialog.show_error(self.window,  "資料匯出失敗！")
-            except Exception as e:
-                UnifiedMessageDialog.show_error(self.window,  f"匯出過程發生錯誤：{str(e)}")
+    #     if file_path:
+    #         try:
+    #             success = self.case_controller.export_to_excel(file_path)
+    #             if success:
+    #                 UnifiedMessageDialog.show_success(self.window,  f"資料已匯出到：\n{file_path}")
+    #             else:
+    #                 UnifiedMessageDialog.show_error(self.window,  "資料匯出失敗！")
+    #         except Exception as e:
+    #             UnifiedMessageDialog.show_error(self.window,  f"匯出過程發生錯誤：{str(e)}")
 
     def _on_item_double_click(self, event):
         """項目雙擊事件 - 編輯案件"""

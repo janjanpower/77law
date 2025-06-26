@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from models.case_model import CaseData
 from utils.excel_handler import ExcelHandler
 from utils.folder_manager import FolderManager
@@ -571,3 +571,186 @@ class CaseController:
         except Exception as e:
             print(f"取得統計資訊失敗: {e}")
             return {}
+
+    def import_cases_from_excel_auto(self, file_path: str) -> Tuple[bool, str]:
+        """
+        自動識別Excel工作表並匯入案件資料
+
+        Args:
+            file_path: Excel檔案路徑
+
+        Returns:
+            Tuple[bool, str]: (成功狀態, 結果訊息)
+        """
+        try:
+            # 先分析Excel檔案
+            analyze_success, analyze_message, categorized_sheets = ExcelHandler.analyze_excel_sheets(file_path)
+
+            if not analyze_success:
+                return False, analyze_message
+
+            # 準備要匯入的工作表
+            sheets_to_import = {}
+            if categorized_sheets['民事']:
+                sheets_to_import['民事'] = categorized_sheets['民事']
+            if categorized_sheets['刑事']:
+                sheets_to_import['刑事'] = categorized_sheets['刑事']
+
+            if not sheets_to_import:
+                return False, "沒有找到民事或刑事相關的工作表"
+
+            # 執行匯入
+            import_success, import_message, all_cases = ExcelHandler.import_cases_from_multiple_sheets(
+                file_path, sheets_to_import
+            )
+
+            if not import_success:
+                return False, import_message
+
+            # 批量新增案件
+            total_added = 0
+            total_duplicates = 0
+            error_cases = []
+
+            for case_type, cases in all_cases.items():
+                for case in cases:
+                    try:
+                        # 產生案件編號
+                        case.case_id = self.generate_case_id()
+
+                        # 修改：檢查是否重複（根據當事人、案件類型和案號）
+                        case_number = getattr(case, 'case_number', '') or ''
+                        existing_case = self._find_existing_case_by_client_and_number(
+                            case.client, case.case_type, case_number
+                        )
+
+                        if existing_case:
+                            total_duplicates += 1
+                            continue
+
+                        # 新增案件
+                        if self.add_case(case):
+                            total_added += 1
+                        else:
+                            error_cases.append(case.client)
+
+                    except Exception as e:
+                        error_cases.append(f"{case.client}: {str(e)}")
+                        continue
+
+            # 建立最終結果訊息
+            final_message = f"📋 Excel匯入結果\n\n"
+            final_message += f"🔍 檔案分析結果：\n{analyze_message}\n\n"
+            final_message += f"✅ 成功新增：{total_added} 筆案件\n"
+
+            if total_duplicates > 0:
+                final_message += f"⚠️ 重複跳過：{total_duplicates} 筆案件\n"
+
+            if error_cases:
+                final_message += f"❌ 新增失敗：{len(error_cases)} 筆案件\n"
+                final_message += f"失敗案件：{', '.join(error_cases[:3])}"
+                if len(error_cases) > 3:
+                    final_message += f"...等 {len(error_cases)} 筆"
+
+            return total_added > 0, final_message
+
+        except Exception as e:
+            return False, f"匯入過程發生錯誤：{str(e)}"
+
+    def import_cases_from_sheet(self, file_path: str, case_type: str) -> Tuple[bool, str]:
+        """
+        從Excel工作表匯入案件資料
+
+        Args:
+            file_path: Excel檔案路徑
+            case_type: 案件類型
+
+        Returns:
+            Tuple[bool, str]: (成功狀態, 結果訊息)
+        """
+        try:
+            # 使用ExcelHandler解析Excel檔案
+            success, message, cases = ExcelHandler.import_cases_from_sheet_with_mapping(file_path, case_type)
+
+            if not success:
+                return False, message
+
+            if not cases:
+                return False, "沒有找到有效的案件資料"
+
+            # 批量新增案件
+            added_count = 0
+            duplicate_count = 0
+            error_cases = []
+
+            for case in cases:
+                try:
+                    # 產生案件編號
+                    case.case_id = self.generate_case_id()
+
+                    # 修改：檢查是否重複（以當事人、案件類型和案號為檢查依據）
+                    case_number = getattr(case, 'case_number', '') or ''
+                    existing_case = self._find_existing_case_by_client_and_number(
+                        case.client, case.case_type, case_number
+                    )
+
+                    if existing_case:
+                        duplicate_count += 1
+                        continue
+
+                    # 新增案件
+                    if self.add_case(case):
+                        added_count += 1
+                    else:
+                        error_cases.append(case.client)
+
+                except Exception as e:
+                    error_cases.append(f"{case.client}: {str(e)}")
+                    continue
+
+            # 建立結果訊息
+            result_message = f"匯入完成！\n\n成功新增：{added_count} 筆案件"
+
+            if duplicate_count > 0:
+                result_message += f"\n重複跳過：{duplicate_count} 筆案件"
+
+            if error_cases:
+                result_message += f"\n新增失敗：{len(error_cases)} 筆案件"
+                result_message += "\n失敗原因：" + "、".join(error_cases[:3])
+                if len(error_cases) > 3:
+                    result_message += f"...等 {len(error_cases)} 項"
+
+            return added_count > 0, result_message
+
+        except Exception as e:
+            return False, f"匯入過程發生錯誤：{str(e)}"
+
+    def _find_existing_case_by_client_and_number(self, client_name: str, case_type: str, case_number: str = None) -> Optional[CaseData]:
+        """
+        根據當事人姓名、案件類型和案號查找現有案件
+
+        Args:
+            client_name: 當事人姓名
+            case_type: 案件類型
+            case_number: 案號（可選）
+
+        Returns:
+            Optional[CaseData]: 找到的案件或None
+        """
+        for case in self.cases:
+            # 檢查當事人和案件類型是否相同
+            if (case.client.strip().lower() == client_name.strip().lower() and
+                case.case_type == case_type):
+
+                # 如果提供了案號，則必須案號也相同才算重複
+                if case_number:
+                    existing_case_number = getattr(case, 'case_number', '') or ''
+                    if existing_case_number.strip() == case_number.strip():
+                        return case
+                else:
+                    # 如果沒有提供案號，檢查現有案件是否也沒有案號
+                    existing_case_number = getattr(case, 'case_number', '') or ''
+                    if not existing_case_number.strip():
+                        return case
+
+        return None

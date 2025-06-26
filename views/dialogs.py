@@ -339,7 +339,7 @@ class UnifiedMessageDialog:
     def _setup_window(self, title):
         """設定視窗基本屬性"""
         self.window.title(f"{AppConfig.WINDOW_TITLES['main']} - {title}")
-        self.window.geometry("400x180")
+        self.window.geometry("400x250")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
         self.window.overrideredirect(True)
         self.window.resizable(False, False)
