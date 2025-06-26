@@ -1,0 +1,6 @@
+# requirements_license.txt (額外需要的套件)
+"""
+授權系統需要的額外套件
+請執行：pip install -r requirements_license.txt
+"""
+cryptography>=3.4.8

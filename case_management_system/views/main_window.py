@@ -1,14 +1,17 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import os
 import json
+import os
+import tkinter as tk
+from tkinter import filedialog
+
 from config.settings import AppConfig
 from views.dialogs import UnifiedMessageDialog
+
 
 class MainWindow:
     """主應用程式視窗"""
 
     def __init__(self):
+        self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.case_overview = None
         self.selected_folder = None
         self.drag_data = {"x": 0, "y": 0}
@@ -21,7 +24,9 @@ class MainWindow:
 
     def _load_app_settings(self):
         """載入應用程式設定"""
-        settings_file = AppConfig.DATA_CONFIG['settings_file']
+        # 取得主程式檔案所在目錄
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        settings_file = os.path.join(script_dir, AppConfig.DATA_CONFIG['settings_file'])
         default_settings = {
             'data_folder': None,
             'last_opened': None
@@ -38,7 +43,9 @@ class MainWindow:
 
     def _save_app_settings(self):
         """儲存應用程式設定"""
-        settings_file = AppConfig.DATA_CONFIG['settings_file']
+        # 取得主程式檔案所在目錄
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        settings_file = os.path.join(script_dir, AppConfig.DATA_CONFIG['settings_file'])
         try:
             with open(settings_file, 'w', encoding='utf-8') as f:
                 json.dump(self.app_settings, f, ensure_ascii=False, indent=2)
