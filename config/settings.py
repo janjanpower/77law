@@ -16,9 +16,9 @@ class AppConfig:
     # 字體設定 - 統一調整字體大小
     FONTS = {
         'title': ('Microsoft JhengHei', 11, 'bold'),
-        'button': ('Microsoft JhengHei', 9),         # 按鈕字體改為 20
-        'text': ('Microsoft JhengHei', 9),           # 一般文字改為 10
-        'welcome': ('Microsoft JhengHei', 9, 'bold')
+        'button': ('Microsoft JhengHei', 10),         # 按鈕字體改為 20
+        'text': ('Microsoft JhengHei',11),           # 一般文字改為 10
+        'welcome': ('Microsoft JhengHei', 11, 'bold')
     }
 
     # 尺寸設定

@@ -28,7 +28,7 @@ class UploadFileDialog(BaseWindow):
         self.target_folder = None
 
         title = "上傳資料"
-        super().__init__(title=title, width=500, height=475, resizable=False, parent=parent)
+        super().__init__(title=title, width=500, height=500, resizable=False, parent=parent)
         if parent:
             self.window.lift()  # 確保視窗置頂
             self.window.attributes('-topmost', True)  # 暫時設為最頂層
@@ -254,7 +254,7 @@ class UploadFileDialog(BaseWindow):
             width=8,
             height=1
         )
-        upload_btn.pack(side='left', padx=5,pady=(0,35))
+        upload_btn.pack(side='left', padx=5,pady=(0,20))
 
         # 取消按鈕
         cancel_btn = tk.Button(
@@ -267,7 +267,7 @@ class UploadFileDialog(BaseWindow):
             width=8,
             height=1
         )
-        cancel_btn.pack(side='left', padx=5,pady=(0,35))
+        cancel_btn.pack(side='left', padx=5,pady=(0,20))
 
     def _start_upload(self):
         """開始上傳檔案"""

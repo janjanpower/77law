@@ -22,7 +22,7 @@ class ImportDataDialog(BaseWindow):
         self.selected_file = None
 
         title = "匯入Excel資料"
-        super().__init__(title=title, width=520, height=420, resizable=False, parent=parent)
+        super().__init__(title=title, width=520, height=480, resizable=False, parent=parent)
         if parent:
             self.window.lift()
             self.window.attributes('-topmost', True)
@@ -40,11 +40,10 @@ class ImportDataDialog(BaseWindow):
         main_frame.pack(fill='both', expand=True, padx=20, pady=20)
 
         # 說明文字
-        info_text = """📋 Excel自動匯入功能說明：
+        info_text = """Excel匯入功能說明：
 
-🔍 自動識別功能：
-   • 系統會自動分析Excel檔案中的所有工作表
-   • 系統會顯示詳細的匯入結果報告
+   • 請確認EXCEL中的含有「民事」或是「刑事」的分頁
+   • 系統會截取相關必要資料自動新增案件
 """
 
         info_label = tk.Label(
@@ -68,7 +67,7 @@ class ImportDataDialog(BaseWindow):
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['button']
-        ).pack(anchor='w', pady=(0, 5))
+        ).pack(anchor='w', pady=(0, 15))
 
         file_select_frame = tk.Frame(file_frame, bg=AppConfig.COLORS['window_bg'])
         file_select_frame.pack(fill='x')

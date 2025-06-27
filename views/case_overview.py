@@ -37,6 +37,10 @@ class CaseOverviewWindow:
         # 新增：初始化日期提醒控件變數
         self.date_reminder_widget = None
 
+        # 🔥 新增：追蹤當前選中的案件
+        self.current_selected_case_id = None
+        self.current_selected_item = None
+
         # 確保視窗顯示
         self.window.update()
         self.window.deiconify()
@@ -191,7 +195,7 @@ class CaseOverviewWindow:
         self.field_control_frame = tk.Frame(
             self.content_frame,
             bg=AppConfig.COLORS['window_bg'],
-            height=25
+            height=50
         )
         self.field_control_frame.pack(fill='x')
         self.field_control_frame.pack_propagate(False)
@@ -210,7 +214,7 @@ class CaseOverviewWindow:
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['button']
         )
-        search_label.pack(side='left', padx=(10, 5))
+        search_label.pack(side='left', padx=(10, 0))
 
         # 🔥 修改：搜尋輸入框 - 添加 placeholder 功能
         self.search_entry = tk.Entry(
@@ -219,12 +223,12 @@ class CaseOverviewWindow:
             bg='white',
             fg='black',
             font=AppConfig.FONTS['text'],
-            width=30
+            width=20,
         )
-        self.search_entry.pack(side='left', padx=5)
+        self.search_entry.pack(side='left', padx=0)
 
         # 🔥 新增：placeholder 相關設定
-        self.placeholder_text = "可搜尋：案件編號、當事人、案號、案件類型"
+        self.placeholder_text = "搜尋案件欄位資料"
         self.placeholder_active = True
 
         # 設定初始 placeholder
@@ -244,7 +248,7 @@ class CaseOverviewWindow:
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
             font=AppConfig.FONTS['text'],
-            width=6
+            width=7
         )
         clear_btn.pack(side='left', padx=(10, 0))
 
@@ -311,12 +315,21 @@ class CaseOverviewWindow:
 
 
     def _on_reminder_case_select(self, case):
-        """日期提醒控件的案件選擇回調 - 修正選擇穩定性"""
+        """日期提醒控件的案件選擇回調 - 🔥 修改：改進選擇穩定性和持續性"""
         try:
+            print(f"日期提醒回調：選擇案件 {case.case_id} - {case.client}")
+
+            # 🔥 修改：先通知日期提醒控件記住這個選擇
+            if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
+                self.date_reminder_widget.set_selected_case(case.case_id)
+
             # 清除當前搜尋（如果有）
-            self.placeholder_active = False
-            self.search_var.set("")
-            self.search_entry.config(fg='black')
+            if not self.placeholder_active:
+                self.placeholder_active = False
+                self.search_var.set("")
+                self.search_entry.config(fg='black')
+
+            # 重置過濾資料
             self.filtered_case_data = self.case_data.copy()
             self._refresh_filtered_tree_data()
 
@@ -328,13 +341,52 @@ class CaseOverviewWindow:
                     break
 
             if case_index is not None:
-                # 🔥 修正：延遲執行選擇，確保樹狀圖已更新
-                self.window.after(100, lambda: self._select_case_in_tree(case_index))
+                print(f"找到案件索引: {case_index}")
+                # 🔥 修改：延遲執行選擇，確保樹狀圖已更新，並持續保持選擇
+                self.window.after(150, lambda: self._select_and_maintain_case_selection(case_index, case.case_id))
             else:
                 print(f"未找到案件：{case.case_id}")
 
         except Exception as e:
             print(f"選擇案件失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _select_and_maintain_case_selection(self, case_index, case_id):
+        """🔥 新增：選擇案件並維持選擇狀態"""
+        try:
+            # 在樹狀圖中找到對應項目並選擇
+            selected = False
+            for item in self.tree.get_children():
+                tags = self.tree.item(item, 'tags')
+                for tag in tags:
+                    if tag == f'index_{case_index}':
+                        # 清除現有選擇
+                        self.tree.selection_remove(self.tree.selection())
+
+                        # 選擇並聚焦到該項目
+                        self.tree.selection_set(item)
+                        self.tree.focus(item)
+                        self.tree.see(item)  # 確保項目可見
+
+                        # 🔥 重要：強制觸發選擇事件以更新進度顯示
+                        self.tree.event_generate('<<TreeviewSelect>>')
+
+                        # 🔥 新增：記住當前選中的案件，用於維持選擇
+                        self.current_selected_case_id = case_id
+                        self.current_selected_item = item
+
+                        print(f"已選擇並維持案件索引: {case_index}, ID: {case_id}")
+                        selected = True
+                        break
+                if selected:
+                    break
+
+            if not selected:
+                print(f"在樹狀圖中未找到案件索引: {case_index}")
+
+        except Exception as e:
+            print(f"選擇並維持案件選擇失敗: {e}")
 
     def _select_case_in_tree(self, case_index):
         """在樹狀圖中選擇案件"""
@@ -481,12 +533,15 @@ class CaseOverviewWindow:
 
 
     def _refresh_filtered_tree_data(self):
-        """重新整理樹狀圖資料（使用過濾後的資料）- 修正欄位對應"""
+        """重新整理樹狀圖資料（使用過濾後的資料）- 🔥 修改：保持選擇狀態"""
         try:
             # 使用過濾後的資料
             data_to_display = self.filtered_case_data if hasattr(self, 'filtered_case_data') else self.case_data
 
             print(f"開始重新整理樹狀圖，顯示案件數量: {len(data_to_display)}")
+
+            # 🔥 記住當前選中的案件ID（如果有的話）
+            previous_selected_case_id = getattr(self, 'current_selected_case_id', None)
 
             # 清空現有項目
             for item in self.tree.get_children():
@@ -497,7 +552,8 @@ class CaseOverviewWindow:
             print(f"當前樹狀圖欄位: {current_columns}")
 
             # 填入過濾後的資料
-            for i, case in enumerate(data_to_display):
+            item_to_select = None
+            for display_index, case in enumerate(data_to_display):
                 values = []
 
                 # 重要：使用統一的欄位值獲取方法
@@ -505,14 +561,30 @@ class CaseOverviewWindow:
                     value = self._get_case_field_value(case, col_id)
                     values.append(value)
 
-                tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+                tag = 'evenrow' if display_index % 2 == 0 else 'oddrow'
                 item_id = self.tree.insert('', 'end', values=values, tags=(tag,))
 
                 # 保存原始案件索引以便後續操作
-                original_index = self.case_data.index(case)
-                existing_tags = self.tree.item(item_id, 'tags')
-                new_tags = list(existing_tags) + [f'index_{original_index}']
-                self.tree.item(item_id, tags=new_tags)
+                try:
+                    original_index = self.case_data.index(case)
+                    existing_tags = self.tree.item(item_id, 'tags')
+                    new_tags = list(existing_tags) + [f'index_{original_index}']
+                    self.tree.item(item_id, tags=new_tags)
+
+                    # 🔥 檢查是否為之前選中的案件
+                    if previous_selected_case_id and case.case_id == previous_selected_case_id:
+                        item_to_select = item_id
+
+                except ValueError:
+                    # 如果找不到原始索引，使用顯示索引作為備案
+                    print(f"警告：無法找到案件 {case.case_id} 的原始索引")
+                    existing_tags = self.tree.item(item_id, 'tags')
+                    new_tags = list(existing_tags) + [f'index_{display_index}']
+                    self.tree.item(item_id, tags=new_tags)
+
+            # 🔥 重新選擇之前選中的案件（如果還存在的話）
+            if item_to_select:
+                self.window.after(50, lambda: self._restore_selection(item_to_select, previous_selected_case_id))
 
             print(f"樹狀圖重新整理完成，已載入 {len(data_to_display)} 筆資料")
 
@@ -520,6 +592,28 @@ class CaseOverviewWindow:
             print(f"重新整理樹狀圖資料失敗: {e}")
             import traceback
             traceback.print_exc()
+
+    def _restore_selection(self, item_to_select, case_id):
+        """🔥 新增：恢復選擇狀態"""
+        try:
+            if item_to_select and self.tree.exists(item_to_select):
+                # 選擇項目
+                self.tree.selection_set(item_to_select)
+                self.tree.focus(item_to_select)
+                self.tree.see(item_to_select)
+
+                # 觸發選擇事件
+                self.tree.event_generate('<<TreeviewSelect>>')
+
+                # 更新記錄
+                self.current_selected_case_id = case_id
+                self.current_selected_item = item_to_select
+
+                print(f"已恢復選擇案件: {case_id}")
+            else:
+                print(f"無法恢復選擇，項目不存在: {item_to_select}")
+        except Exception as e:
+            print(f"恢復選擇失敗: {e}")
 
     def _create_toolbar_buttons(self):
         """建立工具列按鈕"""
@@ -1121,7 +1215,7 @@ class CaseOverviewWindow:
             text="案件進度",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['button']
+            font=AppConfig.FONTS['text']
         )
         progress_title.pack(pady=5)
 
@@ -1132,7 +1226,7 @@ class CaseOverviewWindow:
         self.progress_display.pack(fill='both', expand=True, padx=10)
 
     def _on_tree_select(self, event):
-        """樹狀圖選擇事件"""
+        """樹狀圖選擇事件 - 🔥 修改：同步更新日期提醒控件的選擇狀態"""
         selection = self.tree.selection()
         if selection:
             # 清空進度顯示
@@ -1153,12 +1247,37 @@ class CaseOverviewWindow:
 
                 if case_index is not None and case_index < len(self.case_data):
                     case = self.case_data[case_index]
+
+                    # 🔥 新增：同步更新日期提醒控件的選擇狀態
+                    if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
+                        self.date_reminder_widget.set_selected_case(case.case_id)
+
+                    # 🔥 新增：記住當前選中的案件
+                    self.current_selected_case_id = case.case_id
+                    self.current_selected_item = item
+
                     self._display_case_progress(case)
                 else:
                     print(f"無法取得有效的案件索引：tags={tags}")
+                    # 🔥 清除選擇狀態
+                    if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
+                        self.date_reminder_widget.clear_selection()
+                    self.current_selected_case_id = None
+                    self.current_selected_item = None
 
             except (ValueError, IndexError) as e:
                 print(f"取得案件索引失敗: {e}")
+                # 🔥 清除選擇狀態
+                if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
+                    self.date_reminder_widget.clear_selection()
+                self.current_selected_case_id = None
+                self.current_selected_item = None
+        else:
+            # 🔥 沒有選擇時清除狀態
+            if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
+                self.date_reminder_widget.clear_selection()
+            self.current_selected_case_id = None
+            self.current_selected_item = None
 
     def _get_stage_color_by_date(self, stage_date: str, is_current: bool = False) -> tuple:
         """
@@ -1219,8 +1338,8 @@ class CaseOverviewWindow:
             info_frame,
             text=f"案號: {case_number}",
             bg=AppConfig.COLORS['window_bg'],
-            fg='#4CAF50',
-            font=AppConfig.FONTS['button'],
+            fg='white',
+            font=AppConfig.FONTS['text'],
             wraplength=280
         ).pack(anchor='w', pady=(0, 4))
 

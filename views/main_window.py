@@ -193,7 +193,7 @@ class MainWindow:
             textvariable=self.folder_path_var,
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],  # 使用統一字體設定
+            font=AppConfig.FONTS['button'],  # 使用統一字體設定
             wraplength=350
         )
         self.folder_label.pack(pady=5)

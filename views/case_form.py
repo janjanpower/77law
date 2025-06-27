@@ -32,7 +32,7 @@ class CaseFormDialog(BaseWindow):
 
         title = AppConfig.WINDOW_TITLES['add_case'] if mode == 'add' else AppConfig.WINDOW_TITLES['edit_case']
         # 調整視窗高度，移除滾軸需要的空間
-        super().__init__(title=title, width=400, height=600, resizable=False, parent=parent)
+        super().__init__(title=title, width=400, height=650, resizable=False, parent=parent)
         if parent:
             self.window.lift()  # 確保視窗置頂
             self.window.attributes('-topmost', True)  # 暫時設為最頂層
