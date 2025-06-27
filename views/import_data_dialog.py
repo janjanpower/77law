@@ -26,7 +26,19 @@ class ImportDataDialog(BaseWindow):
         if parent:
             self.window.lift()
             self.window.attributes('-topmost', True)
-            self.window.after(100, lambda: self.window.attributes('-topmost', False))
+            self.window.focus_force()
+            # 確保視窗完全顯示後再設定事件
+            self.window.after(100, self._ensure_topmost)
+
+    def _ensure_topmost(self):
+        """🔥 新增：確保視窗保持置頂"""
+        try:
+            if self.window.winfo_exists():
+                self.window.attributes('-topmost', True)
+                self.window.lift()
+                self.window.focus_force()
+        except:
+            pass
 
     def _create_layout(self):
         """建立對話框佈局"""

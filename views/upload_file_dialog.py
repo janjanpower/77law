@@ -30,10 +30,21 @@ class UploadFileDialog(BaseWindow):
         title = "上傳資料"
         super().__init__(title=title, width=500, height=500, resizable=False, parent=parent)
         if parent:
-            self.window.lift()  # 確保視窗置頂
-            self.window.attributes('-topmost', True)  # 暫時設為最頂層
-            self.window.after(100, lambda: self.window.attributes('-topmost', False))  # 100ms後取消最頂層
+            self.window.lift()
+            self.window.attributes('-topmost', True)
+            self.window.focus_force()
+            # 確保視窗完全顯示後再設定事件
+            self.window.after(100, self._ensure_topmost)
 
+    def _ensure_topmost(self):
+        """🔥 新增：確保視窗保持置頂"""
+        try:
+            if self.window.winfo_exists():
+                self.window.attributes('-topmost', True)
+                self.window.lift()
+                self.window.focus_force()
+        except:
+            pass
     def _create_layout(self):
         """建立對話框佈局"""
         super()._create_layout()

@@ -9,6 +9,7 @@ from models.case_model import CaseData
 from views.dialogs import UnifiedMessageDialog
 from views.import_data_dialog import ImportDataDialog
 from views.date_reminder_widget import DateReminderWidget
+from views.case_transfer_dialog import CaseTransferDialog
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
@@ -633,6 +634,17 @@ class CaseOverviewWindow:
         )
         self.upload_btn.pack(side='left', padx=5)
 
+        # 🔥 新增：結案轉移按鈕（第三個按鈕）
+        self.transfer_btn = self.create_button(
+            self.toolbar_frame,
+            '結案轉移',
+            self._on_case_transfer,
+            'Function'
+        )
+        self.transfer_btn.pack(side='left', padx=5)
+        # 初始狀態為隱藏
+        self.transfer_btn.pack_forget()
+
         self.import_btn = self.create_button(
             self.toolbar_frame,
             '匯入資料',
@@ -1100,7 +1112,7 @@ class CaseOverviewWindow:
         self._refresh_tree_data()
 
     def _load_cases(self):
-        """載入案件資料（修改原有方法）- 添加日期提醒更新"""
+        """載入案件資料（修改原有方法）- 添加日期提醒更新和轉移按鈕重置"""
         try:
             print("開始載入案件資料...")
 
@@ -1113,6 +1125,9 @@ class CaseOverviewWindow:
 
                 # 初始化過濾資料
                 self.filtered_case_data = self.case_data.copy()
+
+                # 🔥 新增：重置轉移按鈕狀態
+                self._hide_transfer_button()
 
                 # 如果有搜尋條件，重新執行搜尋
                 if hasattr(self, 'search_var') and self.search_var.get().strip():
@@ -1226,7 +1241,7 @@ class CaseOverviewWindow:
         self.progress_display.pack(fill='both', expand=True, padx=10)
 
     def _on_tree_select(self, event):
-        """樹狀圖選擇事件 - 🔥 修改：同步更新日期提醒控件的選擇狀態"""
+        """樹狀圖選擇事件 - 🔥 修改：添加結案轉移按鈕控制"""
         selection = self.tree.selection()
         if selection:
             # 清空進度顯示
@@ -1248,6 +1263,9 @@ class CaseOverviewWindow:
                 if case_index is not None and case_index < len(self.case_data):
                     case = self.case_data[case_index]
 
+                    # 🔥 新增：檢查是否顯示結案轉移按鈕
+                    self._update_transfer_button_visibility(case)
+
                     # 🔥 新增：同步更新日期提醒控件的選擇狀態
                     if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
                         self.date_reminder_widget.set_selected_case(case.case_id)
@@ -1259,7 +1277,8 @@ class CaseOverviewWindow:
                     self._display_case_progress(case)
                 else:
                     print(f"無法取得有效的案件索引：tags={tags}")
-                    # 🔥 清除選擇狀態
+                    # 🔥 清除選擇狀態和隱藏轉移按鈕
+                    self._hide_transfer_button()
                     if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
                         self.date_reminder_widget.clear_selection()
                     self.current_selected_case_id = None
@@ -1267,17 +1286,111 @@ class CaseOverviewWindow:
 
             except (ValueError, IndexError) as e:
                 print(f"取得案件索引失敗: {e}")
-                # 🔥 清除選擇狀態
+                # 🔥 清除選擇狀態和隱藏轉移按鈕
+                self._hide_transfer_button()
                 if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
                     self.date_reminder_widget.clear_selection()
                 self.current_selected_case_id = None
                 self.current_selected_item = None
         else:
-            # 🔥 沒有選擇時清除狀態
+            # 🔥 沒有選擇時清除狀態和隱藏轉移按鈕
+            self._hide_transfer_button()
             if hasattr(self, 'date_reminder_widget') and self.date_reminder_widget:
                 self.date_reminder_widget.clear_selection()
             self.current_selected_case_id = None
             self.current_selected_item = None
+
+    def _update_transfer_button_visibility(self, case):
+        """🔥 新增：更新結案轉移按鈕顯示狀態"""
+        try:
+            # 檢查案件是否有"已結案"階段
+            has_closed_stage = False
+            if hasattr(case, 'progress_stages') and case.progress_stages:
+                has_closed_stage = '已結案' in case.progress_stages
+
+            if has_closed_stage:
+                self._show_transfer_button()
+            else:
+                self._hide_transfer_button()
+
+        except Exception as e:
+            print(f"更新轉移按鈕顯示狀態失敗: {e}")
+            self._hide_transfer_button()
+
+    def _show_transfer_button(self):
+        """🔥 新增：顯示結案轉移按鈕"""
+        try:
+            # 重新包裝按鈕到正確位置（第三個位置）
+            self.transfer_btn.pack_forget()
+            self.transfer_btn.pack(side='left', padx=5, after=self.upload_btn)
+        except Exception as e:
+            print(f"顯示轉移按鈕失敗: {e}")
+
+    def _hide_transfer_button(self):
+        """🔥 新增：隱藏結案轉移按鈕"""
+        try:
+            self.transfer_btn.pack_forget()
+        except Exception as e:
+            print(f"隱藏轉移按鈕失敗: {e}")
+
+    def _on_case_transfer(self):
+        """🔥 新增：結案轉移事件"""
+        # 檢查是否選擇了案件
+        selection = self.tree.selection()
+        if not selection:
+            UnifiedMessageDialog.show_warning(self.window, "請先選擇一個案件")
+            return
+
+        if not self.case_controller:
+            UnifiedMessageDialog.show_warning(self.window, "案件控制器未初始化")
+            return
+
+        try:
+            # 取得選中的案件
+            item = selection[0]
+            tags = self.tree.item(item, 'tags')
+            case_index = None
+
+            for tag in tags:
+                if tag.startswith('index_'):
+                    case_index = int(tag.replace('index_', ''))
+                    break
+
+            if case_index is not None and case_index < len(self.case_data):
+                case = self.case_data[case_index]
+
+                # 再次確認案件是否有"已結案"階段
+                if not (hasattr(case, 'progress_stages') and
+                       case.progress_stages and
+                       '已結案' in case.progress_stages):
+                    UnifiedMessageDialog.show_warning(self.window, "選擇的案件尚未結案，無法執行轉移")
+                    return
+
+                # 顯示結案轉移對話框
+                from views.case_transfer_dialog import CaseTransferDialog
+
+                def on_transfer_complete():
+                    """轉移完成後的回調"""
+                    print("結案轉移完成，重新載入案件列表")
+                    self._load_cases()
+                    # 隱藏轉移按鈕
+                    self._hide_transfer_button()
+
+                CaseTransferDialog.show_transfer_dialog(
+                    self.window,
+                    case,
+                    self.case_controller,
+                    on_transfer_complete
+                )
+            else:
+                print(f"無法取得有效的案件索引：tags={tags}")
+                UnifiedMessageDialog.show_error(self.window, "無法取得選中的案件資訊")
+
+        except Exception as e:
+            print(f"開啟結案轉移對話框失敗: {e}")
+            UnifiedMessageDialog.show_error(self.window, f"無法開啟轉移對話框：{str(e)}")
+
+
 
     def _get_stage_color_by_date(self, stage_date: str, is_current: bool = False) -> tuple:
         """

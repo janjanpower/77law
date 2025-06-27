@@ -34,9 +34,21 @@ class CaseFormDialog(BaseWindow):
         # 調整視窗高度，移除滾軸需要的空間
         super().__init__(title=title, width=400, height=650, resizable=False, parent=parent)
         if parent:
-            self.window.lift()  # 確保視窗置頂
-            self.window.attributes('-topmost', True)  # 暫時設為最頂層
-            self.window.after(100, lambda: self.window.attributes('-topmost', False))  # 100ms後取消最頂層
+            self.window.lift()
+            self.window.attributes('-topmost', True)
+            self.window.focus_force()
+            # 確保視窗完全顯示後再設定事件
+            self.window.after(100, self._ensure_topmost)
+
+    def _ensure_topmost(self):
+        """🔥 新增：確保視窗保持置頂"""
+        try:
+            if self.window.winfo_exists():
+                self.window.attributes('-topmost', True)
+                self.window.lift()
+                self.window.focus_force()
+        except:
+            pass
 
     def _init_form_data(self):
         """初始化表單資料"""

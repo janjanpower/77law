@@ -24,16 +24,60 @@ class BaseWindow:
         # 如果有父視窗，設定置頂
         if parent:
             self.window.transient(parent)
-            # 延遲設定grab_set，讓子控件有時間初始化
+            # 🔥 修改：強制設定為置頂視窗，並立即設定模態
+            self.window.attributes('-topmost', True)
             self.window.after(200, self._set_modal)
+            # 🔥 新增：綁定焦點事件保持置頂
+            self._setup_topmost_focus()
+
+    def _setup_topmost_focus(self):
+        """🔥 新增：設定保持置頂的焦點事件"""
+        if self.parent:
+            # 綁定焦點進入事件
+            self.window.bind('<FocusIn>', self._on_focus_in)
+            # 綁定視窗映射事件
+            self.window.bind('<Map>', self._on_window_map)
+            # 綁定滑鼠點擊事件
+            self.window.bind('<Button-1>', self._on_window_click)
+
+    def _on_focus_in(self, event=None):
+        """🔥 新增：獲得焦點時確保置頂"""
+        try:
+            if self.window.winfo_exists():
+                self.window.attributes('-topmost', True)
+                self.window.lift()
+        except:
+            pass
+
+    def _on_window_map(self, event=None):
+        """🔥 新增：視窗顯示時確保置頂"""
+        try:
+            if self.window.winfo_exists():
+                self.window.attributes('-topmost', True)
+                self.window.lift()
+                self.window.focus_force()
+        except:
+            pass
+
+    def _on_window_click(self, event=None):
+        """🔥 新增：點擊視窗時確保置頂"""
+        try:
+            if self.window.winfo_exists():
+                self.window.attributes('-topmost', True)
+                self.window.lift()
+        except:
+            pass
+
 
     def _set_modal(self):
         """設定模態對話框"""
         try:
             if self.window.winfo_exists() and self._grab_enabled:
-                self.window.grab_set()
+                # 🔥 修改：確保在設定 grab 前視窗是置頂的
+                self.window.attributes('-topmost', True)
                 self.window.lift()
                 self.window.focus_force()
+                self.window.grab_set()
         except:
             pass
 
@@ -249,8 +293,22 @@ class BaseWindow:
         return ok_btn, cancel_btn
 
     def close(self):
-        """關閉視窗"""
-        self.window.destroy()
+        """關閉視窗 - 🔥 修改：確保焦點正確返回父視窗"""
+        try:
+            # 🔥 新增：關閉前確保父視窗能正常接收焦點
+            if self.parent:
+                # 取消置頂狀態
+                self.window.attributes('-topmost', False)
+                # 釋放grab
+                self.window.grab_release()
+                # 讓父視窗取得焦點
+                self.parent.focus_force()
+                self.parent.lift()
+
+            else:
+                self.window.destroy()
+        except:
+            self.window.destroy()
 
     def show(self):
         """顯示視窗"""

@@ -6,6 +6,7 @@ from .dialogs import ConfirmDialog, MessageDialog, UnifiedMessageDialog
 from .simple_progress_edit_dialog import SimpleProgressEditDialog
 from .upload_file_dialog import UploadFileDialog
 from .import_data_dialog import ImportDataDialog
+from .case_transfer_dialog import CaseTransferDialog  # 🔥 新增
 
 # 🔥 修正：將可能產生循環導入的模組移到後面，並使用延遲導入
 def get_case_overview_window():
@@ -28,6 +29,7 @@ __all__ = [
     'SimpleProgressEditDialog',
     'UploadFileDialog',
     'ImportDataDialog',
+    'CaseTransferDialog',  # 🔥 新增
     'get_case_overview_window',
     'get_date_reminder_widget'
 ]
