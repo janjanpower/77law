@@ -1,3 +1,6 @@
+import os
+
+
 class AppConfig:
     """應用程式設定"""
 
@@ -71,17 +74,17 @@ class AppConfig:
         'settings_file': 'app_settings.json'
     }
 
-    # 案件類型選項
+    # 案件類型選項（確保這行完整）
     CASE_TYPES = ['刑事', '民事']
 
-    # 根據案件類型的進度選項
+    # 根據案件類型的進度選項（確保這個字典完整）
     PROGRESS_OPTIONS = {
         '刑事': ['待處理', '偵查中', '起訴', '一審', '二審', '三審', '確定', '執行中', '已結案'],
         '民事': ['待處理', '調解', '一審', '二審', '三審', '確定', '強制執行', '已結案'],
         'default': ['待處理', '一審', '二審', '三審', '合議庭', '已結案']  # 預設選項（向後相容）
     }
 
-    # 案件類型對應的資料夾名稱
+    # 案件類型對應的資料夾名稱（確保這個字典完整）
     CASE_TYPE_FOLDERS = {
         '刑事': '刑事',
         '民事': '民事'
@@ -116,3 +119,27 @@ class AppConfig:
         case_number = getattr(case_data, 'case_number', None) or '未設定案號'
         client_name = getattr(case_data, 'client', '未知當事人')
         return f"{case_number}({client_name})"
+
+    # Google Drive 同步設定（新增）
+    GOOGLE_DRIVE_SYNC = {
+        'enabled': False,
+        'auto_detect': True,
+        'sync_interval': 30,  # 秒
+        'app_folder_name': 'CaseManagement',
+        'possible_paths': [
+            os.path.expanduser('~/Google Drive'),
+            'C:/Users/{}/Google Drive'.format(os.getenv('USERNAME', '')),
+            'C:/Users/{}/GoogleDrive'.format(os.getenv('USERNAME', '')),
+            os.path.expanduser('~/GoogleDrive'),
+            'D:/Google Drive',
+            'E:/Google Drive'
+        ]
+    }
+
+    # 簡單同步選項（新增）
+    SIMPLE_SYNC = {
+        'export_format': 'zip',
+        'include_attachments': True,
+        'auto_backup': True,
+        'backup_count': 5
+    }

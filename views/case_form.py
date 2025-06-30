@@ -149,30 +149,28 @@ class CaseFormDialog(BaseWindow):
         # 負責股別
         self._create_field(detail_frame, "負責股別", 'division', 4)
 
-    def _create_field(self, parent, label_text, var_name, row, field_type='entry',
-                     values=None, required=False):
-        """建立表單欄位 - 使用統一的字體設定"""
+    def _create_field(self, parent, label_text, var_name, row, field_type='entry', values=None, required=False):
+        """建立表單欄位"""
         # 標籤
         label = tk.Label(
             parent,
-            text=f"{label_text}{'*' if required else ''}:",
+            text=f"{label_text}：{'*' if required else ''}",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],  # 使用統一文字字體
-            width=12,
+            font=AppConfig.FONTS['text'],
             anchor='w'
         )
-        label.grid(row=row, column=0, sticky='w', padx=(0, 10), pady=8)
+        label.grid(row=row, column=0, sticky='w', pady=8)
 
-        # 輸入控件
+        # 欄位
         if field_type == 'combobox':
             widget = ttk.Combobox(
                 parent,
                 textvariable=self.form_vars[var_name],
-                values=values or [],
-                state='readonly' if values else 'normal',
-                width=15,
-                font=AppConfig.FONTS['text']  # 使用統一文字字體
+                values=values or [],  # 確保 values 不是 None
+                state='readonly',
+                font=AppConfig.FONTS['text'],
+                width=15
             )
         else:
             widget = tk.Entry(
@@ -180,7 +178,7 @@ class CaseFormDialog(BaseWindow):
                 textvariable=self.form_vars[var_name],
                 bg='white',
                 fg='black',
-                font=AppConfig.FONTS['text'],  # 使用統一文字字體
+                font=AppConfig.FONTS['text'],
                 width=15
             )
 

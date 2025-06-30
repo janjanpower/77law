@@ -293,22 +293,42 @@ class BaseWindow:
         return ok_btn, cancel_btn
 
     def close(self):
-        """關閉視窗 - 🔥 修改：確保焦點正確返回父視窗"""
+        """🔥 修改：改善關閉視窗的焦點處理"""
         try:
-            # 🔥 新增：關閉前確保父視窗能正常接收焦點
+            # 如果是對話框（有父視窗），進行特殊處理
             if self.parent:
-                # 取消置頂狀態
-                self.window.attributes('-topmost', False)
-                # 釋放grab
-                self.window.grab_release()
-                # 讓父視窗取得焦點
-                self.parent.focus_force()
-                self.parent.lift()
+                # 取消置頂狀態和模態狀態
+                try:
+                    self.window.attributes('-topmost', False)
+                    self.window.grab_release()
+                except:
+                    pass
+
+                # 確保父視窗能正常接收焦點
+                def restore_parent():
+                    try:
+                        if self.parent.winfo_exists():
+                            self.parent.focus_force()
+                            self.parent.lift()
+                    except:
+                        pass
+
+                # 先銷毀視窗，再恢復父視窗焦點
+                self.window.destroy()
+                # 短暫延遲後恢復父視窗
+                if hasattr(self.parent, 'after'):
+                    self.parent.after(50, restore_parent)
 
             else:
+                # 普通視窗直接銷毀
                 self.window.destroy()
-        except:
-            self.window.destroy()
+
+        except Exception as e:
+            print(f"關閉視窗時發生錯誤: {e}")
+            try:
+                self.window.destroy()
+            except:
+                pass
 
     def show(self):
         """顯示視窗"""

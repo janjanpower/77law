@@ -1808,10 +1808,11 @@ class CaseOverviewWindow:
             print(f"顯示階段右鍵選單失敗: {e}")
 
     def _on_add_progress_stage(self, case: CaseData):
-        """新增進度階段 - 🔥 修改：支援備註和時間"""
+        """🔥 修改：新增進度階段，改善成功訊息顯示"""
         from views.simple_progress_edit_dialog import SimpleProgressEditDialog
 
         def save_new_stage(result):
+            """🔥 修改：改善保存回調的成功訊息處理"""
             try:
                 success = self.case_controller.add_case_progress_stage(
                     case.case_id,
@@ -1821,10 +1822,28 @@ class CaseOverviewWindow:
                     result.get('time', '')
                 )
                 if success:
+                    # 重新載入資料
                     self._load_cases()
                     self._reselect_case(case.case_id)
-                    from views.dialogs import UnifiedMessageDialog
-                    UnifiedMessageDialog.show_success(self.window, f"已新增進度階段「{result['stage_name']}」")
+
+                    # 🔥 修改：延遲顯示成功訊息，確保主視窗已重新獲得焦點
+                    def show_success_message():
+                        try:
+                            # 確保主視窗在前面並有焦點
+                            self.window.lift()
+                            self.window.focus_force()
+                            # 顯示成功訊息
+                            from views.dialogs import UnifiedMessageDialog
+                            UnifiedMessageDialog.show_success(
+                                self.window,
+                                f"已新增進度階段「{result['stage_name']}」"
+                            )
+                        except Exception as e:
+                            print(f"顯示成功訊息失敗: {e}")
+
+                    # 延遲顯示成功訊息
+                    self.window.after(300, show_success_message)
+
                 return success
             except Exception as e:
                 from views.dialogs import UnifiedMessageDialog
@@ -1833,13 +1852,16 @@ class CaseOverviewWindow:
 
         SimpleProgressEditDialog.show_add_dialog(self.window, case, save_new_stage)
 
+
     def _on_edit_progress_stage(self, case: CaseData, stage_name: str):
-        """編輯進度階段 - 🔥 修改：支援備註和時間"""
+        """🔥 修改：編輯進度階段，改善成功訊息顯示"""
+        """🔥 修改：編輯進度階段，改善成功訊息顯示"""
         from views.simple_progress_edit_dialog import SimpleProgressEditDialog
 
         stage_date = case.progress_stages.get(stage_name, '')
 
         def save_edited_stage(result):
+            """🔥 修改：改善保存回調的成功訊息處理"""
             try:
                 success = self.case_controller.update_case_progress_stage(
                     case.case_id,
@@ -1849,10 +1871,28 @@ class CaseOverviewWindow:
                     result.get('time', '')
                 )
                 if success:
+                    # 重新載入資料
                     self._load_cases()
                     self._reselect_case(case.case_id)
-                    from views.dialogs import UnifiedMessageDialog
-                    UnifiedMessageDialog.show_success(self.window, f"已更新進度階段「{result['stage_name']}」")
+
+                    # 🔥 修改：延遲顯示成功訊息，確保主視窗已重新獲得焦點
+                    def show_success_message():
+                        try:
+                            # 確保主視窗在前面並有焦點
+                            self.window.lift()
+                            self.window.focus_force()
+                            # 顯示成功訊息
+                            from views.dialogs import UnifiedMessageDialog
+                            UnifiedMessageDialog.show_success(
+                                self.window,
+                                f"已更新進度階段「{result['stage_name']}」"
+                            )
+                        except Exception as e:
+                            print(f"顯示成功訊息失敗: {e}")
+
+                    # 延遲顯示成功訊息
+                    self.window.after(300, show_success_message)
+
                 return success
             except Exception as e:
                 from views.dialogs import UnifiedMessageDialog
@@ -1862,6 +1902,7 @@ class CaseOverviewWindow:
         SimpleProgressEditDialog.show_edit_dialog(
             self.window, case, stage_name, stage_date, save_edited_stage
         )
+
     def _on_remove_progress_stage(self, case: CaseData, stage_name: str):
         """移除進度階段（含刪除確認對話框）"""
         from views.dialogs import ConfirmDialog

@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from models.case_model import CaseData
 from utils.excel_handler import ExcelHandler
 from utils.folder_manager import FolderManager
@@ -18,15 +18,22 @@ class CaseController:
             self.data_file = data_file
 
         self.data_folder = os.path.dirname(self.data_file) if os.path.dirname(self.data_file) else '.'
-        self.cases: List[CaseData] = []
-
-        # 初始化資料夾管理器
         self.folder_manager = FolderManager(self.data_folder)
+        self.excel_handler = ExcelHandler()
 
-        # 確保資料夾存在
-        self._ensure_data_folder()
+        # Google Drive 同步支援（替換原來的雲端同步）
+        try:
+            from utils.google_drive_sync import GoogleDriveSync
+            self.google_drive_sync = GoogleDriveSync()
+            self.google_drive_sync.load_config()
 
-        # 載入案件資料
+            # 如果啟用了同步，啟動自動同步
+            if self.google_drive_sync.is_enabled:
+                self.google_drive_sync.start_auto_sync(self.data_file)
+        except ImportError:
+            self.google_drive_sync = None
+
+        self.cases = []
         self.load_cases()
 
     def _migrate_case_data(self, case_dict: dict) -> dict:
@@ -130,6 +137,14 @@ class CaseController:
                 json.dump(data, f, ensure_ascii=False, indent=2)
 
             print(f"成功儲存 {len(self.cases)} 筆案件資料")
+
+            # Google Drive 自動同步（替換原來的雲端同步）
+            if self.google_drive_sync and self.google_drive_sync.is_enabled:
+                try:
+                    self.google_drive_sync.auto_sync(self.data_file)
+                except Exception as e:
+                    print(f"Google Drive 同步失敗: {e}")
+
             return True
 
         except Exception as e:
@@ -774,3 +789,15 @@ class CaseController:
                         return case
 
         return None
+
+    def setup_google_drive_sync(self) -> Tuple[bool, str]:
+        """設定 Google Drive 同步"""
+        if not self.google_drive_sync:
+            return False, "Google Drive 同步模組未載入"
+        return self.google_drive_sync.setup_google_drive_sync()
+
+    def get_google_drive_status(self) -> Dict:
+        """取得 Google Drive 同步狀態"""
+        if not self.google_drive_sync:
+            return {'enabled': False}
+        return self.google_drive_sync.get_sync_status()
