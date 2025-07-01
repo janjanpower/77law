@@ -1808,11 +1808,10 @@ class CaseOverviewWindow:
             print(f"顯示階段右鍵選單失敗: {e}")
 
     def _on_add_progress_stage(self, case: CaseData):
-        """🔥 修改：新增進度階段，改善成功訊息顯示"""
+        """新增進度階段 - 🔥 修正：避免置頂衝突"""
         from views.simple_progress_edit_dialog import SimpleProgressEditDialog
 
         def save_new_stage(result):
-            """🔥 修改：改善保存回調的成功訊息處理"""
             try:
                 success = self.case_controller.add_case_progress_stage(
                     case.case_id,
@@ -1822,46 +1821,42 @@ class CaseOverviewWindow:
                     result.get('time', '')
                 )
                 if success:
-                    # 重新載入資料
                     self._load_cases()
                     self._reselect_case(case.case_id)
 
-                    # 🔥 修改：延遲顯示成功訊息，確保主視窗已重新獲得焦點
+                    # 🔥 關鍵修正：延遲顯示成功訊息，確保對話框完全關閉後再顯示
                     def show_success_message():
-                        try:
-                            # 確保主視窗在前面並有焦點
-                            self.window.lift()
-                            self.window.focus_force()
-                            # 顯示成功訊息
-                            from views.dialogs import UnifiedMessageDialog
-                            UnifiedMessageDialog.show_success(
-                                self.window,
-                                f"已新增進度階段「{result['stage_name']}」"
-                            )
-                        except Exception as e:
-                            print(f"顯示成功訊息失敗: {e}")
+                        from views.dialogs import UnifiedMessageDialog
+                        UnifiedMessageDialog.show_success(
+                            self.window,
+                            f"已新增進度階段「{result['stage_name']}」"
+                        )
 
-                    # 延遲顯示成功訊息
+                    # 延遲300ms顯示成功訊息，避免與關閉中的對話框衝突
                     self.window.after(300, show_success_message)
 
                 return success
             except Exception as e:
-                from views.dialogs import UnifiedMessageDialog
-                UnifiedMessageDialog.show_error(self.window, f"新增階段失敗：{str(e)}")
+                # 🔥 錯誤訊息也延遲顯示
+                def show_error_message():
+                    from views.dialogs import UnifiedMessageDialog
+                    UnifiedMessageDialog.show_error(
+                        self.window,
+                        f"新增階段失敗：{str(e)}"
+                    )
+
+                self.window.after(300, show_error_message)
                 return False
 
         SimpleProgressEditDialog.show_add_dialog(self.window, case, save_new_stage)
 
-
     def _on_edit_progress_stage(self, case: CaseData, stage_name: str):
-        """🔥 修改：編輯進度階段，改善成功訊息顯示"""
-        """🔥 修改：編輯進度階段，改善成功訊息顯示"""
+        """編輯進度階段 - 🔥 修正：避免置頂衝突"""
         from views.simple_progress_edit_dialog import SimpleProgressEditDialog
 
         stage_date = case.progress_stages.get(stage_name, '')
 
         def save_edited_stage(result):
-            """🔥 修改：改善保存回調的成功訊息處理"""
             try:
                 success = self.case_controller.update_case_progress_stage(
                     case.case_id,
@@ -1871,32 +1866,30 @@ class CaseOverviewWindow:
                     result.get('time', '')
                 )
                 if success:
-                    # 重新載入資料
                     self._load_cases()
                     self._reselect_case(case.case_id)
 
-                    # 🔥 修改：延遲顯示成功訊息，確保主視窗已重新獲得焦點
+                    # 🔥 關鍵修正：延遲顯示成功訊息
                     def show_success_message():
-                        try:
-                            # 確保主視窗在前面並有焦點
-                            self.window.lift()
-                            self.window.focus_force()
-                            # 顯示成功訊息
-                            from views.dialogs import UnifiedMessageDialog
-                            UnifiedMessageDialog.show_success(
-                                self.window,
-                                f"已更新進度階段「{result['stage_name']}」"
-                            )
-                        except Exception as e:
-                            print(f"顯示成功訊息失敗: {e}")
+                        from views.dialogs import UnifiedMessageDialog
+                        UnifiedMessageDialog.show_success(
+                            self.window,
+                            f"已更新進度階段「{result['stage_name']}」"
+                        )
 
-                    # 延遲顯示成功訊息
                     self.window.after(300, show_success_message)
 
                 return success
             except Exception as e:
-                from views.dialogs import UnifiedMessageDialog
-                UnifiedMessageDialog.show_error(self.window, f"更新階段失敗：{str(e)}")
+                # 🔥 錯誤訊息也延遲顯示
+                def show_error_message():
+                    from views.dialogs import UnifiedMessageDialog
+                    UnifiedMessageDialog.show_error(
+                        self.window,
+                        f"更新階段失敗：{str(e)}"
+                    )
+
+                self.window.after(300, show_error_message)
                 return False
 
         SimpleProgressEditDialog.show_edit_dialog(

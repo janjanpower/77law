@@ -1,5 +1,4 @@
-import os
-
+# config/settings.py
 
 class AppConfig:
     """應用程式設定"""
@@ -19,8 +18,8 @@ class AppConfig:
     # 字體設定 - 統一調整字體大小
     FONTS = {
         'title': ('Microsoft JhengHei', 11, 'bold'),
-        'button': ('Microsoft JhengHei', 10),         # 按鈕字體改為 20
-        'text': ('Microsoft JhengHei',11),           # 一般文字改為 10
+        'button': ('Microsoft JhengHei', 10),         # 按鈕字體
+        'text': ('Microsoft JhengHei', 11),           # 一般文字
         'welcome': ('Microsoft JhengHei', 11, 'bold')
     }
 
@@ -74,17 +73,17 @@ class AppConfig:
         'settings_file': 'app_settings.json'
     }
 
-    # 案件類型選項（確保這行完整）
+    # 🔥 修正：案件類型選項 - 確保一致性
     CASE_TYPES = ['刑事', '民事']
 
-    # 根據案件類型的進度選項（確保這個字典完整）
+    # 根據案件類型的進度選項
     PROGRESS_OPTIONS = {
         '刑事': ['待處理', '偵查中', '起訴', '一審', '二審', '三審', '確定', '執行中', '已結案'],
         '民事': ['待處理', '調解', '一審', '二審', '三審', '確定', '強制執行', '已結案'],
         'default': ['待處理', '一審', '二審', '三審', '合議庭', '已結案']  # 預設選項（向後相容）
     }
 
-    # 案件類型對應的資料夾名稱（確保這個字典完整）
+    # 案件類型對應的資料夾名稱
     CASE_TYPE_FOLDERS = {
         '刑事': '刑事',
         '民事': '民事'
@@ -120,26 +119,28 @@ class AppConfig:
         client_name = getattr(case_data, 'client', '未知當事人')
         return f"{case_number}({client_name})"
 
-    # Google Drive 同步設定（新增）
-    GOOGLE_DRIVE_SYNC = {
-        'enabled': False,
-        'auto_detect': True,
-        'sync_interval': 30,  # 秒
-        'app_folder_name': 'CaseManagement',
-        'possible_paths': [
-            os.path.expanduser('~/Google Drive'),
-            'C:/Users/{}/Google Drive'.format(os.getenv('USERNAME', '')),
-            'C:/Users/{}/GoogleDrive'.format(os.getenv('USERNAME', '')),
-            os.path.expanduser('~/GoogleDrive'),
-            'D:/Google Drive',
-            'E:/Google Drive'
-        ]
-    }
+    @classmethod
+    def validate_case_type(cls, case_type: str) -> bool:
+        """
+        🔥 新增：驗證案件類型是否有效
 
-    # 簡單同步選項（新增）
-    SIMPLE_SYNC = {
-        'export_format': 'zip',
-        'include_attachments': True,
-        'auto_backup': True,
-        'backup_count': 5
-    }
+        Args:
+            case_type: 要驗證的案件類型
+
+        Returns:
+            bool: 是否為有效的案件類型
+        """
+        return case_type in cls.CASE_TYPES
+
+    @classmethod
+    def get_case_type_folder(cls, case_type: str) -> str:
+        """
+        🔥 新增：取得案件類型對應的資料夾名稱
+
+        Args:
+            case_type: 案件類型
+
+        Returns:
+            str: 資料夾名稱，如果案件類型無效則返回None
+        """
+        return cls.CASE_TYPE_FOLDERS.get(case_type)

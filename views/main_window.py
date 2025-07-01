@@ -218,19 +218,6 @@ class MainWindow:
         )
         confirm_btn.pack(side='left', padx=10,pady=(10,0))
 
-        # Google Drive 同步按鈕
-        cloud_btn = tk.Button(
-            action_frame,
-            text='Google 同步',  # 改為明確的名稱
-            command=self._setup_google_drive_sync,  # 改為專用方法
-            bg=AppConfig.COLORS['button_bg'],
-            fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],
-            width=10,
-            height=2
-        )
-        cloud_btn.pack(side='left', padx=10, pady=(10, 0))
-
         # 離開按鈕
         exit_btn = tk.Button(
             action_frame,
@@ -243,25 +230,6 @@ class MainWindow:
             height=2
         )
         exit_btn.pack(side='left', padx=10,pady=(10,0))
-
-    def _setup_google_drive_sync(self):
-        """設定 Google Drive 同步"""
-        try:
-            from views.google_drive_setup_dialog import GoogleDriveSetupDialog
-
-            def on_setup_complete():
-                self.app_settings['google_drive_sync_enabled'] = True
-                self._save_app_settings()
-                print("Google Drive 同步已啟用")
-
-            GoogleDriveSetupDialog.show_setup_dialog(self.window, on_setup_complete)
-        except ImportError:
-            # 如果模組不存在，使用簡單的訊息框
-            from views.dialogs import UnifiedMessageDialog
-            UnifiedMessageDialog.show_info(
-                self.window,
-                "Google Drive 同步功能開發中\n請先手動安裝 Google Drive"
-            )
 
     def _choose_data_folder(self):
         """選擇母資料夾"""

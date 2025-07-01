@@ -1,3 +1,5 @@
+# views/base_window.py
+
 import tkinter as tk
 from tkinter import ttk
 from config.settings import AppConfig
@@ -15,111 +17,55 @@ class BaseWindow:
         self.width = width
         self.height = height
         self.resizable = resizable
-        self._grab_enabled = True  # 新增：控制是否啟用 grab
 
         self._setup_window()
         self._setup_styles()
         self._create_layout()
 
-        # 如果有父視窗，設定置頂
+        # 🔥 關鍵修正：根據視窗類型決定是否使用模態
         if parent:
             self.window.transient(parent)
-            # 🔥 修改：強制設定為置頂視窗，並立即設定模態
-            self.window.attributes('-topmost', True)
-            self.window.after(200, self._set_modal)
-            # 🔥 新增：綁定焦點事件保持置頂
-            self._setup_topmost_focus()
+            # 🔥 不立即設定模態，等視窗完全顯示後再設定
+            self.window.after(200, self._delayed_modal_setup)
 
-    def _setup_topmost_focus(self):
-        """🔥 新增：設定保持置頂的焦點事件"""
-        if self.parent:
-            # 綁定焦點進入事件
-            self.window.bind('<FocusIn>', self._on_focus_in)
-            # 綁定視窗映射事件
-            self.window.bind('<Map>', self._on_window_map)
-            # 綁定滑鼠點擊事件
-            self.window.bind('<Button-1>', self._on_window_click)
-
-    def _on_focus_in(self, event=None):
-        """🔥 新增：獲得焦點時確保置頂"""
+    def _delayed_modal_setup(self):
+        """🔥 延遲設定模態，避免閃爍"""
         try:
             if self.window.winfo_exists():
-                self.window.attributes('-topmost', True)
-                self.window.lift()
-        except:
-            pass
-
-    def _on_window_map(self, event=None):
-        """🔥 新增：視窗顯示時確保置頂"""
-        try:
-            if self.window.winfo_exists():
-                self.window.attributes('-topmost', True)
-                self.window.lift()
-                self.window.focus_force()
-        except:
-            pass
-
-    def _on_window_click(self, event=None):
-        """🔥 新增：點擊視窗時確保置頂"""
-        try:
-            if self.window.winfo_exists():
-                self.window.attributes('-topmost', True)
-                self.window.lift()
-        except:
-            pass
-
-
-    def _set_modal(self):
-        """設定模態對話框"""
-        try:
-            if self.window.winfo_exists() and self._grab_enabled:
-                # 🔥 修改：確保在設定 grab 前視窗是置頂的
-                self.window.attributes('-topmost', True)
-                self.window.lift()
-                self.window.focus_force()
+                # 🔥 關鍵：先確保視窗完全顯示
+                self.window.update_idletasks()
+                # 🔥 再設定模態
                 self.window.grab_set()
+                # 🔥 最後才設定焦點，避免重複重繪
+                self.window.focus_set()  # 使用focus_set代替focus_force
         except:
             pass
 
-    def disable_grab_temporarily(self, duration=1000):
-        """暫時禁用 grab，用於特殊控件操作"""
-        try:
-            self.window.grab_release()
-            self._grab_enabled = False
-            # 在指定時間後重新啟用
-            self.window.after(duration, self._enable_grab)
-        except:
-            pass
-
-    def _enable_grab(self):
-        """重新啟用 grab"""
-        self._grab_enabled = True
-        self._set_modal()
     def _setup_window(self):
         """設定視窗基本屬性"""
         self.window.title(self.title)
-        self.window.geometry(f"{self.width}x{self.height}")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
+        self.window.resizable(self.resizable, self.resizable)
 
-        # 移除系統標題欄
-        self.window.overrideredirect(True)
-
-        if self.resizable:
-            self.window.minsize(
-                AppConfig.SIZES['min_window']['width'],
-                AppConfig.SIZES['min_window']['height']
-            )
+        # 🔥 關鍵修正：只有對話框才隱藏標題列
+        if self.parent:
+            # 🔥 檢查父視窗類型，決定是否隱藏標題列
+            parent_class_name = self.parent.__class__.__name__
+            if parent_class_name == 'CaseOverviewWindow':
+                # 🔥 如果父視窗是CaseOverviewWindow，保留標題列避免衝突
+                self.window.overrideredirect(False)
+            else:
+                # 🔥 其他情況才隱藏標題列
+                self.window.overrideredirect(True)
         else:
-            self.window.resizable(False, False)
+            # 主視窗保留系統標題列
+            self.window.overrideredirect(False)
 
-        # 置中顯示
         self._center_window()
-
-        # 添加視窗拖曳功能
         self._setup_window_drag()
 
     def _center_window(self):
-        """將視窗置中顯示"""
+        """視窗置中"""
         self.window.update_idletasks()
         x = (self.window.winfo_screenwidth() // 2) - (self.width // 2)
         y = (self.window.winfo_screenheight() // 2) - (self.height // 2)
@@ -127,19 +73,21 @@ class BaseWindow:
 
     def _setup_window_drag(self):
         """設定視窗拖曳功能"""
-        self.drag_data = {"x": 0, "y": 0}
+        # 🔥 只有無邊框視窗才需要拖曳功能
+        if self.window.overrideredirect():
+            self.drag_data = {"x": 0, "y": 0}
 
-        def start_drag(event):
-            self.drag_data["x"] = event.x
-            self.drag_data["y"] = event.y
+            def start_drag(event):
+                self.drag_data["x"] = event.x
+                self.drag_data["y"] = event.y
 
-        def on_drag(event):
-            x = self.window.winfo_x() + (event.x - self.drag_data["x"])
-            y = self.window.winfo_y() + (event.y - self.drag_data["y"])
-            self.window.geometry(f"+{x}+{y}")
+            def on_drag(event):
+                x = self.window.winfo_x() + (event.x - self.drag_data["x"])
+                y = self.window.winfo_y() + (event.y - self.drag_data["y"])
+                self.window.geometry(f"+{x}+{y}")
 
-        # 等待標題框架建立後再綁定
-        self.window.after(100, lambda: self._bind_drag_events(start_drag, on_drag))
+            # 等待標題框架建立後再綁定
+            self.window.after(100, lambda: self._bind_drag_events(start_drag, on_drag))
 
     def _bind_drag_events(self, start_drag, on_drag):
         """綁定拖曳事件到標題框架"""
@@ -180,75 +128,86 @@ class BaseWindow:
             'Function.TButton',
             background=AppConfig.COLORS['button_bg'],
             foreground=AppConfig.COLORS['button_fg'],
-            width=15
+            width=AppConfig.SIZES['function_button']['width'],
+            relief='raised'
+        )
+
+        # ComboBox樣式
+        self.style.configure(
+            'Custom.TCombobox',
+            fieldbackground='white',
+            background=AppConfig.COLORS['button_bg'],
+            foreground='black',
+            arrowcolor=AppConfig.COLORS['button_bg']
         )
 
     def _create_layout(self):
-        """建立基礎佈局"""
-        # 主容器
-        self.main_frame = tk.Frame(
+        """建立基本佈局"""
+        # 🔥 根據是否有標題列決定是否建立自訂標題
+        if self.window.overrideredirect():
+            # 無邊框視窗：建立自訂標題列
+            self._create_title_bar()
+
+        # 內容區域
+        self.content_frame = tk.Frame(
             self.window,
             bg=AppConfig.COLORS['window_bg']
         )
-        self.main_frame.pack(fill='both', expand=True)
+        self.content_frame.pack(fill='both', expand=True)
 
-        # 標題列
+    def _create_title_bar(self):
+        """建立標題列（只在無邊框視窗時使用）"""
         self.title_frame = tk.Frame(
-            self.main_frame,
+            self.window,
             bg=AppConfig.COLORS['title_bg'],
             height=AppConfig.SIZES['title_height']
         )
         self.title_frame.pack(fill='x')
         self.title_frame.pack_propagate(False)
 
-        # 標題標籤 - 使用統一字體
+        # 標題文字
         self.title_label = tk.Label(
             self.title_frame,
             text=self.title,
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title']  # 使用統一字體設定
+            font=AppConfig.FONTS['title']
         )
-        self.title_label.pack(side='left', padx=10)
+        self.title_label.pack(side='left', padx=10, pady=2)
 
         # 關閉按鈕
-        self.close_btn = tk.Button(
+        close_btn = tk.Button(
             self.title_frame,
-            text="✕",
+            text='✕',
+            command=self.close,
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=('Arial', 12, 'bold'),
+            font=AppConfig.FONTS['title'],
             bd=0,
             width=3,
-            command=self.close
+            height=1
         )
-        self.close_btn.pack(side='right', padx=10)
+        close_btn.pack(side='right', padx=5, pady=2)
 
-        # 內容區域
-        self.content_frame = tk.Frame(
-            self.main_frame,
-            bg=AppConfig.COLORS['window_bg']
-        )
-        self.content_frame.pack(fill='both', expand=True)
+    def create_label(self, parent, text, font_key='text', **kwargs):
+        """建立標籤"""
+        default_config = {
+            'bg': AppConfig.COLORS['window_bg'],
+            'fg': AppConfig.COLORS['text_color'],
+            'font': AppConfig.FONTS[font_key]
+        }
+        default_config.update(kwargs)
 
-    def create_button(self, parent, text, command, style='Custom.TButton'):
-        """
-        建立標準化按鈕
+        return tk.Label(parent, text=text, **default_config)
 
-        Args:
-            parent: 父容器
-            text: 按鈕文字
-            command: 點擊事件
-            style: 按鈕樣式
-
-        Returns:
-            ttk.Button: 建立的按鈕
-        """
+    def create_button(self, parent, text, command=None, style='Custom.TButton', **kwargs):
+        """建立按鈕"""
         return ttk.Button(
             parent,
             text=text,
             command=command,
-            style=style
+            style=style,
+            **kwargs
         )
 
     def create_dialog_buttons(self, parent, ok_command=None, cancel_command=None):
@@ -273,7 +232,7 @@ class BaseWindow:
             command=ok_command or self.close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體
+            font=AppConfig.FONTS['button'],
             width=10
         )
         ok_btn.pack(side='left', padx=5)
@@ -285,7 +244,7 @@ class BaseWindow:
             command=cancel_command or self.close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體
+            font=AppConfig.FONTS['button'],
             width=10
         )
         cancel_btn.pack(side='left', padx=5)
@@ -293,38 +252,22 @@ class BaseWindow:
         return ok_btn, cancel_btn
 
     def close(self):
-        """🔥 修改：改善關閉視窗的焦點處理"""
+        """關閉視窗"""
         try:
-            # 如果是對話框（有父視窗），進行特殊處理
             if self.parent:
-                # 取消置頂狀態和模態狀態
+                # 🔥 溫和地釋放grab
                 try:
-                    self.window.attributes('-topmost', False)
                     self.window.grab_release()
                 except:
                     pass
+                # 🔥 溫和地返回焦點
+                try:
+                    self.parent.focus_set()
+                except:
+                    pass
 
-                # 確保父視窗能正常接收焦點
-                def restore_parent():
-                    try:
-                        if self.parent.winfo_exists():
-                            self.parent.focus_force()
-                            self.parent.lift()
-                    except:
-                        pass
-
-                # 先銷毀視窗，再恢復父視窗焦點
-                self.window.destroy()
-                # 短暫延遲後恢復父視窗
-                if hasattr(self.parent, 'after'):
-                    self.parent.after(50, restore_parent)
-
-            else:
-                # 普通視窗直接銷毀
-                self.window.destroy()
-
-        except Exception as e:
-            print(f"關閉視窗時發生錯誤: {e}")
+            self.window.destroy()
+        except:
             try:
                 self.window.destroy()
             except:

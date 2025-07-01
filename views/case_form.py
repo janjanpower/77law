@@ -1,54 +1,33 @@
+# views/case_form.py
+
 import tkinter as tk
-from tkinter import ttk, messagebox
-from typing import List, Optional, Callable
+from tkinter import ttk
+from typing import Optional, Callable
 from config.settings import AppConfig
 from models.case_model import CaseData
 from views.base_window import BaseWindow
-from datetime import datetime
 from views.dialogs import UnifiedMessageDialog
 
 class CaseFormDialog(BaseWindow):
-    """案件表單對話框 - 用於新增和編輯案件"""
+    """案件表單對話框 - 最簡化版本"""
 
     def __init__(self, parent=None, case_data: Optional[CaseData] = None,
                  on_save: Optional[Callable] = None, mode='add'):
-        """
-        初始化案件表單對話框
-
-        Args:
-            parent: 父視窗
-            case_data: 案件資料（編輯模式時提供）
-            on_save: 儲存回調函數
-            mode: 模式 ('add' 或 'edit')
-        """
+        """初始化案件表單對話框"""
         self.case_data = case_data
         self.on_save = on_save
         self.mode = mode
         self.result_data = None
-
-        # 先初始化表單變數，再調用父類別初始化
         self.form_vars = {}
+
+        # 初始化表單變數
         self._init_form_data()
 
+        # 設定標題
         title = AppConfig.WINDOW_TITLES['add_case'] if mode == 'add' else AppConfig.WINDOW_TITLES['edit_case']
-        # 調整視窗高度，移除滾軸需要的空間
-        super().__init__(title=title, width=400, height=650, resizable=False, parent=parent)
-        if parent:
-            self.window.lift()
-            self.window.attributes('-topmost', True)
-            self.window.focus_force()
-            # 確保視窗完全顯示後再設定事件
-            self.window.after(100, self._ensure_topmost)
 
-    def _ensure_topmost(self):
-        """🔥 新增：確保視窗保持置頂"""
-        try:
-            if self.window.winfo_exists():
-                self.window.attributes('-topmost', True)
-                self.window.lift()
-                self.window.focus_force()
-        except:
-            pass
+        # 直接調用父類初始化，不做任何額外操作
+        super().__init__(title=title, width=400, height=650, resizable=False, parent=parent)
 
     def _init_form_data(self):
         """初始化表單資料"""
@@ -71,175 +50,175 @@ class CaseFormDialog(BaseWindow):
         self._create_form_content()
 
     def _create_form_content(self):
-        """建立表單內容 - 移除滾軸，使用置中佈局"""
-        # 主要內容框架 - 使用置中佈局
-        main_content_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
-        main_content_frame.pack(expand=True, fill='both')
-
-        # 表單容器 - 置中顯示
-        form_container = tk.Frame(main_content_frame, bg=AppConfig.COLORS['window_bg'])
-        form_container.pack(expand=True, anchor='center')
-
-        # 表單內容
-        form_frame = tk.Frame(form_container, bg=AppConfig.COLORS['window_bg'])
-        form_frame.pack(padx=20, pady=20)
+        """建立表單內容"""
+        # 主要內容框架
+        main_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        main_frame.pack(expand=True, fill='both', padx=20, pady=20)
 
         # 基本資訊區塊
-        self._create_basic_info_section(form_frame)
+        self._create_basic_info_section(main_frame)
 
         # 詳細資訊區塊
-        self._create_detail_info_section(form_frame)
+        self._create_detail_info_section(main_frame)
 
         # 按鈕區域
-        self._create_form_buttons(form_frame)
+        self._create_form_buttons(main_frame)
 
     def _create_basic_info_section(self, parent):
         """建立基本資訊區塊"""
-        basic_title = tk.Label(
+        # 標題
+        tk.Label(
             parent,
             text="基本資訊",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['title']
-        )
-        basic_title.pack(anchor='w', pady=(0, 10))
+        ).pack(anchor='w', pady=(0, 10))
 
-        basic_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
-        basic_frame.pack(fill='x', pady=(0, 20))
+        # 表單框架
+        form_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
+        form_frame.pack(fill='x', pady=(0, 20))
 
         # 案件類型
-        self._create_field(basic_frame, "案件類型", 'case_type', 0, field_type='combobox',
+        self._create_field(form_frame, "案件類型", 'case_type', 0, field_type='combobox',
                           values=AppConfig.CASE_TYPES, required=True)
 
         # 當事人
-        self._create_field(basic_frame, "當事人", 'client', 1, required=True)
+        self._create_field(form_frame, "當事人", 'client', 1, required=True)
 
         # 委任律師
-        self._create_field(basic_frame, "委任律師", 'lawyer', 2)
+        self._create_field(form_frame, "委任律師", 'lawyer', 2)
 
         # 法務
-        self._create_field(basic_frame, "法務", 'legal_affairs', 3)
+        self._create_field(form_frame, "法務", 'legal_affairs', 3)
 
     def _create_detail_info_section(self, parent):
         """建立詳細資訊區塊"""
-        detail_title = tk.Label(
+        # 標題
+        tk.Label(
             parent,
             text="詳細資訊",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['title']
-        )
-        detail_title.pack(anchor='w', pady=(0, 10))
+        ).pack(anchor='w', pady=(0, 10))
 
-        detail_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
-        detail_frame.pack(fill='x', pady=(0, 20))
+        # 表單框架
+        form_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
+        form_frame.pack(fill='x', pady=(0, 20))
 
         # 案由
-        self._create_field(detail_frame, "案由", 'case_reason', 0)
-
+        self._create_field(form_frame, "案由", 'case_reason', 0)
         # 案號
-        self._create_field(detail_frame, "案號", 'case_number', 1)
-
+        self._create_field(form_frame, "案號", 'case_number', 1)
         # 對造
-        self._create_field(detail_frame, "對造", 'opposing_party', 2)
-
+        self._create_field(form_frame, "對造", 'opposing_party', 2)
         # 負責法院
-        self._create_field(detail_frame, "負責法院", 'court', 3)
-
+        self._create_field(form_frame, "負責法院", 'court', 3)
         # 負責股別
-        self._create_field(detail_frame, "負責股別", 'division', 4)
+        self._create_field(form_frame, "負責股別", 'division', 4)
 
-    def _create_field(self, parent, label_text, var_name, row, field_type='entry', values=None, required=False):
+    def _create_field(self, parent, label_text, var_name, row, field_type='entry',
+                     values=None, required=False):
         """建立表單欄位"""
         # 標籤
-        label = tk.Label(
+        tk.Label(
             parent,
-            text=f"{label_text}：{'*' if required else ''}",
+            text=f"{label_text}{'*' if required else ''}:",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text'],
+            width=12,
             anchor='w'
-        )
-        label.grid(row=row, column=0, sticky='w', pady=8)
+        ).grid(row=row, column=0, sticky='w', padx=(0, 10), pady=8)
 
-        # 欄位
+        # 輸入控件
         if field_type == 'combobox':
             widget = ttk.Combobox(
                 parent,
                 textvariable=self.form_vars[var_name],
-                values=values or [],  # 確保 values 不是 None
+                values=values or [],
                 state='readonly',
-                font=AppConfig.FONTS['text'],
-                width=15
+                width=15,
+                font=AppConfig.FONTS['text']
             )
+
+            # 設定預設值
+            if values and len(values) > 0:
+                current_value = self.form_vars[var_name].get()
+                if current_value not in values and required:
+                    self.form_vars[var_name].set(values[0])
+
         else:
             widget = tk.Entry(
                 parent,
                 textvariable=self.form_vars[var_name],
-                bg='white',
-                fg='black',
                 font=AppConfig.FONTS['text'],
                 width=15
             )
 
-        widget.grid(row=row, column=1, sticky='ew', pady=8)
-        parent.grid_columnconfigure(1, weight=1)
+        widget.grid(row=row, column=1, sticky='w', pady=8)
 
     def _create_form_buttons(self, parent):
-        """建立表單按鈕 - 使用統一的字體設定"""
+        """建立表單按鈕"""
         button_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
-        button_frame.pack(pady=30)
+        button_frame.pack(pady=20)
 
-        save_btn = tk.Button(
+        # 儲存按鈕
+        tk.Button(
             button_frame,
-            text='新增',
+            text='儲存',
             command=self._on_save,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
-            width=10,
-            height=2
-        )
-        save_btn.pack(side='left', padx=10)
+            font=AppConfig.FONTS['button'],
+            width=10
+        ).pack(side='left', padx=5)
 
-        cancel_btn = tk.Button(
+        # 取消按鈕
+        tk.Button(
             button_frame,
             text='取消',
             command=self.close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
-            width=10,
-            height=2
-        )
-        cancel_btn.pack(side='left', padx=10)
+            font=AppConfig.FONTS['button'],
+            width=10
+        ).pack(side='left', padx=5)
 
     def _validate_form(self) -> bool:
         """驗證表單資料"""
+        # 檢查必填欄位
         if not self.form_vars['case_type'].get().strip():
-            UnifiedMessageDialog.show_error("錯誤", "請選擇案件類型")
+            UnifiedMessageDialog.show_warning(self.window, "請選擇案件類型！")
             return False
 
         if not self.form_vars['client'].get().strip():
-            UnifiedMessageDialog.show_error("錯誤", "請輸入當事人")
+            UnifiedMessageDialog.show_warning(self.window, "請輸入當事人姓名！")
+            return False
+
+        # 檢查案件類型是否有效
+        case_type = self.form_vars['case_type'].get().strip()
+        if case_type not in AppConfig.CASE_TYPES:
+            UnifiedMessageDialog.show_warning(self.window, f"無效的案件類型：{case_type}")
             return False
 
         return True
 
     def _on_save(self):
-        """儲存按鈕事件 - 使用統一的顯示格式"""
-        if not self._validate_form():
-            return
-
+        """儲存案件資料"""
         try:
-            # 建立案件資料
+            if not self._validate_form():
+                return
+
+            # 建立案件資料物件
             case_data = CaseData(
                 case_id=self.case_data.case_id if self.case_data else '',
                 case_type=self.form_vars['case_type'].get().strip(),
                 client=self.form_vars['client'].get().strip(),
                 lawyer=self.form_vars['lawyer'].get().strip() or None,
                 legal_affairs=self.form_vars['legal_affairs'].get().strip() or None,
-                progress='待處理',  # 新增案件時統一設為待處理
+                progress='待處理',
                 case_reason=self.form_vars['case_reason'].get().strip() or None,
                 case_number=self.form_vars['case_number'].get().strip() or None,
                 opposing_party=self.form_vars['opposing_party'].get().strip() or None,
@@ -248,34 +227,28 @@ class CaseFormDialog(BaseWindow):
                 progress_date=None
             )
 
-            # 處理進度階段記錄
+            # 處理編輯模式的舊資料
             if self.mode == 'edit' and self.case_data:
-                # 編輯模式：保留原有的進度階段記錄和進度狀態
                 case_data.progress = self.case_data.progress
                 case_data.progress_date = self.case_data.progress_date
-                case_data.progress_stages = self.case_data.progress_stages.copy()
+                case_data.progress_stages = getattr(self.case_data, 'progress_stages', {}).copy()
                 case_data.created_date = self.case_data.created_date
 
             self.result_data = case_data
 
-            # 呼叫儲存回調並檢查結果
+            # 呼叫儲存回調
             if self.on_save:
                 try:
                     success = self.on_save(case_data, self.mode)
                     if success:
-                        print(f"案件儲存成功，關閉對話框")
                         self.close()
-                    else:
-                        print(f"案件儲存失敗，保持對話框開啟")
-                except Exception as callback_error:
-                    print(f"儲存回調函數發生錯誤: {callback_error}")
-                    UnifiedMessageDialog.show_error("錯誤", f"儲存過程發生錯誤：{str(callback_error)}")
+                except Exception as e:
+                    UnifiedMessageDialog.show_error(self.window, f"儲存失敗：{str(e)}")
             else:
                 self.close()
 
         except Exception as e:
-            print(f"建立案件資料時發生錯誤: {e}")
-            UnifiedMessageDialog.show_error("錯誤", f"資料處理失敗：{str(e)}")
+            UnifiedMessageDialog.show_error(self.window, f"處理失敗：{str(e)}")
 
     @staticmethod
     def show_add_dialog(parent, on_save: Callable) -> Optional[CaseData]:
