@@ -1,17 +1,18 @@
+# views/simple_progress_edit_dialog.py
+"""
+簡單進度編輯對話框 - 整合置頂日期控件解決方案
+移除重複代碼，統一日期控件處理
+"""
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Optional, Callable
 from datetime import datetime
 
-try:
-    from tkcalendar import DateEntry
-except ImportError:
-    print("警告：tkcalendar 套件未安裝，請執行：pip install tkcalendar")
-    DateEntry = None
-
 from config.settings import AppConfig
 from models.case_model import CaseData
 from views.base_window import BaseWindow
+from utils.topmost_date_entry import TopmostDateEntryManager
 
 class SimpleProgressEditDialog(BaseWindow):
     """簡單進度編輯對話框"""
@@ -36,6 +37,7 @@ class SimpleProgressEditDialog(BaseWindow):
         self.on_save = on_save
         self.mode = mode
         self.result = None
+        self.date_entry = None  # 統一的日期控件引用
 
         title_text = "新增進度階段" if mode == 'add' else f"編輯進度階段 - {stage_name}"
 
@@ -79,48 +81,36 @@ class SimpleProgressEditDialog(BaseWindow):
         self.style.configure(
             'Custom.TButton',
             background=AppConfig.COLORS['button_bg'],
-            foreground=AppConfig.COLORS['button_fg'],
-            borderwidth=1,
-            focuscolor='none'
+            foreground=AppConfig.COLORS['button_fg']
         )
 
     def _show_and_setup_modal(self):
-        """顯示視窗並設定模態屬性"""
+        """顯示視窗並設定模態狀態"""
         try:
+            self.window.deiconify()
             self.window.transient(self.parent)
-            self.window.deiconify()  # 顯示視窗
             self.window.grab_set()
+            self.window.attributes('-topmost', True)
             self.window.lift()
             self.window.focus_force()
-        except:
+
+            # 🔥 新增：確保所有日曆控件置頂
+            TopmostDateEntryManager.ensure_all_calendars_topmost(self.window)
+
+        except tk.TclError:
             pass
 
     def _create_layout(self):
         """建立對話框佈局"""
-        # 建立自訂標題列
-        self._create_title_bar()
-
-        # 內容區域
-        self.content_frame = tk.Frame(
-            self.window,
-            bg=AppConfig.COLORS['window_bg']
-        )
-        self.content_frame.pack(fill='both', expand=True)
-
-        # 建立對話框內容
-        self._create_dialog_content()
-
-    def _create_title_bar(self):
-        """建立標題列"""
+        # 標題列
         self.title_frame = tk.Frame(
             self.window,
             bg=AppConfig.COLORS['title_bg'],
-            height=AppConfig.SIZES['title_height']
+            height=40
         )
         self.title_frame.pack(fill='x')
         self.title_frame.pack_propagate(False)
 
-        # 標題文字
         self.title_label = tk.Label(
             self.title_frame,
             text=self.title,
@@ -128,34 +118,33 @@ class SimpleProgressEditDialog(BaseWindow):
             fg=AppConfig.COLORS['title_fg'],
             font=AppConfig.FONTS['title']
         )
-        self.title_label.pack(side='left', padx=10, pady=2)
+        self.title_label.pack(side='left', padx=10, pady=10)
 
-        # 關閉按鈕
-        close_btn = tk.Button(
+        self.close_btn = tk.Button(
             self.title_frame,
-            text='✕',
-            command=self.close,
+            text="✕",
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title'],
+            font=('Arial', 12, 'bold'),
             bd=0,
             width=3,
-            height=1
+            command=self.close
         )
-        close_btn.pack(side='right', padx=5, pady=2)
+        self.close_btn.pack(side='right', padx=5, pady=5)
 
-    def _create_dialog_content(self):
-        """建立對話框內容"""
-        main_content_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
-        main_content_frame.pack(expand=True, fill='both')
+        # 內容區域
+        self.content_frame = tk.Frame(self.window, bg=AppConfig.COLORS['window_bg'])
+        self.content_frame.pack(fill='both', expand=True, padx=10, pady=10)
 
-        form_container = tk.Frame(main_content_frame, bg=AppConfig.COLORS['window_bg'])
-        form_container.pack(expand=True, anchor='center')
+        self._create_edit_content()
 
-        form_frame = tk.Frame(form_container, bg=AppConfig.COLORS['window_bg'])
-        form_frame.pack(padx=10, pady=10)
+    def _create_edit_content(self):
+        """建立編輯內容"""
+        # 表單容器
+        form_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        form_frame.pack(fill='both', expand=True, pady=10)
 
-        # 案件資訊顯示
+        # 案件資訊（如果有）
         if self.case_data:
             info_frame = tk.Frame(form_frame, bg=AppConfig.COLORS['window_bg'])
             info_frame.pack(fill='x', pady=(0, 10))
@@ -212,7 +201,7 @@ class SimpleProgressEditDialog(BaseWindow):
             )
             stage_label.grid(row=0, column=1, sticky='w', pady=10)
 
-        # 日期選擇
+        # 🔥 修改：使用統一的置頂日期控件
         tk.Label(
             edit_frame,
             text="執行日期：",
@@ -221,31 +210,25 @@ class SimpleProgressEditDialog(BaseWindow):
             font=AppConfig.FONTS['text']
         ).grid(row=1, column=0, sticky='w', padx=(0, 10), pady=10)
 
-        if DateEntry:
-            self.date_entry = DateEntry(
-                edit_frame,
-                width=12,
-                background='darkblue',
-                foreground='white',
-                borderwidth=2,
-                date_pattern='yyyy-mm-dd',
-                font=AppConfig.FONTS['text']
-            )
-            if self.stage_date:
-                try:
-                    from datetime import datetime
-                    date_obj = datetime.strptime(self.stage_date, '%Y-%m-%d')
-                    self.date_entry.set_date(date_obj.date())
-                except:
-                    pass
-        else:
-            self.date_var = tk.StringVar(value=self.stage_date or '')
-            self.date_entry = tk.Entry(
-                edit_frame,
-                textvariable=self.date_var,
-                width=15,
-                font=AppConfig.FONTS['text']
-            )
+        # 使用統一的置頂日期控件管理器
+        self.date_entry = TopmostDateEntryManager.create_date_entry(
+            edit_frame,
+            parent_window=self.window,
+            width=12,
+            background='darkblue',
+            foreground='white',
+            borderwidth=2,
+            date_pattern='yyyy-mm-dd',
+            font=AppConfig.FONTS['text']
+        )
+
+        # 設定初始日期
+        if self.stage_date:
+            try:
+                date_obj = datetime.strptime(self.stage_date, '%Y-%m-%d')
+                self.date_entry.set_date(date_obj.date())
+            except:
+                pass
 
         self.date_entry.grid(row=1, column=1, sticky='w', pady=10)
 
@@ -322,7 +305,7 @@ class SimpleProgressEditDialog(BaseWindow):
         cancel_btn.pack(side='left', padx=10)
 
     def _show_duplicate_stage_confirmation(self, stage_name: str) -> bool:
-        """顯示重複階段確認對話框 - 修正置頂問題"""
+        """顯示重複階段確認對話框 - 🔥 優化置頂處理"""
         from views.dialogs import ConfirmDialog
 
         # 暫時釋放當前對話框的grab和置頂
@@ -339,21 +322,22 @@ class SimpleProgressEditDialog(BaseWindow):
             f"階段「{stage_name}」已存在，是否要更新日期和備註？"
         )
 
-        # 恢復當前對話框的控制權
-        try:
-            self.window.after(100, self._restore_dialog_control)
-        except:
-            pass
+        # 🔥 改進：恢復對話框控制權和置頂狀態
+        self.window.after(100, self._restore_dialog_control)
 
         return confirm_result
 
     def _restore_dialog_control(self):
-        """恢復對話框控制權 - 避免閃爍"""
+        """🔥 改進：恢復對話框控制權，確保日曆也置頂"""
         try:
             if self.window.winfo_exists():
                 self.window.lift()
                 self.window.grab_set()
+                self.window.attributes('-topmost', True)
                 self.window.focus_force()
+
+                # 確保所有日曆控件也置頂
+                TopmostDateEntryManager.ensure_all_calendars_topmost(self.window)
         except:
             pass
 
@@ -365,14 +349,18 @@ class SimpleProgressEditDialog(BaseWindow):
                 messagebox.showerror("錯誤", "請輸入階段名稱")
                 return
 
-            # 取得日期
-            if DateEntry and hasattr(self, 'date_entry') and hasattr(self.date_entry, 'get_date'):
+            # 🔥 改進：統一的日期獲取方式
+            stage_date = ""
+            if self.date_entry:
                 try:
-                    stage_date = self.date_entry.get_date().strftime('%Y-%m-%d')
+                    # 優先使用get_date方法
+                    if hasattr(self.date_entry, 'get_date') and self.date_entry.get_date():
+                        stage_date = self.date_entry.get_date().strftime('%Y-%m-%d')
+                    else:
+                        # 降級使用get方法
+                        stage_date = self.date_entry.get()
                 except:
-                    stage_date = self.date_entry.get()
-            else:
-                stage_date = self.date_var.get() if hasattr(self, 'date_var') else self.date_entry.get()
+                    stage_date = self.date_entry.get() if self.date_entry else ""
 
             if not stage_date:
                 messagebox.showerror("錯誤", "請選擇執行日期")
@@ -383,40 +371,19 @@ class SimpleProgressEditDialog(BaseWindow):
                 try:
                     datetime.strptime(stage_date, '%Y-%m-%d')
                 except ValueError:
-                    messagebox.showerror("錯誤", "日期格式錯誤，請使用 YYYY-MM-DD 格式")
+                    messagebox.showerror("錯誤", "日期格式不正確，請使用 YYYY-MM-DD 格式")
                     return
 
-            # 取得時間
-            time = self.time_entry.get().strip()
+            # 取得時間和備註
+            stage_time = self.time_entry.get().strip()
+            stage_note = self.note_text.get(1.0, tk.END).strip()
 
-            # 驗證時間格式（如果有輸入時間）
-            if time:
-                try:
-                    time_parts = time.split(':')
-                    if len(time_parts) != 2:
-                        raise ValueError("時間格式錯誤")
-                    hour, minute = int(time_parts[0]), int(time_parts[1])
-                    if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                        raise ValueError("時間範圍錯誤")
-                except ValueError:
-                    messagebox.showerror("錯誤", "時間格式錯誤，請使用 HH:MM 格式（如 14:30）")
-                    return
-
-            # 取得備註
-            note = self.note_text.get('1.0', tk.END).strip()
-
-            # 新增模式：檢查階段是否已存在 - 使用修正後的確認對話框
-            if self.mode == 'add' and self.case_data:
-                if stage_name in self.case_data.progress_stages:
-                    if not self._show_duplicate_stage_confirmation(stage_name):
-                        return
-
+            # 準備結果
             self.result = {
                 'stage_name': stage_name,
                 'stage_date': stage_date,
-                'time': time,
-                'note': note,
-                'original_stage': self.stage_name
+                'stage_time': stage_time,
+                'stage_note': stage_note
             }
 
             # 呼叫回調函數
@@ -424,26 +391,46 @@ class SimpleProgressEditDialog(BaseWindow):
                 success = self.on_save(self.result)
                 if success:
                     self.close()
+                # 如果保存失敗，不關閉對話框，讓用戶修正
             else:
                 self.close()
 
         except Exception as e:
-            messagebox.showerror("錯誤", f"儲存時發生錯誤：{str(e)}")
+            messagebox.showerror("錯誤", f"儲存失敗：{str(e)}")
+
+    def close(self):
+        """關閉對話框"""
+        try:
+            # 清理日期控件
+            if self.date_entry:
+                self.date_entry.destroy()
+
+            if self.window:
+                self.window.grab_release()
+                self.window.destroy()
+        except:
+            pass
 
     @staticmethod
-    def show_edit_dialog(parent, case_data: CaseData, stage_name: str, stage_date: str, on_save: Callable):
-        """顯示編輯階段對話框"""
+    def show_edit_dialog(parent, case_data, stage_name, stage_date, on_save_callback):
+        """靜態方法：顯示編輯對話框"""
         dialog = SimpleProgressEditDialog(
-            parent, case_data, stage_name, stage_date, on_save, mode='edit'
+            parent=parent,
+            case_data=case_data,
+            stage_name=stage_name,
+            stage_date=stage_date,
+            on_save=on_save_callback,
+            mode='edit'
         )
-        dialog.window.wait_window()
-        return dialog.result
+        return dialog
 
     @staticmethod
-    def show_add_dialog(parent, case_data: CaseData, on_save: Callable):
-        """顯示新增階段對話框"""
+    def show_add_dialog(parent, case_data, on_save_callback):
+        """靜態方法：顯示新增對話框"""
         dialog = SimpleProgressEditDialog(
-            parent, case_data, None, None, on_save, mode='add'
+            parent=parent,
+            case_data=case_data,
+            on_save=on_save_callback,
+            mode='add'
         )
-        dialog.window.wait_window()
-        return dialog.result
+        return dialog

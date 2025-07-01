@@ -459,11 +459,11 @@ class CaseOverviewWindow:
                         self.filtered_case_data.append(case)
                         continue
 
-                    # 搜尋案號
-                    case_number = getattr(case, 'case_number', '') or ''
-                    if search_text in case_number.lower():
-                        self.filtered_case_data.append(case)
-                        continue
+                    # # 搜尋案號
+                    # case_number = getattr(case, 'case_number', '') or ''
+                    # if search_text in case_number.lower():
+                    #     self.filtered_case_data.append(case)
+                    #     continue
 
                     # 搜尋案件類型
                     if search_text in case.case_type.lower():
@@ -482,11 +482,11 @@ class CaseOverviewWindow:
                         self.filtered_case_data.append(case)
                         continue
 
-                    # 搜尋案由
-                    case_reason = getattr(case, 'case_reason', '') or ''
-                    if search_text in case_reason.lower():
-                        self.filtered_case_data.append(case)
-                        continue
+                    # # 搜尋案由
+                    # case_reason = getattr(case, 'case_reason', '') or ''
+                    # if search_text in case_reason.lower():
+                    #     self.filtered_case_data.append(case)
+                    #     continue
 
                 # 更新搜尋結果統計
                 total_count = len(self.case_data)

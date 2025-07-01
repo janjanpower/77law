@@ -461,21 +461,111 @@ class UnifiedMessageDialog:
         dialog.window.wait_window()
 
     @staticmethod
-    def show_success(parent, message="操作成功"):
-        """顯示成功訊息"""
-        UnifiedMessageDialog.show(parent, "成功", message, "success")
+    def show_error(parent, message, title="錯誤"):
+        """顯示錯誤對話框 - 修正版"""
+        return UnifiedMessageDialog._show_message(parent, message, title, "error")
 
     @staticmethod
-    def show_error(parent, message="發生錯誤"):
-        """顯示錯誤訊息"""
-        UnifiedMessageDialog.show(parent, "錯誤", message, "error")
+    def show_success(parent, message, title="成功"):
+        """顯示成功對話框 - 修正版"""
+        return UnifiedMessageDialog._show_message(parent, message, title, "success")
 
     @staticmethod
-    def show_warning(parent, message="警告"):
-        """顯示警告訊息"""
-        UnifiedMessageDialog.show(parent, "警告", message, "warning")
+    def show_warning(parent, message, title="警告"):
+        """顯示警告對話框 - 修正版"""
+        return UnifiedMessageDialog._show_message(parent, message, title, "warning")
 
     @staticmethod
     def show_info(parent, message="訊息"):
         """顯示訊息"""
         UnifiedMessageDialog.show(parent, "訊息", message, "info")
+
+    @staticmethod
+    def _show_message(parent, message, title, msg_type):
+        """🔥 修正：統一的訊息對話框處理"""
+        dialog = tk.Toplevel(parent)
+        dialog.title(title)
+        dialog.geometry("350x180")
+        dialog.configure(bg=AppConfig.COLORS['window_bg'])
+        dialog.resizable(False, False)
+        dialog.overrideredirect(True)
+
+        # 🔥 重要：確保置頂和模態
+        dialog.attributes('-topmost', True)
+        dialog.transient(parent)
+        dialog.grab_set()
+
+        # 置中顯示
+        if parent:
+            x = parent.winfo_x() + (parent.winfo_width() // 2) - 175
+            y = parent.winfo_y() + (parent.winfo_height() // 2) - 90
+            dialog.geometry(f"350x180+{x}+{y}")
+
+        # 標題列
+        title_frame = tk.Frame(dialog, bg=AppConfig.COLORS['title_bg'], height=30)
+        title_frame.pack(fill='x')
+        title_frame.pack_propagate(False)
+
+        title_label = tk.Label(
+            title_frame,
+            text=title,
+            bg=AppConfig.COLORS['title_bg'],
+            fg=AppConfig.COLORS['title_fg'],
+            font=AppConfig.FONTS['title']
+        )
+        title_label.pack(side='left', padx=10, pady=5)
+
+        # 內容區域
+        content_frame = tk.Frame(dialog, bg=AppConfig.COLORS['window_bg'])
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # 根據類型設定顏色
+        colors = {
+            "error": "red",
+            "success": "green",
+            "warning": "orange"
+        }
+        text_color = colors.get(msg_type, AppConfig.COLORS['text_color'])
+
+        # 訊息內容
+        msg_label = tk.Label(
+            content_frame,
+            text=message,
+            bg=AppConfig.COLORS['window_bg'],
+            fg=text_color,
+            font=AppConfig.FONTS['text'],
+            wraplength=300,
+            justify='center'
+        )
+        msg_label.pack(expand=True)
+
+        # 確定按鈕
+        def close_dialog():
+            dialog.grab_release()
+            dialog.destroy()
+            # 🔥 重要：恢復父視窗的置頂狀態
+            if parent:
+                parent.attributes('-topmost', True)
+                parent.focus_force()
+
+        ok_btn = tk.Button(
+            content_frame,
+            text='確定',
+            command=close_dialog,
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            font=AppConfig.FONTS['button'],
+            width=8,
+            height=1
+        )
+        ok_btn.pack(pady=(10, 0))
+
+        # 綁定按鍵
+        dialog.bind('<Return>', lambda e: close_dialog())
+        dialog.bind('<Escape>', lambda e: close_dialog())
+
+        # 設定焦點
+        dialog.focus_force()
+        ok_btn.focus_set()
+
+        return dialog
