@@ -39,40 +39,119 @@ class SimpleProgressEditDialog(BaseWindow):
 
         title_text = "新增進度階段" if mode == 'add' else f"編輯進度階段 - {stage_name}"
 
-        # 🔥 修改：調整視窗高度以容納備註欄位
-        super().__init__(title=title_text, width=400, height=500, resizable=False, parent=parent)
-        if parent:
-            self.window.lift()
-            self.window.attributes('-topmost', True)
-            self.window.focus_force()
-            # 確保視窗完全顯示後再設定事件
-            self.window.after(100, self._ensure_topmost)
+        # 完全覆寫父類的視窗設定，避免閃爍
+        self.parent = parent
+        self.window = tk.Toplevel(parent) if parent else tk.Tk()
+        self.title = title_text
+        self.width = 400
+        self.height = 500
+        self.resizable = False
 
-    def _ensure_topmost(self):
-        """🔥 新增：確保視窗保持置頂"""
+        # 立即隱藏視窗，在所有設定完成前不顯示
+        self.window.withdraw()
+
+        # 設定基本屬性
+        self.window.title(title_text)
+        self.window.configure(bg=AppConfig.COLORS['window_bg'])
+        self.window.resizable(False, False)
+        self.window.overrideredirect(True)
+
+        # 設定大小和位置
+        self._center_window()
+
+        # 建立佈局
+        self._setup_styles()
+        self._create_layout()
+
+        if parent:
+            # 所有設定完成後才顯示並設定模態
+            self.window.after(10, self._show_and_setup_modal)
+
+    def _center_window(self):
+        """視窗置中"""
+        x = (self.window.winfo_screenwidth() // 2) - (400 // 2)
+        y = (self.window.winfo_screenheight() // 2) - (500 // 2)
+        self.window.geometry(f"400x500+{x}+{y}")
+
+    def _setup_styles(self):
+        """設定樣式"""
+        self.style = ttk.Style()
+        self.style.configure(
+            'Custom.TButton',
+            background=AppConfig.COLORS['button_bg'],
+            foreground=AppConfig.COLORS['button_fg'],
+            borderwidth=1,
+            focuscolor='none'
+        )
+
+    def _show_and_setup_modal(self):
+        """顯示視窗並設定模態屬性"""
         try:
-            if self.window.winfo_exists():
-                self.window.attributes('-topmost', True)
-                self.window.lift()
-                self.window.focus_force()
+            self.window.transient(self.parent)
+            self.window.deiconify()  # 顯示視窗
+            self.window.grab_set()
+            self.window.lift()
+            self.window.focus_force()
         except:
             pass
+
     def _create_layout(self):
         """建立對話框佈局"""
-        super()._create_layout()
+        # 建立自訂標題列
+        self._create_title_bar()
+
+        # 內容區域
+        self.content_frame = tk.Frame(
+            self.window,
+            bg=AppConfig.COLORS['window_bg']
+        )
+        self.content_frame.pack(fill='both', expand=True)
+
+        # 建立對話框內容
         self._create_dialog_content()
 
+    def _create_title_bar(self):
+        """建立標題列"""
+        self.title_frame = tk.Frame(
+            self.window,
+            bg=AppConfig.COLORS['title_bg'],
+            height=AppConfig.SIZES['title_height']
+        )
+        self.title_frame.pack(fill='x')
+        self.title_frame.pack_propagate(False)
+
+        # 標題文字
+        self.title_label = tk.Label(
+            self.title_frame,
+            text=self.title,
+            bg=AppConfig.COLORS['title_bg'],
+            fg=AppConfig.COLORS['title_fg'],
+            font=AppConfig.FONTS['title']
+        )
+        self.title_label.pack(side='left', padx=10, pady=2)
+
+        # 關閉按鈕
+        close_btn = tk.Button(
+            self.title_frame,
+            text='✕',
+            command=self.close,
+            bg=AppConfig.COLORS['title_bg'],
+            fg=AppConfig.COLORS['title_fg'],
+            font=AppConfig.FONTS['title'],
+            bd=0,
+            width=3,
+            height=1
+        )
+        close_btn.pack(side='right', padx=5, pady=2)
+
     def _create_dialog_content(self):
-        """建立對話框內容 - 🔥 修改：使用置中佈局"""
-        # 🔥 修改：主要內容框架 - 使用置中佈局
+        """建立對話框內容"""
         main_content_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
         main_content_frame.pack(expand=True, fill='both')
 
-        # 🔥 修改：表單容器 - 置中顯示
         form_container = tk.Frame(main_content_frame, bg=AppConfig.COLORS['window_bg'])
         form_container.pack(expand=True, anchor='center')
 
-        # 🔥 修改：表單內容 - 減少外距
         form_frame = tk.Frame(form_container, bg=AppConfig.COLORS['window_bg'])
         form_frame.pack(padx=10, pady=10)
 
@@ -81,7 +160,6 @@ class SimpleProgressEditDialog(BaseWindow):
             info_frame = tk.Frame(form_frame, bg=AppConfig.COLORS['window_bg'])
             info_frame.pack(fill='x', pady=(0, 10))
 
-            # 使用統一的案件顯示格式
             case_display_name = AppConfig.format_case_display_name(self.case_data)
             case_type = self.case_data.case_type
 
@@ -137,253 +215,100 @@ class SimpleProgressEditDialog(BaseWindow):
         # 日期選擇
         tk.Label(
             edit_frame,
-            text="階段日期：",
+            text="執行日期：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text']
         ).grid(row=1, column=0, sticky='w', padx=(0, 10), pady=10)
 
-        # 解析現有日期
-        initial_date = datetime.now().date()
-        if self.stage_date:
-            try:
-                initial_date = datetime.strptime(self.stage_date, '%Y-%m-%d').date()
-            except:
-                pass
-
-        if DateEntry is not None:
+        if DateEntry:
             self.date_entry = DateEntry(
                 edit_frame,
-                width=25,
+                width=12,
                 background='darkblue',
                 foreground='white',
                 borderwidth=2,
                 date_pattern='yyyy-mm-dd',
-                locale='zh_TW',
                 font=AppConfig.FONTS['text']
             )
-            self.date_entry.set_date(initial_date)
-            self._setup_date_entry_events()
+            if self.stage_date:
+                try:
+                    from datetime import datetime
+                    date_obj = datetime.strptime(self.stage_date, '%Y-%m-%d')
+                    self.date_entry.set_date(date_obj.date())
+                except:
+                    pass
         else:
-            # 回退方案
+            self.date_var = tk.StringVar(value=self.stage_date or '')
             self.date_entry = tk.Entry(
                 edit_frame,
-                width=27,
-                bg='white',
-                fg='black',
+                textvariable=self.date_var,
+                width=15,
                 font=AppConfig.FONTS['text']
             )
-            self.date_entry.insert(0, initial_date.strftime('%Y-%m-%d'))
 
         self.date_entry.grid(row=1, column=1, sticky='w', pady=10)
 
-        # 🔥 新增：時間欄位
+        # 時間輸入
         tk.Label(
             edit_frame,
-            text="時間：",
+            text="執行時間：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text']
         ).grid(row=2, column=0, sticky='w', padx=(0, 10), pady=10)
 
-        # 🔥 新增：取得現有時間
-        existing_time = ""
-        if self.case_data and self.stage_name:
-            existing_time = self.case_data.get_stage_time(self.stage_name)
-
         self.time_entry = tk.Entry(
             edit_frame,
-            width=27,
-            bg='white',
-            fg='black',
+            width=15,
             font=AppConfig.FONTS['text']
         )
         self.time_entry.grid(row=2, column=1, sticky='w', pady=10)
 
-        # 🔥 新增：如果有現有時間，填入
-        if existing_time:
-            self.time_entry.insert(0, existing_time)
-
-        # 🔥 新增：時間格式說明
-        time_help = tk.Label(
+        # 提示標籤
+        time_hint = tk.Label(
             edit_frame,
-            text="（格式：HH:MM，如 14:30）",
+            text="(格式: HH:MM，如 14:30)",
             bg=AppConfig.COLORS['window_bg'],
-            fg='#AAAAAA',
-            font=('Microsoft JhengHei', 8)
+            fg='#666666',
+            font=('Arial', 8)
         )
-        time_help.grid(row=3, column=1, sticky='w', pady=(0, 5))
+        time_hint.grid(row=2, column=2, sticky='w', padx=(5, 0), pady=10)
 
-        # 🔥 新增：備註欄位
+        # 備註輸入
         tk.Label(
             edit_frame,
             text="備註：",
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             font=AppConfig.FONTS['text']
-        ).grid(row=4, column=0, sticky='nw', padx=(0, 10), pady=10)
+        ).grid(row=3, column=0, sticky='nw', padx=(0, 10), pady=10)
 
-        # 🔥 新增：取得現有備註
-        existing_note = ""
-        if self.case_data and self.stage_name:
-            existing_note = self.case_data.get_stage_note(self.stage_name)
-
-        # 🔥 新增：多行文字輸入框
         self.note_text = tk.Text(
             edit_frame,
-            width=30,
-            height=2,
-            bg='white',
-            fg='black',
+            width=25,
+            height=4,
             font=AppConfig.FONTS['text'],
-            wrap=tk.WORD
+            wrap='word'
         )
-        self.note_text.grid(row=4, column=1, sticky='w', pady=10)
-
-        # 🔥 新增：如果有現有備註，填入
-        if existing_note:
-            self.note_text.insert('1.0', existing_note)
-
-        # 🔥 新增：備註說明
-        note_help = tk.Label(
-            edit_frame,
-            text="（選填，若有備註將在進度階段上方顯示便籤圖示）",
-            bg=AppConfig.COLORS['window_bg'],
-            fg='#AAAAAA',
-            font=('Microsoft JhengHei', 8)
-        )
-        note_help.grid(row=5, column=1, sticky='w', pady=(0, 10))
+        self.note_text.grid(row=3, column=1, sticky='w', pady=10)
 
         # 按鈕區域
-        self._create_buttons(form_frame)
-
-    def _setup_date_entry_events(self):
-        """設定日期選擇器的事件處理"""
-        # 綁定按鈕點擊事件（展開日曆）
-        try:
-            for child in self.date_entry.winfo_children():
-                if isinstance(child, tk.Button):
-                    child.bind('<Button-1>', self._on_calendar_button_click, add='+')
-                    break
-        except:
-            pass
-
-        # 綁定其他相關事件
-        self.date_entry.bind('<Button-1>', self._on_date_entry_click, add='+')
-        self.date_entry.bind('<<DateEntrySelected>>', self._on_date_selected, add='+')
-        self.date_entry.bind('<<CalendarOpened>>', self._on_calendar_opened, add='+')
-        self.date_entry.bind('<<CalendarClosed>>', self._on_calendar_closed, add='+')
-
-    def _on_calendar_button_click(self, event):
-        """日曆按鈕點擊事件"""
-        self._release_dialog_control()
-
-    def _release_dialog_control(self):
-        """釋放對話框控制權，讓日曆優先"""
-        try:
-            self.window.grab_release()
-            self.window.attributes('-topmost', False)
-            self.window.lower()
-        except:
-            pass
-
-    def _ensure_calendar_topmost(self):
-        """確保日曆視窗置頂"""
-        try:
-            for widget in self.window.winfo_toplevel().winfo_children():
-                if isinstance(widget, tk.Toplevel):
-                    try:
-                        if 'calendar' in widget.winfo_class().lower() or 'date' in str(widget).lower():
-                            widget.lift()
-                            widget.attributes('-topmost', True)
-                            widget.focus_force()
-                            break
-                    except:
-                        continue
-
-            all_windows = self.window.tk.call('wm', 'stackorder', self.window._w)
-            if len(all_windows) > 1:
-                latest_window = all_windows[-1]
-                try:
-                    latest_window_obj = self.window.nametowidget(latest_window)
-                    if latest_window_obj != self.window:
-                        latest_window_obj.lift()
-                        latest_window_obj.attributes('-topmost', True)
-                        latest_window_obj.focus_force()
-                except:
-                    pass
-        except Exception as e:
-            print(f"確保日曆置頂失敗: {e}")
-
-    def _on_date_entry_click(self, event):
-        """日期輸入框點擊事件"""
-        widget_width = self.date_entry.winfo_width()
-        click_x = event.x
-
-        if click_x > widget_width - 30:
-            self._release_dialog_control()
-
-    def _on_calendar_opened(self, event):
-        """日曆展開事件"""
-        self._release_dialog_control()
-        self.window.after(100, self._ensure_calendar_topmost)
-
-    def _on_calendar_closed(self, event):
-        """日曆關閉事件"""
-        self.window.after(100, self._restore_dialog_control)
-
-    def _on_date_selected(self, event):
-        """日期選擇完成事件"""
-        self.window.after(150, self._restore_dialog_control)
-
-    def _restore_dialog_control(self):
-        """恢復對話框控制權"""
-        try:
-            if self.window.winfo_exists():
-                self.window.lift()
-                self.window.attributes('-topmost', True)
-                self.window.focus_force()
-                self.window.grab_set()
-                self.window.after(200, lambda: self.window.attributes('-topmost', False))
-                self._ensure_calendar_closed()
-        except:
-            pass
-
-    def _ensure_calendar_closed(self):
-        """確保日曆視窗已關閉"""
-        try:
-            all_windows = self.window.tk.call('wm', 'stackorder', self.window._w)
-            for window_name in all_windows:
-                try:
-                    window_obj = self.window.nametowidget(window_name)
-                    if (window_obj != self.window and
-                        isinstance(window_obj, tk.Toplevel) and
-                        ('calendar' in str(window_obj).lower() or 'date' in str(window_obj).lower())):
-                        window_obj.attributes('-topmost', False)
-                except:
-                    continue
-        except:
-            pass
-
-    def _create_buttons(self, parent):
-        """建立按鈕"""
-        button_frame = tk.Frame(parent, bg=AppConfig.COLORS['window_bg'])
+        button_frame = tk.Frame(form_frame, bg=AppConfig.COLORS['window_bg'])
         button_frame.pack(pady=20)
 
-        # 儲存按鈕
         save_btn = tk.Button(
             button_frame,
-            text='確定',  # 🔥 修改：改為"確定"更符合一般習慣
+            text='儲存',
             command=self._on_save,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
             font=AppConfig.FONTS['button'],
-            width=8,
+            width=10,
             height=1
         )
-        save_btn.pack(side='left', padx=5)
+        save_btn.pack(side='left', padx=10)
 
-        # 取消按鈕
         cancel_btn = tk.Button(
             button_frame,
             text='取消',
@@ -391,39 +316,82 @@ class SimpleProgressEditDialog(BaseWindow):
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
             font=AppConfig.FONTS['button'],
-            width=8,
+            width=10,
             height=1
         )
-        cancel_btn.pack(side='left', padx=5)
+        cancel_btn.pack(side='left', padx=10)
+
+    def _show_duplicate_stage_confirmation(self, stage_name: str) -> bool:
+        """顯示重複階段確認對話框 - 修正置頂問題"""
+        from views.dialogs import ConfirmDialog
+
+        # 暫時釋放當前對話框的grab和置頂
+        try:
+            self.window.grab_release()
+            self.window.attributes('-topmost', False)
+        except:
+            pass
+
+        # 建立確認對話框
+        confirm_result = ConfirmDialog.ask(
+            self.window,
+            "重複階段確認",
+            f"階段「{stage_name}」已存在，是否要更新日期和備註？"
+        )
+
+        # 恢復當前對話框的控制權
+        try:
+            self.window.after(100, self._restore_dialog_control)
+        except:
+            pass
+
+        return confirm_result
+
+    def _restore_dialog_control(self):
+        """恢復對話框控制權 - 避免閃爍"""
+        try:
+            if self.window.winfo_exists():
+                self.window.lift()
+                self.window.grab_set()
+                self.window.focus_force()
+        except:
+            pass
 
     def _on_save(self):
-        """儲存按鈕事件 - 🔥 修改：加入備註處理"""
+        """儲存進度階段"""
         try:
-            # 取得階段名稱
             stage_name = self.stage_var.get().strip()
             if not stage_name:
-                messagebox.showerror("錯誤", "請輸入或選擇進度階段")
+                messagebox.showerror("錯誤", "請輸入階段名稱")
                 return
 
             # 取得日期
-            if DateEntry is not None and hasattr(self.date_entry, 'get_date'):
-                stage_date = self.date_entry.get_date().strftime('%Y-%m-%d')
-            else:
-                date_str = self.date_entry.get().strip()
+            if DateEntry and hasattr(self, 'date_entry') and hasattr(self.date_entry, 'get_date'):
                 try:
-                    datetime.strptime(date_str, '%Y-%m-%d')
-                    stage_date = date_str
+                    stage_date = self.date_entry.get_date().strftime('%Y-%m-%d')
+                except:
+                    stage_date = self.date_entry.get()
+            else:
+                stage_date = self.date_var.get() if hasattr(self, 'date_var') else self.date_entry.get()
+
+            if not stage_date:
+                messagebox.showerror("錯誤", "請選擇執行日期")
+                return
+
+            # 驗證日期格式
+            if stage_date:
+                try:
+                    datetime.strptime(stage_date, '%Y-%m-%d')
                 except ValueError:
                     messagebox.showerror("錯誤", "日期格式錯誤，請使用 YYYY-MM-DD 格式")
                     return
 
-            # 🔥 新增：取得時間
+            # 取得時間
             time = self.time_entry.get().strip()
 
-            # 🔥 新增：驗證時間格式（如果有輸入時間）
+            # 驗證時間格式（如果有輸入時間）
             if time:
                 try:
-                    # 簡單驗證時間格式 HH:MM
                     time_parts = time.split(':')
                     if len(time_parts) != 2:
                         raise ValueError("時間格式錯誤")
@@ -434,20 +402,20 @@ class SimpleProgressEditDialog(BaseWindow):
                     messagebox.showerror("錯誤", "時間格式錯誤，請使用 HH:MM 格式（如 14:30）")
                     return
 
-            # 🔥 新增：取得備註
+            # 取得備註
             note = self.note_text.get('1.0', tk.END).strip()
 
-            # 新增模式：檢查階段是否已存在
+            # 新增模式：檢查階段是否已存在 - 使用修正後的確認對話框
             if self.mode == 'add' and self.case_data:
                 if stage_name in self.case_data.progress_stages:
-                    if not messagebox.askyesno("確認", f"階段「{stage_name}」已存在，是否要更新日期和備註？"):
+                    if not self._show_duplicate_stage_confirmation(stage_name):
                         return
 
             self.result = {
                 'stage_name': stage_name,
                 'stage_date': stage_date,
-                'time': time,  # 🔥 新增：加入時間
-                'note': note,  # 🔥 新增：加入備註
+                'time': time,
+                'note': note,
                 'original_stage': self.stage_name
             }
 

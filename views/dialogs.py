@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 from config.settings import AppConfig
 
 class ConfirmDialog:
-    """確認對話框"""
+    """確認對話框 - 修正置頂層級問題"""
 
     def __init__(self, parent, title="確認", message="確定要執行此操作嗎？"):
         self.result = False
@@ -17,34 +17,24 @@ class ConfirmDialog:
         self._create_dialog_content()
 
     def _setup_window(self, title):
-        """設定視窗基本屬性"""
+        """設定視窗基本屬性 - 確保置頂顯示"""
         self.window.title(f"{AppConfig.WINDOW_TITLES['main']} - {title}")
         self.window.geometry("400x180")
         self.window.configure(bg=AppConfig.COLORS['window_bg'])
         self.window.overrideredirect(True)
         self.window.resizable(False, False)
 
-        # 置頂設定
+        # 強制置頂設定
         if self.parent:
             self.window.transient(self.parent)
-            # 延遲設定grab_set和置頂，避免與子控件衝突
-            self.window.after(100, self._set_modal_dialog)
+            # 立即設定置頂和模態，不延遲
+            self.window.lift()
+            self.window.attributes('-topmost', True)
+            self.window.grab_set()
+            self.window.focus_force()
 
         # 置中顯示
         self._center_window()
-
-    def _set_modal_dialog(self):
-        """設定模態對話框"""
-        try:
-            if self.window.winfo_exists():
-                self.window.grab_set()
-                self.window.lift()
-                self.window.focus_force()
-                # 暫時置頂
-                self.window.attributes('-topmost', True)
-                self.window.after(200, lambda: self.window.attributes('-topmost', False))
-        except:
-            pass
 
     def _center_window(self):
         """將視窗置中顯示"""
@@ -71,25 +61,12 @@ class ConfirmDialog:
         # 標題標籤
         title_label = tk.Label(
             title_frame,
-            text="確認",
+            text="重複階段確認",
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title']  # 使用統一字體
+            font=AppConfig.FONTS['title']
         )
-        title_label.pack(side='left', padx=10)
-
-        # 關閉按鈕
-        close_btn = tk.Button(
-            title_frame,
-            text="✕",
-            bg=AppConfig.COLORS['title_bg'],
-            fg=AppConfig.COLORS['title_fg'],
-            font=('Arial', 12, 'bold'),
-            bd=0,
-            width=3,
-            command=self._on_cancel
-        )
-        close_btn.pack(side='right', padx=10)
+        title_label.pack(expand=True)
 
         # 設定拖曳功能
         self._setup_drag(title_frame, title_label)
@@ -104,15 +81,15 @@ class ConfirmDialog:
             text=self.message,
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],  # 使用統一文字字體
+            font=AppConfig.FONTS['text'],
             wraplength=350,
-            justify='center'
+            justify='left'
         )
         message_label.pack(expand=True)
 
         # 按鈕區域
         button_frame = tk.Frame(content_frame, bg=AppConfig.COLORS['window_bg'])
-        button_frame.pack(side='bottom', pady=10)
+        button_frame.pack(pady=(20, 0))
 
         # 確定按鈕
         ok_btn = tk.Button(
@@ -121,11 +98,11 @@ class ConfirmDialog:
             command=self._on_ok,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
-            width=8,
+            font=AppConfig.FONTS['button'],
+            width=10,
             height=1
         )
-        ok_btn.pack(side='left', padx=5)
+        ok_btn.pack(side='left', padx=10)
 
         # 取消按鈕
         cancel_btn = tk.Button(
@@ -134,11 +111,11 @@ class ConfirmDialog:
             command=self._on_cancel,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用按鈕字體大小
-            width=8,
+            font=AppConfig.FONTS['button'],
+            width=10,
             height=1
         )
-        cancel_btn.pack(side='left', padx=5)
+        cancel_btn.pack(side='left', padx=10)
 
     def _setup_drag(self, title_frame, title_label):
         """設定視窗拖曳功能"""
@@ -160,11 +137,13 @@ class ConfirmDialog:
     def _on_ok(self):
         """確定按鈕事件"""
         self.result = True
+        self.window.attributes('-topmost', False)  # 關閉前移除置頂
         self.window.destroy()
 
     def _on_cancel(self):
         """取消按鈕事件"""
         self.result = False
+        self.window.attributes('-topmost', False)  # 關閉前移除置頂
         self.window.destroy()
 
     @staticmethod
@@ -227,7 +206,7 @@ class MessageDialog:
         self.window.geometry(f"400x180+{x}+{y}")
 
     def _create_dialog_content(self):
-        """建立對話框內容"""
+        """建立對話框內容 - 訊息對話框"""
         # 主容器
         main_frame = tk.Frame(self.window, bg=AppConfig.COLORS['window_bg'])
         main_frame.pack(fill='both', expand=True)
@@ -244,25 +223,12 @@ class MessageDialog:
         # 標題標籤
         title_label = tk.Label(
             title_frame,
-            text="訊息",
+            text="系統訊息",
             bg=AppConfig.COLORS['title_bg'],
             fg=AppConfig.COLORS['title_fg'],
-            font=AppConfig.FONTS['title']  # 使用統一字體
+            font=AppConfig.FONTS['title']
         )
-        title_label.pack(side='left', padx=10)
-
-        # 關閉按鈕
-        close_btn = tk.Button(
-            title_frame,
-            text="✕",
-            bg=AppConfig.COLORS['title_bg'],
-            fg=AppConfig.COLORS['title_fg'],
-            font=('Arial', 12, 'bold'),
-            bd=0,
-            width=3,
-            command=self._close
-        )
-        close_btn.pack(side='right', padx=10)
+        title_label.pack(expand=True)
 
         # 設定拖曳功能
         self._setup_drag(title_frame, title_label)
@@ -277,9 +243,9 @@ class MessageDialog:
             text=self.message,
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
-            font=AppConfig.FONTS['text'],  # 使用統一字體
+            font=AppConfig.FONTS['text'],
             wraplength=350,
-            justify='center'
+            justify='left'
         )
         message_label.pack(expand=True)
 
@@ -290,8 +256,9 @@ class MessageDialog:
             command=self._close,
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
-            font=AppConfig.FONTS['button'],  # 使用統一字體
-            width=10
+            font=AppConfig.FONTS['button'],
+            width=10,
+            height=1
         )
         ok_btn.pack(pady=(0, 10))
 
@@ -365,15 +332,16 @@ class UnifiedMessageDialog:
                 self.window.after(200, lambda: self.window.attributes('-topmost', False))
         except:
             pass
+
     def _center_window(self):
         """將視窗置中顯示"""
         self.window.update_idletasks()
         x = (self.window.winfo_screenwidth() // 2) - 200
-        y = (self.window.winfo_screenheight() // 2) - 90
-        self.window.geometry(f"400x180+{x}+{y}")
+        y = (self.window.winfo_screenheight() // 2) - 125
+        self.window.geometry(f"400x250+{x}+{y}")
 
     def _create_dialog_content(self):
-        """建立對話框內容"""
+        """建立對話框內容 - 統一訊息對話框"""
         # 主容器
         main_frame = tk.Frame(self.window, bg=AppConfig.COLORS['window_bg'])
         main_frame.pack(fill='both', expand=True)
@@ -387,18 +355,13 @@ class UnifiedMessageDialog:
         title_frame.pack(fill='x')
         title_frame.pack_propagate(False)
 
-        # 根據類型設定標題和顏色
-        title_text, icon = self._get_dialog_style()
-
-        # 圖示標籤
-        icon_label = tk.Label(
-            title_frame,
-            text=icon,
-            bg=AppConfig.COLORS['title_bg'],
-            fg=AppConfig.COLORS['title_fg'],
-            font=('Arial', 14, 'bold')
-        )
-        icon_label.pack(side='left', padx=(10, 5))
+        # 根據對話框類型設定標題
+        title_text = {
+            'success': '成功',
+            'error': '錯誤',
+            'warning': '警告',
+            'info': '訊息'
+        }.get(self.dialog_type, '訊息')
 
         # 標題標籤
         title_label = tk.Label(
@@ -408,27 +371,42 @@ class UnifiedMessageDialog:
             fg=AppConfig.COLORS['title_fg'],
             font=AppConfig.FONTS['title']
         )
-        title_label.pack(side='left', padx=5)
-
-        # 關閉按鈕
-        close_btn = tk.Button(
-            title_frame,
-            text="✕",
-            bg=AppConfig.COLORS['title_bg'],
-            fg=AppConfig.COLORS['title_fg'],
-            font=('Arial', 12, 'bold'),
-            bd=0,
-            width=3,
-            command=self._close
-        )
-        close_btn.pack(side='right', padx=10)
+        title_label.pack(expand=True)
 
         # 設定拖曳功能
-        self._setup_drag(title_frame, title_label, icon_label)
+        self._setup_drag(title_frame, title_label)
 
         # 內容區域
         content_frame = tk.Frame(main_frame, bg=AppConfig.COLORS['window_bg'])
         content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+
+        # 圖示區域
+        icon_frame = tk.Frame(content_frame, bg=AppConfig.COLORS['window_bg'])
+        icon_frame.pack(pady=(0, 10))
+
+        # 根據對話框類型設定圖示
+        icon_text = {
+            'success': '✓',
+            'error': '✗',
+            'warning': '⚠',
+            'info': 'ℹ'
+        }.get(self.dialog_type, 'ℹ')
+
+        icon_color = {
+            'success': '#4CAF50',
+            'error': '#F44336',
+            'warning': '#FF9800',
+            'info': '#2196F3'
+        }.get(self.dialog_type, '#2196F3')
+
+        icon_label = tk.Label(
+            icon_frame,
+            text=icon_text,
+            bg=AppConfig.COLORS['window_bg'],
+            fg=icon_color,
+            font=('Arial', 24, 'bold')
+        )
+        icon_label.pack()
 
         # 訊息標籤
         message_label = tk.Label(
@@ -440,7 +418,7 @@ class UnifiedMessageDialog:
             wraplength=350,
             justify='center'
         )
-        message_label.pack(expand=True)
+        message_label.pack(expand=True, pady=(0, 20))
 
         # 確定按鈕
         ok_btn = tk.Button(
@@ -450,21 +428,12 @@ class UnifiedMessageDialog:
             bg=AppConfig.COLORS['button_bg'],
             fg=AppConfig.COLORS['button_fg'],
             font=AppConfig.FONTS['button'],
-            width=10
+            width=10,
+            height=1
         )
         ok_btn.pack(pady=(0, 10))
 
-    def _get_dialog_style(self):
-        """根據對話框類型取得樣式"""
-        styles = {
-            'info': ('資訊', 'ℹ'),
-            'success': ('成功', '✓'),
-            'warning': ('警告', '⚠'),
-            'error': ('錯誤', '✕'),
-        }
-        return styles.get(self.dialog_type, ('訊息', 'ℹ'))
-
-    def _setup_drag(self, title_frame, title_label, icon_label):
+    def _setup_drag(self, title_frame, title_label):
         """設定視窗拖曳功能"""
         def start_drag(event):
             self.drag_data["x"] = event.x
@@ -476,34 +445,37 @@ class UnifiedMessageDialog:
             self.window.geometry(f"+{x}+{y}")
 
         # 綁定拖曳事件
-        for widget in [title_frame, title_label, icon_label]:
-            widget.bind("<Button-1>", start_drag)
-            widget.bind("<B1-Motion>", on_drag)
+        title_frame.bind("<Button-1>", start_drag)
+        title_frame.bind("<B1-Motion>", on_drag)
+        title_label.bind("<Button-1>", start_drag)
+        title_label.bind("<B1-Motion>", on_drag)
 
     def _close(self):
         """關閉對話框"""
         self.window.destroy()
 
     @staticmethod
-    def show_info(parent, message, title="資訊"):
-        """顯示資訊對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "info")
+    def show(parent, title="訊息", message="", dialog_type="info"):
+        """靜態方法：顯示統一訊息對話框"""
+        dialog = UnifiedMessageDialog(parent, title, message, dialog_type)
         dialog.window.wait_window()
 
     @staticmethod
-    def show_success(parent, message, title="成功"):
-        """顯示成功對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "success")
-        dialog.window.wait_window()
+    def show_success(parent, message="操作成功"):
+        """顯示成功訊息"""
+        UnifiedMessageDialog.show(parent, "成功", message, "success")
 
     @staticmethod
-    def show_warning(parent, message, title="警告"):
-        """顯示警告對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "warning")
-        dialog.window.wait_window()
+    def show_error(parent, message="發生錯誤"):
+        """顯示錯誤訊息"""
+        UnifiedMessageDialog.show(parent, "錯誤", message, "error")
 
     @staticmethod
-    def show_error(parent, message, title="錯誤"):
-        """顯示錯誤對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "error")
-        dialog.window.wait_window()
+    def show_warning(parent, message="警告"):
+        """顯示警告訊息"""
+        UnifiedMessageDialog.show(parent, "警告", message, "warning")
+
+    @staticmethod
+    def show_info(parent, message="訊息"):
+        """顯示訊息"""
+        UnifiedMessageDialog.show(parent, "訊息", message, "info")
