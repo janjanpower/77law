@@ -10,10 +10,13 @@ from views.dialogs import UnifiedMessageDialog
 from views.import_data_dialog import ImportDataDialog
 from views.date_reminder_widget import DateReminderWidget
 from views.case_transfer_dialog import CaseTransferDialog
+from views.base_window import BaseWindow
+
 
 class CaseOverviewWindow:
     """案件總覽視窗"""
     def __init__(self, parent=None, case_controller=None):
+
         self.parent = parent
         self.case_controller = case_controller
         self.visible_fields = AppConfig.OVERVIEW_FIELDS.copy()

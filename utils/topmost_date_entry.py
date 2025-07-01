@@ -1,6 +1,6 @@
 # utils/topmost_date_entry.py
 """
-自定義DateEntry控件，確保日曆展開時保持置頂
+修正版自定義DateEntry控件，確保日曆展開時保持置頂
 統一的日期控件解決方案，避免重複代碼
 """
 
@@ -17,7 +17,7 @@ except ImportError:
     BaseDateEntry = None
 
 class TopmostDateEntry:
-    """置頂日期選擇控件包裝器"""
+    """置頂日期選擇控件包裝器 - 修正版"""
 
     def __init__(self, parent, parent_window=None, **kwargs):
         """
@@ -32,7 +32,9 @@ class TopmostDateEntry:
         self.parent_window = parent_window
         self.date_entry = None
         self.calendar_window = None
-        self.original_focus_callback = None
+        self.calendar_window_id = None  # 🔥 新增：層級管理系統的視窗ID
+        self.is_monitoring = False
+        self.monitor_job = None
 
         # 設定預設參數
         default_kwargs = {
@@ -51,16 +53,17 @@ class TopmostDateEntry:
             self._create_fallback_widget(default_kwargs)
 
     def _create_calendar_widget(self, kwargs):
-        """創建tkcalendar控件"""
+        """創建tkcalendar控件 - 修正版"""
         self.date_entry = BaseDateEntry(self.parent, **kwargs)
 
-        # 監聽日曆展開事件
-        self.date_entry.bind('<Button-1>', self._on_date_entry_click)
-        self.date_entry.bind('<Return>', self._on_date_entry_click)
-        self.date_entry.bind('<space>', self._on_date_entry_click)
+        # 🔥 修正：只綁定必要的事件，避免與內建事件衝突
+        # 使用 <ButtonRelease-1> 而非 <Button-1>，避免阻擋原始點擊事件
+        self.date_entry.bind('<ButtonRelease-1>', self._on_date_entry_activated)
+        self.date_entry.bind('<KeyRelease-Return>', self._on_date_entry_activated)
+        self.date_entry.bind('<KeyRelease-space>', self._on_date_entry_activated)
 
-        # 定期檢查日曆是否展開
-        self._check_calendar_window()
+        # 🔥 修正：使用更簡單的監控機制
+        self._start_monitoring()
 
     def _create_fallback_widget(self, kwargs):
         """創建降級Entry控件"""
@@ -70,131 +73,129 @@ class TopmostDateEntry:
             font=kwargs.get('font', AppConfig.FONTS['text'])
         )
 
-    def _on_date_entry_click(self, event=None):
-        """日期控件點擊事件處理 - 🔥 修正版本"""
-        # 立即嘗試查找日曆
-        self._find_and_setup_calendar()
+    def _on_date_entry_activated(self, event=None):
+        """🔥 修正：日期控件激活事件處理"""
+        # 延遲處理，確保tkcalendar的內建事件先執行
+        self.parent.after(100, self._check_for_calendar)
+        self.parent.after(300, self._check_for_calendar)
+        self.parent.after(500, self._check_for_calendar)
 
-        # 多階段延遲檢查，確保日曆能被找到
-        self.parent.after(50, self._find_and_setup_calendar)
-        self.parent.after(150, self._find_and_setup_calendar)
-        self.parent.after(300, self._find_and_setup_calendar)
+    def _start_monitoring(self):
+        """🔥 修正：開始監控日曆視窗"""
+        if not self.is_monitoring:
+            self.is_monitoring = True
+            self._monitor_calendar()
 
-        # 🔥 新增：確保父視窗保持置頂
-        if self.parent_window:
-            self.parent.after(100, self._ensure_parent_topmost)
+    def _stop_monitoring(self):
+        """🔥 新增：停止監控"""
+        self.is_monitoring = False
+        if self.monitor_job:
+            try:
+                self.parent.after_cancel(self.monitor_job)
+            except:
+                pass
+            self.monitor_job = None
 
-    def _ensure_parent_topmost(self):
-        """🔥 新增：確保父視窗置頂"""
+    def _monitor_calendar(self):
+        """🔥 修正：監控日曆視窗狀態"""
+        if not self.is_monitoring:
+            return
+
         try:
-            if self.parent_window and self.parent_window.winfo_exists():
-                self.parent_window.attributes('-topmost', True)
-                self.parent_window.lift()
-        except:
-            pass
-
-    def _check_calendar_window(self):
-        """定期檢查日曆視窗狀態"""
-        try:
-            self._find_and_setup_calendar()
-            # 每100ms檢查一次
-            self.parent.after(100, self._check_calendar_window)
+            self._check_for_calendar()
+            # 繼續監控
+            self.monitor_job = self.parent.after(200, self._monitor_calendar)
         except tk.TclError:
-            # 控件已銷毀，停止檢查
-            pass
+            # 控件已銷毀，停止監控
+            self._stop_monitoring()
 
-    def _find_and_setup_calendar(self):
-        """查找並設定日曆視窗置頂 - 🔥 增強版本"""
+    def _check_for_calendar(self):
+        """🔥 修正：簡化的日曆檢測方法"""
         if not self.date_entry:
             return
 
-        # 🔥 修正：擴大搜索範圍，包含所有頂級視窗
+        # 🔥 修正：使用更簡單可靠的檢測方法
         root = self.parent.winfo_toplevel()
-        all_toplevels = []
 
-        # 獲取所有頂級視窗
         try:
+            # 獲取所有Toplevel視窗
             for widget in root.winfo_children():
-                if isinstance(widget, tk.Toplevel):
-                    all_toplevels.append(widget)
+                if isinstance(widget, tk.Toplevel) and self._is_calendar_window(widget):
+                    if self.calendar_window != widget:
+                        self._setup_calendar_topmost(widget)
+                    return
 
-            # 🔥 新增：也檢查root的所有子視窗
-            import tkinter as tk
-            for window_name in root.tk.call('wm', 'stackorder', root):
-                try:
-                    window = root.nametowidget(window_name)
-                    if isinstance(window, tk.Toplevel) and window not in all_toplevels:
-                        all_toplevels.append(window)
-                except:
-                    pass
+            # 🔥 新增：檢查是否有新出現的Toplevel視窗
+            for child in tk._default_root.winfo_children() if tk._default_root else []:
+                if isinstance(child, tk.Toplevel) and self._is_calendar_window(child):
+                    if self.calendar_window != child:
+                        self._setup_calendar_topmost(child)
+                    return
 
-        except:
-            pass
-
-        # 檢查每個視窗是否為日曆
-        for widget in all_toplevels:
-            if self._is_calendar_window(widget):
-                self._setup_calendar_topmost(widget)
-                break
+        except Exception as e:
+            print(f"日曆檢測時發生錯誤: {e}")
 
     def _is_calendar_window(self, window):
-        """判斷是否為日曆視窗 - 🔥 改進版本"""
+        """🔥 修正：簡化的日曆視窗判斷方法"""
         try:
-            if not hasattr(window, 'winfo_class'):
+            if not window or not window.winfo_exists():
                 return False
 
-            # 🔥 改進：多種檢測方法
-            # 方法1：檢查是否有Calendar子控件
-            def has_calendar_child(widget):
+            # 檢查視窗大小（日曆通常是固定大小）
+            width = window.winfo_width()
+            height = window.winfo_height()
+            if not (150 <= width <= 350 and 150 <= height <= 350):
+                return False
+
+            # 檢查是否包含Calendar控件
+            def contains_calendar_widget(widget):
                 try:
+                    class_name = widget.winfo_class().lower()
+                    if 'calendar' in class_name:
+                        return True
                     for child in widget.winfo_children():
-                        class_name = str(child.winfo_class()).lower()
-                        if 'calendar' in class_name:
-                            return True
-                        # 遞迴檢查子控件
-                        if has_calendar_child(child):
+                        if contains_calendar_widget(child):
                             return True
                     return False
                 except:
                     return False
 
-            # 方法2：檢查視窗屬性
-            is_calendar = (
-                has_calendar_child(window) or
-                (hasattr(window, 'winfo_width') and window.winfo_width() < 300) or  # 日曆通常較小
-                (not window.title() or window.title() == "")  # 通常沒有標題
-            )
-
-            return is_calendar
+            return contains_calendar_widget(window)
         except:
             return False
 
     def _setup_calendar_topmost(self, calendar_window):
-        """設定日曆視窗置頂"""
+        """🔥 修正：設定日曆視窗置頂（整合層級管理系統）"""
         if self.calendar_window == calendar_window:
             return  # 已經處理過
 
         self.calendar_window = calendar_window
+        print(f"找到日曆視窗，設定置頂: {calendar_window}")
 
         try:
-            # 設定置頂
-            calendar_window.attributes('-topmost', True)
-            calendar_window.lift()
+            # 🔥 整合層級管理系統
+            try:
+                from utils.window_hierarchy_manager import register_calendar_popup
+                self.calendar_window_id = register_calendar_popup(calendar_window)
+            except ImportError:
+                # 降級處理：直接設定置頂
+                calendar_window.attributes('-topmost', True)
+                calendar_window.lift()
 
             # 確保父視窗也保持置頂
             if self.parent_window:
                 self.parent_window.attributes('-topmost', True)
                 self.parent_window.lift()
 
-            # 監聽關閉事件
-            calendar_window.bind('<Destroy>', self._on_calendar_destroy)
-            calendar_window.bind('<FocusOut>', self._on_calendar_focus_out)
+            # 🔥 修正：簡化事件綁定
+            calendar_window.bind('<Destroy>', self._on_calendar_destroy, add='+')
 
-        except tk.TclError:
-            pass
+        except Exception as e:
+            print(f"設定日曆置頂時發生錯誤: {e}")
 
     def _on_calendar_destroy(self, event=None):
-        """日曆視窗關閉事件"""
+        """🔥 修正：日曆視窗關閉事件"""
+        print("日曆視窗已關閉")
         self.calendar_window = None
 
         # 確保父視窗重新獲得焦點和置頂
@@ -204,25 +205,6 @@ class TopmostDateEntry:
             except:
                 pass
 
-    def _on_calendar_focus_out(self, event=None):
-        """日曆失去焦點時的處理"""
-        # 延遲檢查，避免頻繁觸發
-        if self.calendar_window:
-            self.calendar_window.after(100, self._check_calendar_focus)
-
-    def _check_calendar_focus(self):
-        """檢查日曆焦點狀態"""
-        if not self.calendar_window:
-            return
-
-        try:
-            # 如果日曆視窗仍存在但失去焦點，重新設定置頂
-            if self.calendar_window.winfo_exists():
-                self.calendar_window.attributes('-topmost', True)
-                self.calendar_window.lift()
-        except:
-            pass
-
     def _restore_parent_focus(self):
         """恢復父視窗焦點"""
         try:
@@ -230,10 +212,10 @@ class TopmostDateEntry:
                 self.parent_window.attributes('-topmost', True)
                 self.parent_window.lift()
                 self.parent_window.focus_force()
-        except:
-            pass
+        except Exception as e:
+            print(f"恢復父視窗焦點時發生錯誤: {e}")
 
-    # 代理方法，讓此類表現得像DateEntry
+    # 🔥 修正：代理方法，讓此類表現得像DateEntry
     def get(self):
         """獲取日期字符串"""
         if self.date_entry:
@@ -243,16 +225,25 @@ class TopmostDateEntry:
     def get_date(self):
         """獲取日期對象（僅tkcalendar可用）"""
         if CALENDAR_AVAILABLE and hasattr(self.date_entry, 'get_date'):
-            return self.date_entry.get_date()
+            try:
+                return self.date_entry.get_date()
+            except:
+                return None
         return None
 
     def set_date(self, date):
         """設定日期"""
         if CALENDAR_AVAILABLE and hasattr(self.date_entry, 'set_date'):
-            self.date_entry.set_date(date)
+            try:
+                self.date_entry.set_date(date)
+            except Exception as e:
+                print(f"設定日期失敗: {e}")
         elif self.date_entry:
-            self.date_entry.delete(0, tk.END)
-            self.date_entry.insert(0, str(date))
+            try:
+                self.date_entry.delete(0, tk.END)
+                self.date_entry.insert(0, str(date))
+            except Exception as e:
+                print(f"設定日期失敗: {e}")
 
     def grid(self, **kwargs):
         """Grid佈局"""
@@ -280,21 +271,32 @@ class TopmostDateEntry:
             self.date_entry.focus_set()
 
     def destroy(self):
-        """銷毀控件"""
+        """🔥 修正：銷毀控件"""
+        # 停止監控
+        self._stop_monitoring()
+
+        # 銷毀日曆視窗
         if self.calendar_window:
             try:
                 self.calendar_window.destroy()
             except:
                 pass
+            self.calendar_window = None
+
+        # 銷毀主控件
         if self.date_entry:
-            self.date_entry.destroy()
+            try:
+                self.date_entry.destroy()
+            except:
+                pass
+            self.date_entry = None
 
 
 class TopmostDateEntryManager:
-    """置頂日期控件管理器 - 單例模式"""
+    """🔥 修正：置頂日期控件管理器 - 單例模式"""
 
     _instance = None
-    _active_calendars = []
+    _active_entries = []
 
     def __new__(cls):
         if cls._instance is None:
@@ -318,19 +320,32 @@ class TopmostDateEntryManager:
         Returns:
             TopmostDateEntry: 置頂日期控件實例
         """
-        return TopmostDateEntry(parent, parent_window, **kwargs)
+        entry = TopmostDateEntry(parent, parent_window, **kwargs)
+        cls._active_entries.append(entry)
+        return entry
+
+    @classmethod
+    def cleanup_destroyed_entries(cls):
+        """🔥 新增：清理已銷毀的控件"""
+        cls._active_entries = [entry for entry in cls._active_entries
+                              if entry.date_entry and hasattr(entry.date_entry, 'winfo_exists')]
 
     @classmethod
     def ensure_all_calendars_topmost(cls, target_window):
-        """確保所有日曆控件置頂"""
+        """🔥 修正：確保所有日曆控件置頂"""
         try:
-            for widget in target_window.winfo_toplevel().winfo_children():
-                if isinstance(widget, tk.Toplevel):
-                    # 檢查是否為日曆視窗
-                    for child in widget.winfo_children():
-                        if hasattr(child, 'winfo_class') and 'Calendar' in str(child.winfo_class()):
-                            widget.attributes('-topmost', True)
-                            widget.lift()
-                            break
-        except:
-            pass
+            cls.cleanup_destroyed_entries()
+
+            # 檢查所有活動的日期控件
+            for entry in cls._active_entries:
+                if entry.calendar_window and entry.calendar_window.winfo_exists():
+                    entry.calendar_window.attributes('-topmost', True)
+                    entry.calendar_window.lift()
+
+            # 確保目標視窗置頂
+            if target_window and target_window.winfo_exists():
+                target_window.attributes('-topmost', True)
+                target_window.lift()
+
+        except Exception as e:
+            print(f"確保日曆置頂時發生錯誤: {e}")

@@ -328,18 +328,54 @@ class SimpleProgressEditDialog(BaseWindow):
         return confirm_result
 
     def _restore_dialog_control(self):
-        """🔥 改進：恢復對話框控制權，確保日曆也置頂"""
+        """🔥 改進：恢復對話框控制權，避免過度置頂"""
         try:
-            if self.window.winfo_exists():
-                self.window.lift()
-                self.window.grab_set()
-                self.window.attributes('-topmost', True)
-                self.window.focus_force()
+            if self.window and self.window.winfo_exists():
+                # 🔥 檢查是否真的需要重新grab
+                current_grab = self.window.grab_current()
+                if current_grab != self.window:
+                    self.window.grab_set()
 
-                # 確保所有日曆控件也置頂
-                TopmostDateEntryManager.ensure_all_calendars_topmost(self.window)
-        except:
-            pass
+                # 🔥 只在必要時設置置頂
+                if not self.window.attributes('-topmost'):
+                    self.window.attributes('-topmost', True)
+
+                self.window.lift()
+                self.window.focus_force()
+                print("對話框控制權已恢復")
+
+        except Exception as e:
+            print(f"恢復對話框控制權失敗: {e}")
+
+    def emergency_fix_frozen_windows():
+        """🔥 緊急修復凍結的視窗"""
+        try:
+            print("執行緊急修復...")
+
+            # 釋放所有grab
+            if tk._default_root:
+                tk._default_root.grab_release()
+
+            # 找到並修復所有Toplevel視窗
+            all_windows = []
+            if tk._default_root:
+                all_windows = [w for w in tk._default_root.winfo_children() if isinstance(w, tk.Toplevel)]
+
+            for window in all_windows:
+                try:
+                    if window.winfo_exists():
+                        window.grab_release()
+                        window.attributes('-topmost', False)
+                        print(f"已修復視窗: {window}")
+                except:
+                    pass
+
+            print("緊急修復完成")
+            return True
+
+        except Exception as e:
+            print(f"緊急修復失敗: {e}")
+            return False
 
     def _on_save(self):
         """儲存進度階段"""
@@ -399,17 +435,63 @@ class SimpleProgressEditDialog(BaseWindow):
             messagebox.showerror("錯誤", f"儲存失敗：{str(e)}")
 
     def close(self):
-        """關閉對話框"""
+        """🔥 修正：SimpleProgressEditDialog 關閉方法"""
         try:
-            # 清理日期控件
-            if self.date_entry:
-                self.date_entry.destroy()
+            print("開始關閉進度編輯對話框")
 
+            # 🔥 1. 清理日期控件
+            if hasattr(self, 'date_entry') and self.date_entry:
+                try:
+                    # 停止日期控件的監控
+                    if hasattr(self.date_entry, '_stop_monitoring'):
+                        self.date_entry._stop_monitoring()
+                    self.date_entry.destroy()
+                    self.date_entry = None
+                    print("日期控件已清理")
+                except Exception as e:
+                    print(f"清理日期控件失敗: {e}")
+
+            # 🔥 2. 安全釋放grab
+            if self.window and hasattr(self.window, 'winfo_exists'):
+                try:
+                    if self.window.winfo_exists():
+                        self.window.attributes('-topmost', False)
+                        self.window.grab_release()
+                        print("已釋放對話框grab")
+                except Exception as e:
+                    print(f"釋放grab失敗: {e}")
+
+            # 🔥 3. 銷毀視窗
             if self.window:
-                self.window.grab_release()
-                self.window.destroy()
-        except:
-            pass
+                try:
+                    self.window.destroy()
+                    print("對話框已銷毀")
+                except Exception as e:
+                    print(f"銷毀對話框失敗: {e}")
+                finally:
+                    self.window = None
+
+            # 🔥 4. 恢復父視窗
+            if hasattr(self, 'parent') and self.parent:
+                try:
+                    if self.parent.winfo_exists():
+                        self.parent.after(100, self._restore_parent)
+                except Exception as e:
+                    print(f"恢復父視窗失敗: {e}")
+
+        except Exception as e:
+            print(f"關閉進度編輯對話框時發生錯誤: {e}")
+
+    def _restore_parent(self):
+        """🔥 恢復父視窗狀態"""
+        try:
+            if self.parent and self.parent.winfo_exists():
+                self.parent.attributes('-topmost', True)
+                self.parent.lift()
+                self.parent.focus_force()
+                print("已恢復父視窗狀態")
+        except Exception as e:
+            print(f"恢復父視窗狀態失敗: {e}")
 
     @staticmethod
     def show_edit_dialog(parent, case_data, stage_name, stage_date, on_save_callback):

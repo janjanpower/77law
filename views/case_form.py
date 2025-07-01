@@ -263,3 +263,41 @@ class CaseFormDialog(BaseWindow):
         dialog = CaseFormDialog(parent, case_data=case_data, mode='edit', on_save=on_save)
         dialog.window.wait_window()
         return dialog.result_data
+
+    def close(self):
+        """🔥 修正：關閉表單視窗並恢復父視窗焦點"""
+        try:
+            # 記錄父視窗
+            parent_window = self.parent
+
+            # 釋放模態控制
+            if hasattr(self.window, 'grab_release'):
+                self.window.grab_release()
+
+            # 銷毀視窗
+            self.window.destroy()
+
+            # 🔥 修正：延遲恢復父視窗焦點
+            if parent_window and hasattr(parent_window, 'winfo_exists'):
+                try:
+                    parent_window.after(100, lambda: self._restore_parent_window_focus(parent_window))
+                except:
+                    pass
+
+        except Exception as e:
+            print(f"關閉案件表單視窗時發生錯誤: {e}")
+
+    def _restore_parent_window_focus(self, parent_window):
+        """🔥 新增：恢復父視窗焦點"""
+        try:
+            if parent_window.winfo_exists():
+                parent_window.lift()
+                parent_window.attributes('-topmost', True)
+                parent_window.focus_force()
+
+                # 🔥 如果父視窗有特定的焦點恢復方法，調用它
+                if hasattr(parent_window, '_restore_search_focus'):
+                    parent_window.after(100, parent_window._restore_search_focus)
+
+        except Exception as e:
+            print(f"恢復父視窗焦點失敗: {e}")
