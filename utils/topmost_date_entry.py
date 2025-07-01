@@ -71,9 +71,27 @@ class TopmostDateEntry:
         )
 
     def _on_date_entry_click(self, event=None):
-        """日期控件點擊事件處理"""
-        # 延遲檢查日曆視窗，確保有時間創建
-        self.parent.after(100, self._find_and_setup_calendar)
+        """日期控件點擊事件處理 - 🔥 修正版本"""
+        # 立即嘗試查找日曆
+        self._find_and_setup_calendar()
+
+        # 多階段延遲檢查，確保日曆能被找到
+        self.parent.after(50, self._find_and_setup_calendar)
+        self.parent.after(150, self._find_and_setup_calendar)
+        self.parent.after(300, self._find_and_setup_calendar)
+
+        # 🔥 新增：確保父視窗保持置頂
+        if self.parent_window:
+            self.parent.after(100, self._ensure_parent_topmost)
+
+    def _ensure_parent_topmost(self):
+        """🔥 新增：確保父視窗置頂"""
+        try:
+            if self.parent_window and self.parent_window.winfo_exists():
+                self.parent_window.attributes('-topmost', True)
+                self.parent_window.lift()
+        except:
+            pass
 
     def _check_calendar_window(self):
         """定期檢查日曆視窗狀態"""
@@ -86,34 +104,68 @@ class TopmostDateEntry:
             pass
 
     def _find_and_setup_calendar(self):
-        """查找並設定日曆視窗置頂"""
+        """查找並設定日曆視窗置頂 - 🔥 增強版本"""
         if not self.date_entry:
             return
 
-        # 查找所有頂級視窗
-        for widget in self.parent.winfo_toplevel().winfo_children():
-            if isinstance(widget, tk.Toplevel):
-                # 檢查是否為日曆視窗
-                if self._is_calendar_window(widget):
-                    self._setup_calendar_topmost(widget)
-                    break
+        # 🔥 修正：擴大搜索範圍，包含所有頂級視窗
+        root = self.parent.winfo_toplevel()
+        all_toplevels = []
+
+        # 獲取所有頂級視窗
+        try:
+            for widget in root.winfo_children():
+                if isinstance(widget, tk.Toplevel):
+                    all_toplevels.append(widget)
+
+            # 🔥 新增：也檢查root的所有子視窗
+            import tkinter as tk
+            for window_name in root.tk.call('wm', 'stackorder', root):
+                try:
+                    window = root.nametowidget(window_name)
+                    if isinstance(window, tk.Toplevel) and window not in all_toplevels:
+                        all_toplevels.append(window)
+                except:
+                    pass
+
+        except:
+            pass
+
+        # 檢查每個視窗是否為日曆
+        for widget in all_toplevels:
+            if self._is_calendar_window(widget):
+                self._setup_calendar_topmost(widget)
+                break
 
     def _is_calendar_window(self, window):
-        """判斷是否為日曆視窗"""
+        """判斷是否為日曆視窗 - 🔥 改進版本"""
         try:
-            # tkcalendar的日曆視窗特徵：
-            # 1. 沒有標題或標題為空
-            # 2. overrideredirect為True
-            # 3. 包含Calendar控件
             if not hasattr(window, 'winfo_class'):
                 return False
 
-            # 檢查是否有Calendar子控件
-            for child in window.winfo_children():
-                if hasattr(child, 'winfo_class') and 'Calendar' in str(child.winfo_class()):
-                    return True
+            # 🔥 改進：多種檢測方法
+            # 方法1：檢查是否有Calendar子控件
+            def has_calendar_child(widget):
+                try:
+                    for child in widget.winfo_children():
+                        class_name = str(child.winfo_class()).lower()
+                        if 'calendar' in class_name:
+                            return True
+                        # 遞迴檢查子控件
+                        if has_calendar_child(child):
+                            return True
+                    return False
+                except:
+                    return False
 
-            return False
+            # 方法2：檢查視窗屬性
+            is_calendar = (
+                has_calendar_child(window) or
+                (hasattr(window, 'winfo_width') and window.winfo_width() < 300) or  # 日曆通常較小
+                (not window.title() or window.title() == "")  # 通常沒有標題
+            )
+
+            return is_calendar
         except:
             return False
 
