@@ -1,16 +1,37 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+
 """
-資料夾服務 - 服務層
+資料夾服務 - 重構版本
 統一所有資料夾相關的業務邏輯
-整合現有的 FolderManager, FolderCreator, FolderOperations, FolderValidator
+整合新重構的 FolderManager、FileValidator 等模組
 """
 
 import os
-import shutil
 from typing import Optional, List, Dict, Any, Tuple
 from models.case_model import CaseData
-from config.settings import AppConfig
+
+# 匯入重構後的模組
+try:
+    from utils.file_operations.folder_manager import FolderManager
+    from utils.file_operations.file_validator import FileValidator
+    from utils.file_operations.excel_handler import ExcelHandler
+    CORE_MODULES_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ 警告：無法匯入核心模組 - {e}")
+    print("⚠️ 嘗試使用舊版模組...")
+
+    # 回退到舊版模組
+    try:
+        from utils.folder_manager import FolderManager
+        from utils.excel_handler import ExcelHandler
+        FileValidator = None
+        CORE_MODULES_AVAILABLE = False
+    except ImportError:
+        FolderManager = None
+        ExcelHandler = None
+        FileValidator = None
+        CORE_MODULES_AVAILABLE = False
 
 
 class FolderService:
@@ -24,6 +45,18 @@ class FolderService:
             base_data_folder: 基礎資料資料夾路徑
         """
         self.base_data_folder = base_data_folder
+
+        # 初始化核心元件
+        if CORE_MODULES_AVAILABLE:
+            self.folder_manager = FolderManager(base_data_folder) if FolderManager else None
+            self.file_validator = FileValidator() if FileValidator else None
+            self.excel_handler = ExcelHandler() if ExcelHandler else None
+        else:
+            # 回退模式
+            self.folder_manager = FolderManager(base_data_folder) if FolderManager else None
+            self.file_validator = None
+            self.excel_handler = ExcelHandler() if ExcelHandler else None
+
         self._ensure_base_folder()
 
     def _ensure_base_folder(self):
@@ -49,32 +82,34 @@ class FolderService:
             if not self._validate_case_data(case_data):
                 return False, "案件資料驗證失敗"
 
-            # 2. 取得案件類型資料夾
-            case_type_folder = self._get_or_create_case_type_folder(case_data.case_type)
-            if not case_type_folder:
-                return False, f"無法建立案件類型資料夾: {case_data.case_type}"
+            # 2. 使用資料夾管理器建立結構
+            if not self.folder_manager:
+                return False, "資料夾管理器不可用"
 
-            # 3. 建立當事人資料夾
-            client_folder = self._create_client_folder(case_type_folder, case_data.client)
-            if not client_folder:
-                return False, f"無法建立當事人資料夾: {case_data.client}"
+            success = self.folder_manager.create_case_folder_structure(case_data)
 
-            # 4. 建立子資料夾結構
-            sub_folders_success = self._create_sub_folders(client_folder)
-            if not sub_folders_success:
-                return False, "建立子資料夾失敗"
+            if success:
+                folder_path = self.folder_manager.get_case_folder_path(case_data)
 
-            # 5. 建立案件資訊Excel
-            excel_success = self._create_case_info_excel(client_folder, case_data)
-            if not excel_success:
-                print("⚠️ Excel檔案建立失敗，但資料夾結構已建立")
+                # 3. 建立案件資訊Excel
+                if self.excel_handler and folder_path:
+                    try:
+                        excel_success, excel_result = self.excel_handler.create_case_info_excel(
+                            os.path.join(folder_path, '案件資訊'), case_data
+                        )
+                        if not excel_success:
+                            print(f"⚠️ Excel檔案建立失敗: {excel_result}")
+                    except Exception as e:
+                        print(f"⚠️ Excel檔案建立過程發生錯誤: {e}")
 
-            print(f"✅ 成功建立案件資料夾: {client_folder}")
-            return True, client_folder
+                return True, folder_path or "資料夾建立成功"
+            else:
+                return False, "資料夾建立失敗"
 
         except Exception as e:
-            print(f"❌ 建立案件資料夾失敗: {e}")
-            return False, str(e)
+            error_msg = f"建立案件資料夾失敗: {str(e)}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
 
     def get_case_folder_path(self, case_data: CaseData) -> Optional[str]:
         """
@@ -87,14 +122,10 @@ class FolderService:
             資料夾路徑或None
         """
         try:
-            case_type_folder = self._get_case_type_folder_path(case_data)
-            if not case_type_folder or not os.path.exists(case_type_folder):
+            if not self.folder_manager:
                 return None
 
-            safe_client_name = self._get_safe_client_name(case_data.client)
-            client_folder = os.path.join(case_type_folder, safe_client_name)
-
-            return client_folder if os.path.exists(client_folder) else None
+            return self.folder_manager.get_case_folder_path(case_data)
 
         except Exception as e:
             print(f"❌ 取得案件資料夾路徑失敗: {e}")
@@ -112,23 +143,13 @@ class FolderService:
             (success, message)
         """
         try:
-            case_folder = self.get_case_folder_path(case_data)
-            if not case_folder:
-                return False, f"找不到案件資料夾: {case_data.client}"
+            if not self.folder_manager:
+                return False, "資料夾管理器不可用"
 
-            if not confirm:
-                return False, "需要確認刪除操作"
-
-            if not os.path.exists(case_folder):
-                return False, f"資料夾不存在: {case_folder}"
-
-            # 執行刪除
-            shutil.rmtree(case_folder)
-            print(f"✅ 成功刪除案件資料夾: {case_folder}")
-            return True, f"成功刪除案件資料夾: {case_data.client}"
+            return self.folder_manager.delete_case_folder(case_data, confirm)
 
         except Exception as e:
-            error_msg = f"刪除案件資料夾失敗: {case_data.client} - {str(e)}"
+            error_msg = f"刪除案件資料夾失敗: {str(e)}"
             print(f"❌ {error_msg}")
             return False, error_msg
 
@@ -142,32 +163,27 @@ class FolderService:
         Returns:
             資料夾資訊字典
         """
-        case_folder = self.get_case_folder_path(case_data)
+        try:
+            if not self.folder_manager:
+                return {'exists': False, 'error': '資料夾管理器不可用'}
 
-        if not case_folder or not os.path.exists(case_folder):
+            folder_info = self.folder_manager.get_case_folder_info(case_data)
+
+            # 增加驗證資訊
+            if self.file_validator and folder_info.get('exists'):
+                try:
+                    validation = self.file_validator.validate_folder_structure(folder_info['path'])
+                    folder_info['validation'] = validation
+                except Exception as e:
+                    folder_info['validation_error'] = str(e)
+
+            return folder_info
+
+        except Exception as e:
             return {
                 'exists': False,
-                'path': case_folder,
-                'has_files': False,
-                'file_count': 0,
-                'size_mb': 0.0,
-                'validation': None
+                'error': f'取得資料夾資訊失敗: {str(e)}'
             }
-
-        # 計算資料夾大小和檔案數量
-        size_info = self._get_folder_size_info(case_folder)
-
-        # 驗證資料夾結構
-        structure_validation = self._validate_folder_structure(case_folder)
-
-        return {
-            'exists': True,
-            'path': case_folder,
-            'has_files': size_info['has_files'],
-            'file_count': size_info['file_count'],
-            'size_mb': size_info['total_size_mb'],
-            'validation': structure_validation
-        }
 
     # ====== 進度階段資料夾管理 ======
 
@@ -183,55 +199,29 @@ class FolderService:
             (success, message_or_path)
         """
         try:
-            case_folder = self.get_case_folder_path(case_data)
-            if not case_folder:
-                return False, f"找不到案件資料夾: {case_data.client}"
+            if not self.folder_manager:
+                return False, "資料夾管理器不可用"
 
-            progress_base_folder = os.path.join(case_folder, '進度追蹤')
-            if not os.path.exists(progress_base_folder):
-                os.makedirs(progress_base_folder, exist_ok=True)
+            # 清理階段名稱
+            if self.file_validator:
+                clean_stage_name = self.file_validator.sanitize_folder_name(stage_name)
+            else:
+                clean_stage_name = stage_name
 
-            safe_stage_name = self._sanitize_folder_name(stage_name)
-            stage_folder = os.path.join(progress_base_folder, safe_stage_name)
+            success = self.folder_manager.create_progress_folder(case_data, clean_stage_name)
 
-            if os.path.exists(stage_folder):
-                return True, f"階段資料夾已存在: {stage_folder}"
-
-            os.makedirs(stage_folder, exist_ok=True)
-            print(f"✅ 建立進度階段資料夾: {safe_stage_name}")
-            return True, stage_folder
+            if success:
+                stage_path = self.folder_manager.get_stage_folder_path(case_data, clean_stage_name)
+                return True, stage_path or f"階段資料夾建立成功: {clean_stage_name}"
+            else:
+                return False, f"階段資料夾建立失敗: {stage_name}"
 
         except Exception as e:
-            error_msg = f"建立進度階段資料夾失敗: {stage_name} - {str(e)}"
+            error_msg = f"建立進度階段資料夾失敗: {str(e)}"
             print(f"❌ {error_msg}")
             return False, error_msg
 
-    def get_stage_folder_path(self, case_data: CaseData, stage_name: str) -> Optional[str]:
-        """
-        取得特定階段的資料夾路徑
-
-        Args:
-            case_data: 案件資料
-            stage_name: 階段名稱
-
-        Returns:
-            階段資料夾路徑或None
-        """
-        try:
-            case_folder = self.get_case_folder_path(case_data)
-            if not case_folder:
-                return None
-
-            safe_stage_name = self._sanitize_folder_name(stage_name)
-            stage_folder_path = os.path.join(case_folder, '進度追蹤', safe_stage_name)
-
-            return stage_folder_path if os.path.exists(stage_folder_path) else None
-
-        except Exception as e:
-            print(f"❌ 取得階段資料夾路徑失敗: {e}")
-            return None
-
-    def delete_stage_folder(self, case_data: CaseData, stage_name: str) -> Tuple[bool, str]:
+    def delete_progress_folder(self, case_data: CaseData, stage_name: str) -> Tuple[bool, str]:
         """
         刪除進度階段資料夾
 
@@ -243,217 +233,463 @@ class FolderService:
             (success, message)
         """
         try:
-            stage_folder = self.get_stage_folder_path(case_data, stage_name)
-            if not stage_folder:
-                return False, f"找不到階段資料夾: {stage_name}"
+            if not self.folder_manager:
+                return False, "資料夾管理器不可用"
 
-            if not os.path.exists(stage_folder):
-                return False, f"階段資料夾不存在: {stage_name}"
+            success = self.folder_manager.delete_progress_folder(case_data, stage_name)
 
-            shutil.rmtree(stage_folder)
-            print(f"✅ 成功刪除階段資料夾: {stage_name}")
-            return True, f"成功刪除階段資料夾: {stage_name}"
+            if success:
+                return True, f"階段資料夾刪除成功: {stage_name}"
+            else:
+                return False, f"階段資料夾刪除失敗: {stage_name}"
 
         except Exception as e:
-            error_msg = f"刪除階段資料夾失敗: {stage_name} - {str(e)}"
+            error_msg = f"刪除進度階段資料夾失敗: {str(e)}"
             print(f"❌ {error_msg}")
             return False, error_msg
 
-    # ====== 批次操作 ======
-
-    def batch_create_case_folders(self, cases: List[CaseData]) -> Dict[str, Any]:
+    def get_stage_folder_path(self, case_data: CaseData, stage_name: str) -> Optional[str]:
         """
-        批次建立案件資料夾
+        取得階段資料夾路徑
 
         Args:
-            cases: 案件資料列表
+            case_data: 案件資料
+            stage_name: 階段名稱
 
         Returns:
-            批次操作結果
+            階段資料夾路徑或None
+        """
+        try:
+            if not self.folder_manager:
+                return None
+
+            return self.folder_manager.get_stage_folder_path(case_data, stage_name)
+
+        except Exception as e:
+            print(f"❌ 取得階段資料夾路徑失敗: {e}")
+            return None
+
+    # ====== Excel檔案管理 ======
+
+    def create_case_info_excel(self, case_data: CaseData) -> Tuple[bool, str]:
+        """
+        建立案件資訊Excel檔案
+
+        Args:
+            case_data: 案件資料
+
+        Returns:
+            (success, message_or_path)
+        """
+        try:
+            if not self.excel_handler:
+                return False, "Excel處理器不可用"
+
+            case_folder = self.get_case_folder_path(case_data)
+            if not case_folder:
+                return False, f"找不到案件資料夾: {case_data.client}"
+
+            case_info_folder = os.path.join(case_folder, '案件資訊')
+
+            return self.excel_handler.create_case_info_excel(case_info_folder, case_data)
+
+        except Exception as e:
+            error_msg = f"建立案件資訊Excel失敗: {str(e)}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
+
+    def update_case_info_excel(self, case_data: CaseData) -> Tuple[bool, str]:
+        """
+        更新案件資訊Excel檔案
+
+        Args:
+            case_data: 案件資料
+
+        Returns:
+            (success, message)
+        """
+        try:
+            if not self.excel_handler:
+                return False, "Excel處理器不可用"
+
+            case_folder = self.get_case_folder_path(case_data)
+            if not case_folder:
+                return False, f"找不到案件資料夾: {case_data.client}"
+
+            success = self.excel_handler.update_case_info_excel(case_folder, case_data)
+
+            if success:
+                return True, "案件資訊Excel更新成功"
+            else:
+                return False, "案件資訊Excel更新失敗"
+
+        except Exception as e:
+            error_msg = f"更新案件資訊Excel失敗: {str(e)}"
+            print(f"❌ {error_msg}")
+            return False, error_msg
+
+    # ====== 驗證功能 ======
+
+    def validate_folder_structure(self, case_data: CaseData) -> Dict[str, Any]:
+        """
+        驗證案件資料夾結構
+
+        Args:
+            case_data: 案件資料
+
+        Returns:
+            驗證結果字典
+        """
+        try:
+            if self.file_validator:
+                case_folder = self.get_case_folder_path(case_data)
+                if case_folder:
+                    return self.file_validator.validate_folder_structure(case_folder)
+                else:
+                    return {
+                        'is_valid': False,
+                        'errors': ['找不到案件資料夾'],
+                        'missing_folders': [],
+                        'warnings': []
+                    }
+            elif self.folder_manager:
+                # 使用資料夾管理器的驗證功能
+                return self.folder_manager.validate_folder_structure(case_data)
+            else:
+                return {
+                    'is_valid': False,
+                    'errors': ['驗證器不可用'],
+                    'missing_folders': [],
+                    'warnings': []
+                }
+
+        except Exception as e:
+            return {
+                'is_valid': False,
+                'errors': [f'驗證過程發生錯誤: {str(e)}'],
+                'missing_folders': [],
+                'warnings': []
+            }
+
+    def validate_case_data(self, case_data: CaseData) -> Dict[str, Any]:
+        """
+        驗證案件資料
+
+        Args:
+            case_data: 案件資料
+
+        Returns:
+            驗證結果字典
+        """
+        try:
+            if self.file_validator:
+                return self.file_validator.validate_case_data(case_data)
+            else:
+                # 基本驗證
+                result = {
+                    'is_valid': True,
+                    'errors': [],
+                    'warnings': []
+                }
+
+                if not case_data.client:
+                    result['errors'].append("當事人姓名為必填欄位")
+                if not case_data.case_type:
+                    result['errors'].append("案件類型為必填欄位")
+
+                if result['errors']:
+                    result['is_valid'] = False
+
+                return result
+
+        except Exception as e:
+            return {
+                'is_valid': False,
+                'errors': [f'驗證過程發生錯誤: {str(e)}'],
+                'warnings': []
+            }
+
+    def _validate_case_data(self, case_data: CaseData) -> bool:
+        """內部驗證案件資料"""
+        try:
+            validation = self.validate_case_data(case_data)
+            return validation.get('is_valid', False)
+        except Exception:
+            return False
+
+    # ====== 批量操作功能 ======
+
+    def create_multiple_case_folders(self, case_list: List[CaseData]) -> Dict[str, Any]:
+        """
+        批量建立案件資料夾
+
+        Args:
+            case_list: 案件資料列表
+
+        Returns:
+            批量操作結果
         """
         result = {
-            'total': len(cases),
+            'total': len(case_list),
             'success': 0,
             'failed': 0,
-            'success_paths': [],
+            'details': [],
             'errors': []
         }
 
-        for i, case_data in enumerate(cases, 1):
-            try:
-                print(f"📁 [{i}/{len(cases)}] 處理案件: {case_data.case_id} - {case_data.client}")
+        try:
+            for i, case_data in enumerate(case_list):
+                try:
+                    success, message = self.create_case_folder(case_data)
 
-                success, path_or_error = self.create_case_folder(case_data)
+                    detail = {
+                        'index': i,
+                        'client': case_data.client,
+                        'success': success,
+                        'message': message
+                    }
 
-                if success:
-                    result['success'] += 1
-                    result['success_paths'].append(path_or_error)
-                    print(f"  ✅ 成功")
-                else:
+                    result['details'].append(detail)
+
+                    if success:
+                        result['success'] += 1
+                        print(f"✅ [{i+1}/{len(case_list)}] {case_data.client}")
+                    else:
+                        result['failed'] += 1
+                        print(f"❌ [{i+1}/{len(case_list)}] {case_data.client}: {message}")
+
+                except Exception as e:
                     result['failed'] += 1
-                    result['errors'].append(f"{case_data.client}: {path_or_error}")
-                    print(f"  ❌ 失敗: {path_or_error}")
+                    error_msg = f"處理第 {i+1} 個案件失敗: {str(e)}"
+                    result['errors'].append(error_msg)
+                    print(f"❌ [{i+1}/{len(case_list)}] {error_msg}")
 
-            except Exception as e:
-                result['failed'] += 1
-                error_msg = f"{case_data.client}: {str(e)}"
-                result['errors'].append(error_msg)
-                print(f"  ❌ 異常: {error_msg}")
+            print(f"\n📊 批量建立完成: 成功 {result['success']}, 失敗 {result['failed']}")
 
-        print(f"🎯 批次建立完成 - 成功: {result['success']}, 失敗: {result['failed']}")
+        except Exception as e:
+            result['errors'].append(f"批量操作失敗: {str(e)}")
+
         return result
 
-    # ====== 私有輔助方法 ======
+    def validate_multiple_folders(self, case_list: List[CaseData]) -> Dict[str, Any]:
+        """
+        批量驗證案件資料夾
 
-    def _validate_case_data(self, case_data: CaseData) -> bool:
-        """驗證案件資料"""
-        if not case_data:
-            return False
-        if not case_data.client or not case_data.client.strip():
-            return False
-        if not case_data.case_type or case_data.case_type not in AppConfig.CASE_TYPES:
-            return False
-        return True
+        Args:
+            case_list: 案件資料列表
 
-    def _get_case_type_folder_path(self, case_type: str) -> Optional[str]:
-        """取得案件類型資料夾路徑"""
-        case_type_folder_name = AppConfig.CASE_TYPE_FOLDERS.get(case_type)
-        if not case_type_folder_name:
-            return None
-        return os.path.join(self.base_data_folder, case_type_folder_name)
-
-    def _get_or_create_case_type_folder(self, case_type: str) -> Optional[str]:
-        """取得或建立案件類型資料夾"""
-        case_type_path = self._get_case_type_folder_path(case_type)
-        if not case_type_path:
-            return None
-
-        if not os.path.exists(case_type_path):
-            os.makedirs(case_type_path, exist_ok=True)
-            print(f"✅ 建立案件類型資料夾: {case_type}")
-
-        return case_type_path
-
-    def _get_safe_client_name(self, client_name: str) -> str:
-        """取得安全的當事人名稱"""
-        return self._sanitize_folder_name(client_name)
-
-    def _sanitize_folder_name(self, name: str) -> str:
-        """清理資料夾名稱"""
-        if not name:
-            return "未知"
-
-        # 移除或替換不安全字符
-        unsafe_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
-        safe_name = name.strip()
-
-        for char in unsafe_chars:
-            safe_name = safe_name.replace(char, '_')
-
-        # 移除多餘空白和點號
-        safe_name = ' '.join(safe_name.split())
-        safe_name = safe_name.strip('.')
-
-        # 限制長度
-        if len(safe_name) > 50:
-            safe_name = safe_name[:50]
-
-        return safe_name if safe_name else "未知"
-
-    def _create_client_folder(self, case_type_folder: str, client_name: str) -> Optional[str]:
-        """建立當事人資料夾"""
-        safe_client_name = self._get_safe_client_name(client_name)
-        client_folder = os.path.join(case_type_folder, safe_client_name)
-
-        if not os.path.exists(client_folder):
-            os.makedirs(client_folder, exist_ok=True)
-            print(f"✅ 建立當事人資料夾: {safe_client_name}")
-
-        return client_folder
-
-    def _create_sub_folders(self, client_folder: str) -> bool:
-        """建立子資料夾結構"""
-        try:
-            sub_folders = ['案件資訊', '進度追蹤', '狀紙']
-
-            for folder_name in sub_folders:
-                folder_path = os.path.join(client_folder, folder_name)
-                if not os.path.exists(folder_path):
-                    os.makedirs(folder_path, exist_ok=True)
-                    print(f"  ✅ 建立子資料夾: {folder_name}")
-
-            return True
-
-        except Exception as e:
-            print(f"❌ 建立子資料夾失敗: {e}")
-            return False
-
-    def _create_case_info_excel(self, client_folder: str, case_data: CaseData) -> bool:
-        """建立案件資訊Excel（簡化版本）"""
-        try:
-            # 這裡可以整合 ExcelService 來建立Excel檔案
-            # 目前返回True，表示成功（或可忽略）
-            case_info_folder = os.path.join(client_folder, '案件資訊')
-            excel_file = os.path.join(case_info_folder, f"{case_data.client}_案件資訊.xlsx")
-
-            # TODO: 整合ExcelService建立實際Excel檔案
-            print(f"  📋 Excel檔案位置: {excel_file}")
-            return True
-
-        except Exception as e:
-            print(f"⚠️ 建立案件資訊Excel失敗: {e}")
-            return False
-
-    def _get_folder_size_info(self, folder_path: str) -> Dict[str, Any]:
-        """取得資料夾大小資訊"""
-        total_size = 0
-        file_count = 0
-
-        try:
-            for dirpath, dirnames, filenames in os.walk(folder_path):
-                for filename in filenames:
-                    file_path = os.path.join(dirpath, filename)
-                    if os.path.exists(file_path):
-                        total_size += os.path.getsize(file_path)
-                        file_count += 1
-
-            return {
-                'total_size_mb': round(total_size / (1024 * 1024), 2),
-                'file_count': file_count,
-                'has_files': file_count > 0
-            }
-
-        except Exception as e:
-            print(f"⚠️ 計算資料夾大小失敗: {e}")
-            return {
-                'total_size_mb': 0.0,
-                'file_count': 0,
-                'has_files': False
-            }
-
-    def _validate_folder_structure(self, folder_path: str) -> Dict[str, Any]:
-        """驗證資料夾結構"""
+        Returns:
+            批量驗證結果
+        """
         result = {
-            'is_valid': True,
-            'missing_folders': [],
-            'errors': [],
-            'warnings': []
+            'total': len(case_list),
+            'valid': 0,
+            'invalid': 0,
+            'details': [],
+            'summary': {}
         }
 
         try:
-            required_subfolders = ['狀紙', '進度追蹤', '案件資訊']
+            all_issues = []
 
-            for subfolder in required_subfolders:
-                subfolder_path = os.path.join(folder_path, subfolder)
-                if not os.path.exists(subfolder_path):
-                    result['missing_folders'].append(subfolder)
-                    result['warnings'].append(f"缺少子資料夾: {subfolder}")
+            for i, case_data in enumerate(case_list):
+                try:
+                    validation = self.validate_folder_structure(case_data)
 
-            if result['missing_folders']:
-                result['is_valid'] = False
+                    detail = {
+                        'index': i,
+                        'client': case_data.client,
+                        'is_valid': validation.get('is_valid', False),
+                        'errors': validation.get('errors', []),
+                        'warnings': validation.get('warnings', []),
+                        'missing_folders': validation.get('missing_folders', [])
+                    }
+
+                    result['details'].append(detail)
+
+                    if detail['is_valid']:
+                        result['valid'] += 1
+                    else:
+                        result['invalid'] += 1
+                        all_issues.extend(detail['errors'])
+
+                except Exception as e:
+                    result['invalid'] += 1
+                    result['details'].append({
+                        'index': i,
+                        'client': case_data.client,
+                        'is_valid': False,
+                        'errors': [f'驗證失敗: {str(e)}'],
+                        'warnings': [],
+                        'missing_folders': []
+                    })
+
+            # 生成摘要
+            from collections import Counter
+            result['summary'] = {
+                'common_issues': dict(Counter(all_issues)),
+                'validation_rate': (result['valid'] / result['total'] * 100) if result['total'] > 0 else 0
+            }
 
         except Exception as e:
-            result['is_valid'] = False
-            result['errors'].append(f"驗證過程發生錯誤: {e}")
+            result['errors'] = [f"批量驗證失敗: {str(e)}"]
 
         return result
+
+    # ====== 修復功能 ======
+
+    def auto_repair_folder_structure(self, case_data: CaseData, dry_run: bool = True) -> Dict[str, Any]:
+        """
+        自動修復案件資料夾結構
+
+        Args:
+            case_data: 案件資料
+            dry_run: 是否僅模擬執行
+
+        Returns:
+            修復結果
+        """
+        try:
+            if self.file_validator:
+                case_folder = self.get_case_folder_path(case_data)
+                if case_folder:
+                    return self.file_validator.auto_fix_folder_structure(case_folder, dry_run)
+                else:
+                    return {
+                        'success': False,
+                        'actions_taken': [],
+                        'errors': ['找不到案件資料夾']
+                    }
+            else:
+                return {
+                    'success': False,
+                    'actions_taken': [],
+                    'errors': ['修復功能不可用']
+                }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'actions_taken': [],
+                'errors': [f'修復過程發生錯誤: {str(e)}']
+            }
+
+    # ====== 狀態查詢功能 ======
+
+    def get_service_status(self) -> Dict[str, Any]:
+        """
+        取得服務狀態
+
+        Returns:
+            服務狀態字典
+        """
+        status = {
+            'service_available': True,
+            'components': {},
+            'base_folder': self.base_data_folder,
+            'base_folder_exists': os.path.exists(self.base_data_folder)
+        }
+
+        try:
+            # 檢查各元件狀態
+            status['components']['folder_manager'] = {
+                'available': self.folder_manager is not None,
+                'type': type(self.folder_manager).__name__ if self.folder_manager else None
+            }
+
+            status['components']['file_validator'] = {
+                'available': self.file_validator is not None,
+                'type': type(self.file_validator).__name__ if self.file_validator else None
+            }
+
+            status['components']['excel_handler'] = {
+                'available': self.excel_handler is not None,
+                'type': type(self.excel_handler).__name__ if self.excel_handler else None
+            }
+
+            # 檢查Excel處理器依賴
+            if self.excel_handler and hasattr(self.excel_handler, 'is_available'):
+                status['components']['excel_handler']['excel_ready'] = self.excel_handler.is_available()
+
+            # 總體可用性檢查
+            essential_components = [self.folder_manager]
+            status['service_available'] = all(comp is not None for comp in essential_components)
+
+        except Exception as e:
+            status['error'] = str(e)
+            status['service_available'] = False
+
+        return status
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        取得資料夾服務統計資訊
+
+        Returns:
+            統計資訊字典
+        """
+        stats = {
+            'base_folder_info': {},
+            'case_type_distribution': {},
+            'total_case_folders': 0
+        }
+
+        try:
+            # 基礎資料夾資訊
+            if os.path.exists(self.base_data_folder):
+                stats['base_folder_info'] = self._get_folder_size_info(self.base_data_folder)
+
+                # 統計案件類型分佈
+                from config.settings import AppConfig
+                case_type_folders = AppConfig.CASE_TYPE_FOLDERS
+
+                for case_type, folder_name in case_type_folders.items():
+                    type_folder = os.path.join(self.base_data_folder, folder_name)
+                    if os.path.exists(type_folder):
+                        case_count = len([d for d in os.listdir(type_folder)
+                                        if os.path.isdir(os.path.join(type_folder, d))])
+                        stats['case_type_distribution'][case_type] = case_count
+                        stats['total_case_folders'] += case_count
+
+        except Exception as e:
+            stats['error'] = str(e)
+
+        return stats
+
+    def _get_folder_size_info(self, folder_path: str) -> Dict[str, Any]:
+        """取得資料夾大小資訊"""
+        try:
+            total_size = 0
+            total_files = 0
+
+            for root, dirs, files in os.walk(folder_path):
+                total_files += len(files)
+                for file in files:
+                    try:
+                        file_path = os.path.join(root, file)
+                        total_size += os.path.getsize(file_path)
+                    except:
+                        pass
+
+            return {
+                'total_size_mb': round(total_size / (1024 * 1024), 2),
+                'total_files': total_files,
+                'total_folders': len([d for d in os.listdir(folder_path)
+                                    if os.path.isdir(os.path.join(folder_path, d))])
+            }
+
+        except Exception as e:
+            return {'error': str(e)}
+
+    # ====== 向後相容方法 ======
+
+    def create_case_folder_structure(self, case_data: CaseData) -> bool:
+        """向後相容的資料夾建立方法"""
+        success, message = self.create_case_folder(case_data)
+        if not success:
+            print(f"❌ {message}")
+        return success
+
+    def get_case_folder_path_legacy(self, case_data: CaseData) -> Optional[str]:
+        """向後相容的路徑取得方法"""
+        return self.get_case_folder_path(case_data)

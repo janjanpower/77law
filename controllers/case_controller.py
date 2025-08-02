@@ -47,10 +47,10 @@ class CaseController:
         # 初始化管理器（過渡期間保留）
         self._init_managers()
 
-    def _init_services(self):
+    def _init_services(self, data_folder):
         """初始化服務層"""
         try:
-            self.folder_service = FolderService(self.data_folder)
+            self.folder_service = FolderService(data_folder)
             self.excel_service = ExcelService()
             self.validation_service = ValidationService()
             self.notification_service = NotificationService(self.data_folder)
@@ -73,6 +73,10 @@ class CaseController:
             self.progress_manager = None
 
     # ====== 案件資料操作 ======
+
+    def create_case(self, case_data):
+        success, message = self.folder_service.create_case_folder(case_data)
+        return success
 
     def add_case(self, case_data: CaseData) -> Tuple[bool, str]:
         """
