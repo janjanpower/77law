@@ -2,724 +2,720 @@
 # -*- coding: utf-8 -*-
 
 """
-案件控制器 - 完整修正版本
-整合各個專門管理器，提供統一的對外介面
-完全修正資料夾建立問題
+案件控制器 - 簡化版本
+使用新的 Services 層架構，專注於請求處理和回應
 """
 
 from typing import List, Optional, Tuple, Dict, Any
 from models.case_model import CaseData
-from utils.folder_management.folder_manager import FolderManager
+from services.services_controller import ServicesController
 from config.settings import AppConfig
 import os
 
-# 導入各個專門管理器
-from .case_managers.case_data_manager import CaseDataManager
-from .case_managers.case_validator import CaseValidator
-from .case_managers.case_import_export import CaseImportExport
-from .case_managers.case_progress_manager import CaseProgressManager
-
 
 class CaseController:
-    """案件資料控制器 - 完整修正版本"""
+    """案件控制器 - 簡化版本（委託給 Services 層）"""
 
-    def __init__(self, data_file: str = None):
-        """初始化案件控制器"""
-        if data_file is None:
-            self.data_file = AppConfig.DATA_CONFIG['case_data_file']
-        else:
-            self.data_file = data_file
+    def __init__(self, data_folder: str = None):
+        """
+        初始化案件控制器
 
-        self.data_folder = os.path.dirname(self.data_file) if os.path.dirname(self.data_file) else '.'
-
-        # 初始化資料夾管理器
-        self.folder_manager = FolderManager(self.data_folder)
-
-        # 初始化資料管理器
-        self.data_manager = CaseDataManager(self.data_file, self.data_folder)
+        Args:
+            data_folder: 資料資料夾路徑
+        """
+        self.data_folder = data_folder or AppConfig.DATA_CONFIG.get('data_folder', './data')
 
         # 確保資料夾存在
-        self._ensure_data_folder()
+        os.makedirs(self.data_folder, exist_ok=True)
 
-        # 載入案件資料
-        self.load_cases()
+        # 初始化服務控制器（所有業務邏輯都委託給它）
+        self.services = ServicesController(self.data_folder)
 
-        # 初始化其他管理器（確保使用最新的案件資料）
-        self.validator = CaseValidator(self.data_manager.cases)
-        self.import_export = CaseImportExport(self.data_folder)
-        self.progress_manager = CaseProgressManager(self.data_manager.cases, self.folder_manager)
+        print("✅ CaseController 初始化完成 (使用 Services 架構)")
 
-    def _ensure_data_folder(self):
-        """確保資料夾存在"""
-        try:
-            if not os.path.exists(self.data_folder):
-                os.makedirs(self.data_folder)
-                print(f"建立資料夾：{self.data_folder}")
+    # ==================== 案件CRUD操作 ====================
 
-            # 建立案件類型資料夾
-            for folder_name in AppConfig.CASE_TYPE_FOLDERS.values():
-                folder_path = os.path.join(self.data_folder, folder_name)
-                if not os.path.exists(folder_path):
-                    os.makedirs(folder_path)
-                    print(f"建立案件類型資料夾：{folder_path}")
-
-        except Exception as e:
-            print(f"建立資料夾失敗: {e}")
-
-    # ==================== 資料CRUD操作 ====================
-
-    def load_cases(self) -> bool:
-        """載入案件資料"""
-        result = self.data_manager.load_cases()
-        if result:
-            # 確保所有管理器使用最新的案件資料
-            self._sync_managers()
-        return result
-
-    def _sync_managers(self):
-        """同步各管理器的案件資料"""
-        try:
-            # 更新驗證器的案件資料
-            if hasattr(self, 'validator'):
-                self.validator.cases = self.data_manager.cases
-
-            # 更新進度管理器的案件資料
-            if hasattr(self, 'progress_manager'):
-                self.progress_manager.cases = self.data_manager.cases
-
-            print(f"已同步管理器資料，當前案件數量: {len(self.data_manager.cases)}")
-
-        except Exception as e:
-            print(f"同步管理器資料失敗: {e}")
-
-    def save_cases(self) -> bool:
-        """儲存案件資料"""
-        result = self.data_manager.save_cases()
-        if result:
-            self._sync_managers()
-        return result
-
-    def add_case(self, case_data: CaseData) -> bool:
+    def add_case(self, case_data: CaseData, create_folder: bool = True,
+                 apply_template: str = None) -> bool:
         """
-        新增案件 - 完全修正版本
+        新增案件
 
         Args:
             case_data: 案件資料
+            create_folder: 是否建立資料夾
+            apply_template: 套用的進度範本名稱
 
         Returns:
             bool: 是否新增成功
         """
         try:
-            # 委託給資料管理器處理
-            result = self.data_manager.add_case(case_data)
-
-            if result:
-                # 同步管理器資料
-                self._sync_managers()
-
-                # 建立案件資料夾結構 - 完全修正：使用正確的方法
-                try:
-                    folder_result = self.folder_manager.create_case_folder_structure(case_data)
-                    if folder_result:
-                        print(f"成功建立案件資料夾結構: {case_data.client}")
-                    else:
-                        print(f"警告：案件資料夾建立失敗: {case_data.client}")
-                except AttributeError as e:
-                    print(f"FolderManager 方法呼叫錯誤: {e}")
-                    # 嘗試備用方法
-                    try:
-                        if hasattr(self.folder_manager, 'creator'):
-                            success, message = self.folder_manager.creator.create_case_folder_structure(case_data)
-                            if success:
-                                print(f"使用備用方法成功建立資料夾: {message}")
-                            else:
-                                print(f"備用方法也失敗: {message}")
-                    except Exception as backup_e:
-                        print(f"備用方法失敗: {backup_e}")
-                except Exception as e:
-                    print(f"建立案件資料夾時發生錯誤: {e}")
-
-            return result
-
+            result = self.services.create_case(case_data, create_folder, apply_template)
+            if result[0]:
+                print(f"✅ 控制器: 成功新增案件 {case_data.client}")
+            else:
+                print(f"❌ 控制器: 新增案件失敗 - {result[1]}")
+            return result[0]
         except Exception as e:
-            print(f"CaseController.add_case 失敗: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ CaseController.add_case 失敗: {e}")
             return False
 
-    def update_case(self, case_data: CaseData) -> bool:
+    def update_case(self, case_data: CaseData, update_folder: bool = False) -> bool:
         """
         更新案件
 
         Args:
-            case_data: 案件資料
+            case_data: 更新後的案件資料
+            update_folder: 是否同步更新資料夾
 
         Returns:
             bool: 是否更新成功
         """
         try:
-            result = self.data_manager.update_case(case_data)
-            if result:
-                self._sync_managers()
-            return result
+            result = self.services.update_case(case_data, update_folder, sync_progress=True)
+            if result[0]:
+                print(f"✅ 控制器: 成功更新案件 {case_data.case_id}")
+            else:
+                print(f"❌ 控制器: 更新案件失敗 - {result[1]}")
+            return result[0]
         except Exception as e:
-            print(f"CaseController.update_case 失敗: {e}")
+            print(f"❌ CaseController.update_case 失敗: {e}")
             return False
 
-    def delete_case(self, case_id: str, case_type: str = None, delete_folder: bool = True) -> bool:
+    def delete_case(self, case_id: str, delete_folder: bool = True, force: bool = False) -> bool:
         """
-        刪除案件 - 修正版本：確保資料夾正確刪除
-        """
-        try:
-            print(f"🗑️ 開始刪除案件: {case_id}")
-
-            # 如果沒有提供 case_type，從案件資料中取得
-            if case_type is None:
-                case = self.get_case_by_id(case_id)
-                if not case:
-                    print(f"❌ 找不到案件: {case_id}")
-                    return False
-                case_type = case.case_type
-            else:
-                # 驗證提供的 case_type 是否正確
-                case = self.get_case_by_id_and_type(case_id, case_type)
-                if not case:
-                    print(f"❌ 找不到案件: {case_id} (類型: {case_type})")
-                    return False
-
-            # 如果需要刪除資料夾，先處理資料夾
-            folder_deletion_success = True
-            if delete_folder:
-                print(f"📁 準備刪除資料夾...")
-                try:
-                    folder_deletion_success = self.delete_case_folder(case_id)
-                    if folder_deletion_success:
-                        print(f"✅ 成功刪除案件資料夾: {case.client}")
-                    else:
-                        print(f"⚠️ 案件資料夾刪除失敗: {case.client}")
-                        # 不中斷執行，繼續刪除資料記錄
-                except Exception as e:
-                    print(f"❌ 刪除資料夾時發生錯誤: {e}")
-                    folder_deletion_success = False
-                    # 不中斷執行，繼續刪除資料記錄
-
-            # 刪除案件資料記錄
-            print(f"📋 準備刪除案件資料記錄...")
-            data_deletion_success = self.data_manager.delete_case(case_id, case_type)
-
-            if data_deletion_success:
-                self._sync_managers()
-                print(f"✅ 成功刪除案件資料記錄: {case_id}")
-            else:
-                print(f"❌ 案件資料記錄刪除失敗: {case_id}")
-
-            # 評估整體成功狀態
-            overall_success = data_deletion_success
-
-            if delete_folder:
-                if folder_deletion_success and data_deletion_success:
-                    print(f"✅ 案件完全刪除成功 (包含資料夾)")
-                elif data_deletion_success and not folder_deletion_success:
-                    print(f"⚠️ 案件資料刪除成功，但資料夾刪除失敗")
-                elif not data_deletion_success:
-                    print(f"❌ 案件資料刪除失敗")
-
-            return overall_success
-
-        except Exception as e:
-            print(f"❌ CaseController.delete_case 失敗: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-    def get_case_by_id_and_type(self, case_id: str, case_type: str) -> Optional[CaseData]:
-        """
-        根據編號和類型取得案件 - 新增方法確保精確匹配
+        刪除案件
 
         Args:
-            case_id: 案件編號
-            case_type: 案件類型
-
-        Returns:
-            匹配的案件資料或 None
-        """
-        try:
-            all_cases = self.get_cases()
-            for case in all_cases:
-                if case.case_id == case_id and case.case_type == case_type:
-                    return case
-            return None
-        except Exception as e:
-            print(f"❌ 取得案件失敗: {e}")
-            return None
-
-    def update_case_id(self, old_case_id: str, case_type: str, new_case_id: str) -> Tuple[bool, str]:
-        """
-        更新案件編號 - 委託和協調各管理器
-
-        Args:
-            old_case_id: 原案件編號
-            case_type: 案件類型
-            new_case_id: 新案件編號
-
-        Returns:
-            Tuple[bool, str]: (是否成功, 訊息)
-        """
-        try:
-            print(f"🔄 CaseController 協調案件編號更新: {old_case_id} → {new_case_id}")
-
-            # 步驟1: 委託給 validator 進行驗證
-            validation_success, validation_message = self.validator.validate_case_id_update(
-                old_case_id, case_type, new_case_id
-            )
-            if not validation_success:
-                return False, validation_message
-
-            # 步驟2: 委託給 data_manager 處理核心資料和檔案重新命名
-            data_update_success, data_message = self.data_manager.update_case_id_with_files(
-                old_case_id, case_type, new_case_id
-            )
-            if not data_update_success:
-                return False, data_message
-
-            # 步驟3: 委託給 import_export 更新Excel檔案內容
-            excel_update_success, excel_message = self.import_export.update_excel_content_for_case_id_change(
-                old_case_id, new_case_id
-            )
-            if not excel_update_success:
-                print(f"⚠️ Excel內容更新失敗: {excel_message}")
-                # 不中斷主流程
-
-            # 步驟4: 委託給 progress_manager 更新進度相關檔案
-            progress_update_success, progress_message = self.progress_manager.update_progress_files_for_case_id_change(
-                old_case_id, new_case_id
-            )
-            if not progress_update_success:
-                print(f"⚠️ 進度檔案更新失敗: {progress_message}")
-                # 不中斷主流程
-
-            # 步驟5: 同步各管理器
-            self._sync_managers()
-
-            # 整理結果訊息
-            result_parts = [data_message]
-            if excel_update_success:
-                result_parts.append("Excel內容已更新")
-            if progress_update_success:
-                result_parts.append("進度檔案已更新")
-
-            final_message = "，".join(result_parts)
-            print(f"✅ CaseController 協調完成: {final_message}")
-
-            return True, final_message
-
-        except Exception as e:
-            print(f"❌ CaseController.update_case_id 失敗: {e}")
-            import traceback
-            traceback.print_exc()
-            return False, f"協調更新失敗: {str(e)}"
-
-    def get_cases(self) -> List[CaseData]:
-        """取得所有案件"""
-        return self.data_manager.get_cases()
-
-    def get_case_by_id(self, case_id: str) -> Optional[CaseData]:
-        """根據編號取得案件"""
-        return self.data_manager.get_case_by_id(case_id)
-
-    def search_cases(self, keyword: str) -> List[CaseData]:
-        """搜尋案件"""
-        return self.data_manager.search_cases(keyword)
-
-    def generate_case_id(self, case_type: str) -> str:
-        """生成案件編號"""
-        return self.data_manager.generate_case_id(case_type)
-
-    # ==================== 案件驗證相關 ====================
-
-    def validate_case_data(self, case_data: CaseData) -> Tuple[bool, List[str]]:
-        """驗證案件資料"""
-        return self.validator.validate_case_data(case_data)
-
-    def check_case_id_duplicate(self, case_id: str, case_type: str, exclude_case_id: str = None) -> bool:
-        """檢查案件編號重複"""
-        return self.validator.check_case_id_duplicate(case_id, case_type, exclude_case_id)
-
-    # ==================== 進度管理相關 ====================
-
-    def add_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str,
-                               note: str = None, time: str = None) -> bool:
-        """新增案件進度階段"""
-        try:
-            result = self.progress_manager.add_progress_stage(case_id, stage_name, stage_date, note, time)
-            if result:
-                self._sync_managers()
-            return result
-        except Exception as e:
-            print(f"CaseController.add_case_progress_stage 失敗: {e}")
-            return False
-
-    def update_case_progress_stage(self, case_id: str, stage_name: str, stage_date: str,
-                                  note: str = None, time: str = None) -> bool:
-        """更新案件進度階段"""
-        try:
-            result = self.progress_manager.update_progress_stage(case_id, stage_name, stage_date, note, time)
-            if result:
-                self._sync_managers()
-            return result
-        except Exception as e:
-            print(f"CaseController.update_case_progress_stage 失敗: {e}")
-            return False
-
-    def remove_case_progress_stage(self, case_id: str, stage_name: str) -> bool:
-        """移除案件進度階段"""
-        try:
-            result = self.progress_manager.remove_progress_stage(case_id, stage_name)
-            if result:
-                self._sync_managers()
-            return result
-        except Exception as e:
-            print(f"CaseController.remove_case_progress_stage 失敗: {e}")
-            return False
-
-    # ==================== 資料夾管理相關 ====================
-
-    def create_case_folder_structure(self, case_data: CaseData) -> bool:
-        """建立案件資料夾結構 - 正確的方法名稱"""
-        try:
-            return self.folder_manager.create_case_folder_structure(case_data)
-        except Exception as e:
-            print(f"CaseController.create_case_folder_structure 失敗: {e}")
-            return False
-
-    def get_case_folder_path(self, case_id: str) -> Optional[str]:
-        """取得案件資料夾路徑"""
-        try:
-            case = self.get_case_by_id(case_id)
-            if not case:
-                return None
-            return self.folder_manager.get_case_folder_path(case)
-        except Exception as e:
-            print(f"CaseController.get_case_folder_path 失敗: {e}")
-            return None
-
-    def get_case_folder_info(self, case_id: str) -> Dict[str, Any]:
-        """
-        取得案件資料夾資訊（用於刪除前檢查）
-
-        Args:
-            case_id: 案件編號
-
-        Returns:
-            資料夾資訊字典
-        """
-        try:
-            case = self.get_case_by_id(case_id)
-            if not case:
-                return {
-                    'exists': False,
-                    'path': None,
-                    'has_files': False,
-                    'file_count': 0,
-                    'size_mb': 0.0,
-                    'validation': None
-                }
-
-            # 嘗試從 folder_manager 取得資訊
-            if hasattr(self.folder_manager, 'operations') and self.folder_manager.operations:
-                return self.folder_manager.operations.get_case_folder_info(case)
-            elif hasattr(self.folder_manager, 'get_case_folder_info'):
-                return self.folder_manager.get_case_folder_info(case)
-            else:
-                # 備用方法：基本資訊
-                folder_path = self.get_case_folder_path(case_id)
-                if folder_path and os.path.exists(folder_path):
-                    import os
-                    try:
-                        # 計算檔案數量
-                        file_count = sum([len(files) for r, d, files in os.walk(folder_path)])
-                        has_files = file_count > 0
-
-                        # 簡單大小計算
-                        total_size = 0
-                        for dirpath, dirnames, filenames in os.walk(folder_path):
-                            for filename in filenames:
-                                filepath = os.path.join(dirpath, filename)
-                                try:
-                                    total_size += os.path.getsize(filepath)
-                                except:
-                                    pass
-                        size_mb = total_size / (1024 * 1024)
-
-                        return {
-                            'exists': True,
-                            'path': folder_path,
-                            'has_files': has_files,
-                            'file_count': file_count,
-                            'size_mb': round(size_mb, 2),
-                            'validation': {'is_valid': True, 'method': 'basic'}
-                        }
-                    except Exception as e:
-                        print(f"計算資料夾資訊時發生錯誤: {e}")
-                        return {
-                            'exists': True,
-                            'path': folder_path,
-                            'has_files': False,
-                            'file_count': 0,
-                            'size_mb': 0.0,
-                            'validation': {'is_valid': False, 'error': str(e)}
-                        }
-                else:
-                    return {
-                        'exists': False,
-                        'path': folder_path,
-                        'has_files': False,
-                        'file_count': 0,
-                        'size_mb': 0.0,
-                        'validation': None
-                    }
-
-        except Exception as e:
-            print(f"CaseController.get_case_folder_info 失敗: {e}")
-            return {
-                'exists': False,
-                'path': None,
-                'has_files': False,
-                'file_count': 0,
-                'size_mb': 0.0,
-                'validation': None,
-                'error': str(e)
-            }
-
-    def get_case_stage_folder_path(self, case_id: str, stage_name: str) -> Optional[str]:
-        """取得案件階段資料夾路徑"""
-        try:
-            case = self.get_case_by_id(case_id)
-            if not case:
-                return None
-
-            # 檢查 folder_manager 是否有 get_stage_folder_path 方法
-            if hasattr(self.folder_manager, 'get_stage_folder_path'):
-                return self.folder_manager.get_stage_folder_path(case, stage_name)
-            elif hasattr(self.folder_manager, 'operations'):
-                return self.folder_manager.operations.get_stage_folder_path(case, stage_name)
-            else:
-                print("警告：找不到 get_stage_folder_path 方法")
-                return None
-        except Exception as e:
-            print(f"CaseController.get_case_stage_folder_path 失敗: {e}")
-            return None
-
-    def delete_case_folder(self, case_id: str) -> bool:
-        """
-        刪除案件資料夾 - 修正版本：加強除錯與多重備用方案
-
-        Args:
-            case_id: 案件編號
+            case_id: 案件ID
+            delete_folder: 是否刪除資料夾
+            force: 是否強制刪除
 
         Returns:
             bool: 是否刪除成功
         """
         try:
-            # 取得案件資料
-            case = self.get_case_by_id(case_id)
-            if not case:
+            result = self.services.delete_case(case_id, delete_folder, delete_progress=True, force=force)
+            if result[0]:
+                print(f"✅ 控制器: 成功刪除案件 {case_id}")
+            else:
+                print(f"❌ 控制器: 刪除案件失敗 - {result[1]}")
+            return result[0]
+        except Exception as e:
+            print(f"❌ CaseController.delete_case 失敗: {e}")
+            return False
+
+    # ==================== 案件查詢操作 ====================
+
+    def get_case_by_id(self, case_id: str) -> Optional[CaseData]:
+        """根據ID取得案件"""
+        return self.services.case_service.get_case_by_id(case_id)
+
+    def get_cases(self) -> List[CaseData]:
+        """取得所有案件"""
+        return self.services.case_service.repository.get_all_cases()
+
+    def get_cases_by_client(self, client_name: str) -> List[CaseData]:
+        """根據當事人姓名取得案件"""
+        return self.services.case_service.get_cases_by_client(client_name)
+
+    def get_cases_by_type(self, case_type: str) -> List[CaseData]:
+        """根據案件類型取得案件"""
+        return self.services.case_service.get_cases_by_type(case_type)
+
+    def search_cases(self, keyword: str, **filters) -> List[CaseData]:
+        """
+        搜尋案件
+
+        Args:
+            keyword: 搜尋關鍵字
+            **filters: 其他篩選條件
+
+        Returns:
+            符合條件的案件列表
+        """
+        if filters:
+            # 使用進階搜尋
+            advanced_results = self.services.search_cases_advanced(
+                keyword=keyword,
+                case_type=filters.get('case_type', ''),
+                status=filters.get('status', ''),
+                progress_status=filters.get('progress_status', ''),
+                has_overdue=filters.get('has_overdue')
+            )
+            return [CaseData.from_dict(result['case_data']) for result in advanced_results]
+        else:
+            # 簡單搜尋
+            return self.services.case_service.search_cases(keyword)
+
+    def get_case_complete_info(self, case_id: str) -> Optional[Dict[str, Any]]:
+        """取得案件完整資訊（包含進度、資料夾狀態等）"""
+        return self.services.get_case_complete_info(case_id)
+
+    # ==================== 匯入匯出操作 ====================
+
+    def import_from_excel(self, file_path: str, merge_strategy: str = 'skip_duplicates',
+                         create_folders: bool = True) -> Tuple[bool, Dict[str, Any]]:
+        """
+        從Excel匯入案件資料
+
+        Args:
+            file_path: Excel檔案路徑
+            merge_strategy: 合併策略
+            create_folders: 是否為匯入的案件建立資料夾
+
+        Returns:
+            (成功與否, 詳細結果)
+        """
+        try:
+            result = self.services.import_cases_from_excel(
+                file_path, merge_strategy, create_folders, apply_templates=False
+            )
+
+            if result[0]:
+                report = result[1]
+                print(f"✅ 控制器: Excel匯入成功")
+                print(f"   匯入數量: {report.get('imported_count', 0)}")
+                if report.get('failed_count', 0) > 0:
+                    print(f"   失敗數量: {report.get('failed_count', 0)}")
+            else:
+                print(f"❌ 控制器: Excel匯入失敗 - {result[1]}")
+
+            return result
+
+        except Exception as e:
+            error_msg = f"匯入Excel失敗: {str(e)}"
+            print(f"❌ CaseController.import_from_excel: {error_msg}")
+            return False, {'error': error_msg}
+
+    def export_to_excel(self, file_path: str = None, cases: List[CaseData] = None,
+                       include_progress: bool = True) -> bool:
+        """
+        匯出案件資料到Excel
+
+        Args:
+            file_path: 匯出檔案路徑，None則自動生成
+            cases: 要匯出的案件列表，None表示所有案件
+            include_progress: 是否包含進度資訊
+
+        Returns:
+            bool: 匯出是否成功
+        """
+        try:
+            result = self.services.export_cases_to_excel(
+                cases, file_path, include_progress, include_metadata=True
+            )
+
+            if result[0]:
+                print(f"✅ 控制器: Excel匯出成功 - {result[1]}")
+            else:
+                print(f"❌ 控制器: Excel匯出失敗 - {result[1]}")
+
+            return result[0]
+
+        except Exception as e:
+            print(f"❌ CaseController.export_to_excel 失敗: {e}")
+            return False
+
+    # ==================== 資料夾操作 ====================
+
+    def create_case_folder(self, case_id: str) -> bool:
+        """為指定案件建立資料夾"""
+        try:
+            case_data = self.get_case_by_id(case_id)
+            if not case_data:
                 print(f"❌ 找不到案件: {case_id}")
                 return False
 
-            print(f"🗂️ 準備刪除案件資料夾 - 案件: {case.case_id}, 當事人: {case.client}, 類型: {case.case_type}")
+            result = self.services.folder_service.create_case_folder_structure(case_data)
+            return result[0]
 
-            # 嘗試多種方法取得資料夾路徑
-            folder_path = None
+        except Exception as e:
+            print(f"❌ CaseController.create_case_folder 失敗: {e}")
+            return False
 
-            # 方法1：使用 folder_manager
-            if hasattr(self.folder_manager, 'get_case_folder_path'):
-                try:
-                    folder_path = self.folder_manager.get_case_folder_path(case)
-                    print(f"📁 方法1 (folder_manager) 取得路徑: {folder_path}")
-                except Exception as e:
-                    print(f"⚠️ 方法1 失敗: {e}")
-
-            # 方法2：使用 operations
-            if not folder_path and hasattr(self.folder_manager, 'operations') and self.folder_manager.operations:
-                try:
-                    folder_path = self.folder_manager.operations.get_case_folder_path(case)
-                    print(f"📁 方法2 (operations) 取得路徑: {folder_path}")
-                except Exception as e:
-                    print(f"⚠️ 方法2 失敗: {e}")
-
-            # 檢查路徑是否有效
-            if not folder_path:
-                print(f"❌ 無法取得有效的資料夾路徑")
+    def delete_case_folder(self, case_id: str) -> bool:
+        """刪除指定案件的資料夾"""
+        try:
+            case_data = self.get_case_by_id(case_id)
+            if not case_data:
+                print(f"❌ 找不到案件: {case_id}")
                 return False
 
-            # 檢查資料夾是否存在
-            import os
-            if not os.path.exists(folder_path):
-                print(f"ℹ️ 資料夾不存在，視為刪除成功: {folder_path}")
-                return True
-
-            # 顯示資料夾資訊
-            try:
-                folder_contents = os.listdir(folder_path)
-                print(f"📋 資料夾內容: {len(folder_contents)} 個項目")
-                if folder_contents:
-                    print(f"   項目: {folder_contents[:5]}{'...' if len(folder_contents) > 5 else ''}")
-            except Exception as e:
-                print(f"⚠️ 無法讀取資料夾內容: {e}")
-
-            # 嘗試刪除資料夾
-            deletion_success = False
-
-            # 嘗試1：使用 folder_manager 的刪除方法
-            if hasattr(self.folder_manager, 'delete_case_folder'):
-                try:
-                    deletion_success = self.folder_manager.delete_case_folder(case)
-                    print(f"🗑️ 方法1 (folder_manager.delete_case_folder): {'成功' if deletion_success else '失敗'}")
-                except Exception as e:
-                    print(f"⚠️ 方法1 刪除失敗: {e}")
-
-            # 嘗試2：使用 operations 的刪除方法
-            if not deletion_success and hasattr(self.folder_manager, 'operations') and self.folder_manager.operations:
-                try:
-                    success, message = self.folder_manager.operations.delete_case_folder(case)
-                    deletion_success = success
-                    print(f"🗑️ 方法2 (operations.delete_case_folder): {'成功' if success else '失敗'} - {message}")
-                except Exception as e:
-                    print(f"⚠️ 方法2 刪除失敗: {e}")
-
-            # 嘗試3：直接使用 shutil.rmtree（最終備用方案）
-            if not deletion_success:
-                try:
-                    import shutil
-                    shutil.rmtree(folder_path)
-                    deletion_success = True
-                    print(f"🗑️ 方法3 (直接刪除): 成功")
-                except Exception as e:
-                    print(f"❌ 方法3 刪除失敗: {e}")
-
-            # 驗證刪除結果
-            if deletion_success:
-                # 再次檢查資料夾是否真的被刪除
-                if os.path.exists(folder_path):
-                    print(f"⚠️ 警告：刪除操作回報成功，但資料夾仍然存在: {folder_path}")
-                    deletion_success = False
-                else:
-                    print(f"✅ 成功刪除案件資料夾: {folder_path}")
-
-            return deletion_success
+            result = self.services.folder_service.delete_case_folder(case_data)
+            return result[0]
 
         except Exception as e:
             print(f"❌ CaseController.delete_case_folder 失敗: {e}")
-            import traceback
-            traceback.print_exc()
             return False
 
-
-    def _delete_case_folder_basic(self, case: CaseData) -> bool:
-        """備用的資料夾刪除方法"""
+    def get_case_folder_path(self, case_id: str) -> Optional[str]:
+        """取得案件資料夾路徑"""
         try:
-            import shutil
-            folder_path = self.get_case_folder_path(case.case_id)
-            if folder_path and os.path.exists(folder_path):
-                shutil.rmtree(folder_path)
-                print(f"✅ 使用備用方法成功刪除資料夾: {folder_path}")
-                return True
-            else:
-                print(f"ℹ️ 資料夾不存在，無需刪除: {case.client}")
-                return True
+            case_data = self.get_case_by_id(case_id)
+            if not case_data:
+                return None
+
+            return self.services.folder_service.get_case_folder_path(case_data)
+
         except Exception as e:
-            print(f"❌ 備用刪除方法失敗: {e}")
+            print(f"❌ CaseController.get_case_folder_path 失敗: {e}")
+            return None
+
+    # ==================== 進度管理操作 ====================
+
+    def get_case_progress(self, case_id: str) -> Dict[str, Any]:
+        """取得案件進度資訊"""
+        return self.services.progress_service.get_case_progress(case_id)
+
+    def add_progress_stage(self, case_id: str, stage_name: str, description: str = "",
+                          due_date: str = None, priority: str = "一般") -> bool:
+        """
+        為案件新增進度階段
+
+        Args:
+            case_id: 案件ID
+            stage_name: 階段名稱
+            description: 階段描述
+            due_date: 到期日期 (YYYY-MM-DD)
+            priority: 優先級
+
+        Returns:
+            bool: 是否新增成功
+        """
+        try:
+            stage_data = {
+                'name': stage_name,
+                'description': description,
+                'priority': priority,
+                'status': '未開始'
+            }
+
+            if due_date:
+                stage_data['due_date'] = due_date
+
+            result = self.services.progress_service.create_progress_stage(case_id, stage_data)
+            return result[0]
+
+        except Exception as e:
+            print(f"❌ CaseController.add_progress_stage 失敗: {e}")
             return False
 
-    # ==================== 匯入匯出相關 ====================
+    def update_progress_stage(self, case_id: str, stage_id: str, **updates) -> bool:
+        """
+        更新進度階段
 
-    def import_from_excel(self, file_path: str, merge_option: str = 'skip') -> Tuple[bool, Dict[str, Any]]:
-        """從Excel匯入案件資料"""
-        try:
-            result = self.import_export.import_from_excel(file_path, merge_option)
-            if result[0]:  # 如果成功
-                self.load_cases()  # 重新載入資料
-                self._sync_managers()
-            return result
-        except Exception as e:
-            print(f"CaseController.import_from_excel 失敗: {e}")
-            return False, {'error': str(e)}
+        Args:
+            case_id: 案件ID
+            stage_id: 階段ID
+            **updates: 要更新的欄位
 
-    def export_to_excel(self, file_path: str = None, cases: List[CaseData] = None) -> bool:
-        """匯出案件資料到Excel"""
+        Returns:
+            bool: 是否更新成功
+        """
         try:
-            if cases is None:
-                cases = self.get_cases()
-            return self.import_export.export_to_excel(file_path, cases)
+            result = self.services.progress_service.update_progress_stage(case_id, stage_id, updates)
+            return result[0]
+
         except Exception as e:
-            print(f"CaseController.export_to_excel 失敗: {e}")
+            print(f"❌ CaseController.update_progress_stage 失敗: {e}")
             return False
 
-    # ==================== 統計和查詢相關 ====================
+    def apply_progress_template(self, case_id: str, template_name: str) -> bool:
+        """
+        為案件套用進度範本
+
+        Args:
+            case_id: 案件ID
+            template_name: 範本名稱
+
+        Returns:
+            bool: 是否套用成功
+        """
+        try:
+            result = self.services.progress_service.apply_progress_template(case_id, template_name)
+            return result[0]
+
+        except Exception as e:
+            print(f"❌ CaseController.apply_progress_template 失敗: {e}")
+            return False
+
+    def get_available_progress_templates(self) -> List[str]:
+        """取得可用的進度範本列表"""
+        return self.services.progress_service.get_available_templates()
+
+    # ==================== 統計和報告 ====================
 
     def get_case_statistics(self) -> Dict[str, Any]:
         """取得案件統計資訊"""
+        return self.services.case_service.get_case_statistics()
+
+    def get_system_dashboard(self) -> Dict[str, Any]:
+        """取得系統儀表板資料"""
+        return self.services.get_system_dashboard()
+
+    def get_urgent_cases(self, days_threshold: int = 7) -> List[CaseData]:
+        """取得緊急案件"""
+        return self.services.case_service.get_urgent_cases(days_threshold)
+
+    def get_overdue_stages(self, case_id: str = None) -> List[Dict[str, Any]]:
+        """取得延期的進度階段"""
+        return self.services.progress_service.get_overdue_stages(case_id)
+
+    def generate_case_report(self, case_id: str) -> str:
+        """生成案件報告"""
         try:
-            return self.data_manager.get_case_statistics()
+            # 取得完整案件資訊
+            complete_info = self.get_case_complete_info(case_id)
+            if not complete_info:
+                return f"❌ 找不到案件: {case_id}"
+
+            # 生成進度報告
+            progress_report = self.services.progress_service.generate_progress_report(case_id)
+
+            # 整合報告
+            case_data = complete_info['case_data']
+            folder_info = complete_info['folder_info']
+
+            report_lines = []
+            report_lines.append("=" * 60)
+            report_lines.append(f"案件完整報告 - {case_data['client']}")
+            report_lines.append("=" * 60)
+
+            # 基本資訊
+            report_lines.append("\n📋 基本資訊:")
+            report_lines.append(f"案件ID: {case_data['case_id']}")
+            report_lines.append(f"當事人: {case_data['client']}")
+            report_lines.append(f"案件類型: {case_data['case_type']}")
+            report_lines.append(f"案件狀態: {case_data['status']}")
+            if case_data.get('creation_date'):
+                report_lines.append(f"建立時間: {case_data['creation_date']}")
+            if case_data.get('notes'):
+                report_lines.append(f"備註: {case_data['notes']}")
+
+            # 資料夾資訊
+            report_lines.append(f"\n📁 資料夾資訊:")
+            report_lines.append(f"資料夾存在: {'是' if folder_info['exists'] else '否'}")
+            if folder_info['exists']:
+                report_lines.append(f"檔案數量: {folder_info['file_count']}")
+                report_lines.append(f"資料夾大小: {folder_info['size_mb']:.1f} MB")
+
+            # 進度報告
+            report_lines.append(f"\n{progress_report}")
+
+            report_lines.append(f"\n報告生成時間: {self.services.progress_service.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+            return "\n".join(report_lines)
+
         except Exception as e:
-            print(f"CaseController.get_case_statistics 失敗: {e}")
-            return {}
+            return f"❌ 生成報告失敗: {str(e)}"
 
-    def get_cases_by_type(self, case_type: str) -> List[CaseData]:
-        """根據類型取得案件"""
-        try:
-            all_cases = self.get_cases()
-            return [case for case in all_cases if case.case_type == case_type]
-        except Exception as e:
-            print(f"CaseController.get_cases_by_type 失敗: {e}")
-            return []
+    # ==================== 批量操作 ====================
 
-    def get_cases_by_progress(self, progress: str) -> List[CaseData]:
-        """根據進度取得案件"""
-        try:
-            all_cases = self.get_cases()
-            return [case for case in all_cases if case.progress == progress]
-        except Exception as e:
-            print(f"CaseController.get_cases_by_progress 失敗: {e}")
-            return []
+    def batch_create_folders(self, case_ids: List[str]) -> Dict[str, Any]:
+        """批量建立案件資料夾"""
+        return self.services.batch_create_folders(case_ids)
 
-    # ==================== 輔助方法 ====================
+    def batch_apply_templates(self, case_template_mapping: Dict[str, str]) -> Dict[str, Any]:
+        """批量套用進度範本"""
+        return self.services.batch_apply_progress_templates(case_template_mapping)
 
-    def get_available_case_types(self) -> List[str]:
-        """取得可用的案件類型"""
-        return list(AppConfig.CASE_TYPE_FOLDERS.keys())
+    def batch_update_status(self, case_ids: List[str], new_status: str) -> Dict[str, Any]:
+        """
+        批量更新案件狀態
 
-    def get_available_progress_options(self, case_type: str) -> List[str]:
-        """取得可用的進度選項"""
-        return AppConfig.get_progress_options(case_type)
+        Args:
+            case_ids: 案件ID列表
+            new_status: 新狀態
 
-    def refresh_data(self) -> bool:
-        """刷新所有資料"""
-        try:
-            result = self.load_cases()
-            if result:
-                self._sync_managers()
-            return result
-        except Exception as e:
-            print(f"CaseController.refresh_data 失敗: {e}")
-            return False
-
-    # ==================== 偵錯和診斷方法 ====================
-
-    def diagnose_folder_manager(self) -> Dict[str, Any]:
-        """診斷 FolderManager 的狀態"""
-        diagnosis = {
-            'folder_manager_exists': hasattr(self, 'folder_manager'),
-            'folder_manager_type': type(self.folder_manager).__name__ if hasattr(self, 'folder_manager') else None,
-            'available_methods': [],
-            'creator_exists': False,
-            'operations_exists': False
+        Returns:
+            操作結果統計
+        """
+        results = {
+            'total': len(case_ids),
+            'success': 0,
+            'failed': 0,
+            'details': []
         }
 
-        if hasattr(self, 'folder_manager'):
-            diagnosis['available_methods'] = [method for method in dir(self.folder_manager) if not method.startswith('_')]
-            diagnosis['creator_exists'] = hasattr(self.folder_manager, 'creator')
-            diagnosis['operations_exists'] = hasattr(self.folder_manager, 'operations')
+        for case_id in case_ids:
+            try:
+                case_data = self.get_case_by_id(case_id)
+                if not case_data:
+                    results['failed'] += 1
+                    results['details'].append({
+                        'case_id': case_id,
+                        'status': 'failed',
+                        'reason': '案件不存在'
+                    })
+                    continue
 
-        return diagnosis
+                # 更新狀態
+                case_data.status = new_status
+                if self.update_case(case_data):
+                    results['success'] += 1
+                    results['details'].append({
+                        'case_id': case_id,
+                        'status': 'success',
+                        'new_status': new_status
+                    })
+                else:
+                    results['failed'] += 1
+                    results['details'].append({
+                        'case_id': case_id,
+                        'status': 'failed',
+                        'reason': '更新失敗'
+                    })
+
+            except Exception as e:
+                results['failed'] += 1
+                results['details'].append({
+                    'case_id': case_id,
+                    'status': 'failed',
+                    'reason': str(e)
+                })
+
+        return results
+
+    # ==================== 通知管理 ====================
+
+    def get_notifications(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """取得通知列表"""
+        return self.services.notification_service.get_notifications(limit)
+
+    def get_unread_notifications(self) -> List[Dict[str, Any]]:
+        """取得未讀通知"""
+        return self.services.notification_service.get_unread_notifications()
+
+    def mark_notification_as_read(self, notification_id: str):
+        """標記通知為已讀"""
+        self.services.notification_service.mark_notification_as_read(notification_id)
+
+    def mark_all_notifications_as_read(self):
+        """標記所有通知為已讀"""
+        self.services.notification_service.mark_all_as_read()
+
+    def check_deadline_reminders(self, notification_days: List[int] = [1, 3, 7]) -> List[Dict[str, Any]]:
+        """檢查期限提醒並發送通知"""
+        return self.services.progress_service.check_progress_deadlines(notification_days)
+
+    # ==================== 系統維護 ====================
+
+    def perform_system_maintenance(self) -> Dict[str, Any]:
+        """執行系統維護"""
+        return self.services.perform_system_maintenance()
+
+    def validate_all_cases(self) -> Dict[str, Any]:
+        """驗證所有案件資料"""
+        try:
+            all_cases = self.get_cases()
+            return self.services.validation_service.validate_multiple_cases(all_cases, cross_validation=True)
+        except Exception as e:
+            return {'error': str(e)}
+
+    def create_data_backup(self, backup_name: str = None, include_folders: bool = False) -> Tuple[bool, str]:
+        """建立資料備份"""
+        return self.services.import_export_service.create_data_backup(backup_name, include_folders)
+
+    def get_system_health(self) -> Dict[str, Any]:
+        """取得系統健康狀態"""
+        dashboard = self.get_system_dashboard()
+        return dashboard.get('system_health', {})
+
+    # ==================== 便利方法 ====================
+
+    def load_cases(self) -> bool:
+        """載入案件資料（向後相容）"""
+        try:
+            # Services 層會自動載入，這裡只是為了向後相容
+            cases = self.get_cases()
+            print(f"✅ 載入了 {len(cases)} 筆案件資料")
+            return True
+        except Exception as e:
+            print(f"❌ 載入案件資料失敗: {e}")
+            return False
+
+    def save_cases(self) -> bool:
+        """儲存案件資料（向後相容）"""
+        try:
+            # Services 層會自動儲存，這裡只是為了向後相容
+            return True
+        except Exception as e:
+            print(f"❌ 儲存案件資料失敗: {e}")
+            return False
+
+    def refresh_data(self):
+        """重新整理資料"""
+        try:
+            # 重新初始化服務控制器
+            self.services = ServicesController(self.data_folder)
+            print("✅ 資料重新整理完成")
+        except Exception as e:
+            print(f"❌ 重新整理資料失敗: {e}")
+
+    # ==================== 除錯和狀態查詢 ====================
+
+    def get_controller_status(self) -> Dict[str, Any]:
+        """取得控制器狀態資訊"""
+        try:
+            dashboard = self.get_system_dashboard()
+
+            status = {
+                'controller_version': 'Services架構版本',
+                'data_folder': self.data_folder,
+                'total_cases': len(self.get_cases()),
+                'services_available': {
+                    'case_service': hasattr(self.services, 'case_service'),
+                    'folder_service': hasattr(self.services, 'folder_service'),
+                    'import_export_service': hasattr(self.services, 'import_export_service'),
+                    'notification_service': hasattr(self.services, 'notification_service'),
+                    'validation_service': hasattr(self.services, 'validation_service'),
+                    'progress_service': hasattr(self.services, 'progress_service')
+                },
+                'system_health': dashboard.get('system_health', {}),
+                'last_check': self.services.progress_service.datetime.now().isoformat()
+            }
+
+            return status
+
+        except Exception as e:
+            return {
+                'error': str(e),
+                'controller_version': 'Services架構版本（狀態檢查失敗）'
+            }
+
+    def debug_case(self, case_id: str) -> Dict[str, Any]:
+        """除錯特定案件"""
+        try:
+            debug_info = {
+                'case_id': case_id,
+                'case_exists': False,
+                'folder_exists': False,
+                'progress_stages': 0,
+                'notifications': 0,
+                'issues': []
+            }
+
+            # 檢查案件是否存在
+            case_data = self.get_case_by_id(case_id)
+            if case_data:
+                debug_info['case_exists'] = True
+                debug_info['case_data'] = case_data.to_dict()
+
+                # 檢查資料夾
+                folder_info = self.services.folder_service.get_case_folder_info(case_data)
+                debug_info['folder_exists'] = folder_info['exists']
+                debug_info['folder_info'] = folder_info
+
+                # 檢查進度
+                progress_info = self.get_case_progress(case_id)
+                debug_info['progress_stages'] = progress_info['total_stages']
+                debug_info['progress_info'] = progress_info
+
+                # 檢查問題
+                if not folder_info['exists']:
+                    debug_info['issues'].append('資料夾不存在')
+
+                if progress_info['overdue_stages'] > 0:
+                    debug_info['issues'].append(f'有 {progress_info["overdue_stages"]} 個延期階段')
+
+            else:
+                debug_info['issues'].append('案件不存在')
+
+            return debug_info
+
+        except Exception as e:
+            return {
+                'case_id': case_id,
+                'error': str(e)
+            }
+
+
+# ==================== 向後相容的工廠函數 ====================
+
+def create_case_controller(data_folder: str = None) -> CaseController:
+    """
+    建立案件控制器的工廠函數
+
+    Args:
+        data_folder: 資料資料夾路徑
+
+    Returns:
+        CaseController 實例
+    """
+    return CaseController(data_folder)
+
+
+# ==================== 便利裝飾器 ====================
+
+def handle_controller_errors(func):
+    """控制器方法的錯誤處理裝飾器"""
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except Exception as e:
+            print(f"❌ {func.__name__} 執行失敗: {e}")
+            # 根據方法返回類型決定預設返回值
+            if func.__name__.startswith('get_') and 'List' in str(func.__annotations__.get('return', '')):
+                return []
+            elif func.__name__.startswith('get_') and 'Dict' in str(func.__annotations__.get('return', '')):
+                return {}
+            elif func.__name__.startswith('get_'):
+                return None
+            else:
+                return False
+    return wrapper
+
+
+# ==================== 使用範例 ====================
+
+if __name__ == "__main__":
+    # 示範如何使用新的控制器
+    print("🎯 案件控制器測試")
+
+    try:
+        # 初始化控制器
+        controller = CaseController("./test_data")
+
+        # 查看系統狀態
+        print("\n📊 系統狀態:")
+        status = controller.get_controller_status()
+        print(f"總案件數: {status['total_cases']}")
+        print(f"系統健康: {status['system_health'].get('overall_status', 'unknown')}")
+
+        # 示範建立案件
+        from models.case_model import CaseData
+        from datetime import datetime
+
+        test_case = CaseData(
+            case_id="TEST001",
+            client="測試當事人",
+            case_type="民事",
+            status="待處理",
+            notes="測試案件",
+            creation_date=datetime.now()
+        )
+
+        print(f"\n🏗️ 建立測試案件...")
+        if controller.add_case(test_case, create_folder=True):
+            print("✅ 案件建立成功")
+
+            # 套用進度範本
+            templates = controller.get_available_progress_templates()
+            if templates:
+                print(f"套用進度範本: {templates[0]}")
+                controller.apply_progress_template("TEST001", templates[0])
+
+            # 查看完整資訊
+            complete_info = controller.get_case_complete_info("TEST001")
+            if complete_info:
+                print("✅ 案件完整資訊取得成功")
+
+        print(f"\n📋 系統儀表板:")
+        dashboard = controller.get_system_dashboard()
+        case_stats = dashboard.get('case_statistics', {})
+        print(f"總案件: {case_stats.get('total_cases', 0)}")
+
+    except Exception as e:
+        print(f"❌ 測試失敗: {e}")
+        import traceback
+        traceback.print_exc()
