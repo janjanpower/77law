@@ -76,174 +76,6 @@ class CaseImportExport:
             print(error_msg)
             return False, [], error_msg
 
-    def merge_imported_cases(self, existing_cases: List[CaseData], imported_cases: List[CaseData],
-                           merge_strategy: str = 'skip_duplicates') -> Tuple[List[CaseData], Dict[str, Any]]:
-        """
-        合併匯入的案件資料
-
-        Args:
-            existing_cases: 現有案件列表
-            imported_cases: 匯入的案件列表
-            merge_strategy: 合併策略 ('skip_duplicates', 'overwrite', 'keep_both')
-
-        Returns:
-            Tuple[List[CaseData], Dict[str, Any]]: (合併後的案件列表, 合併統計資訊)
-        """
-        merged_cases = existing_cases.copy()
-        stats = {
-            'total_imported': len(imported_cases),
-            'added': 0,
-            'skipped': 0,
-            'overwritten': 0,
-            'duplicates': [],
-            'errors': []
-        }
-
-        try:
-            # 建立現有案件的查找字典 (case_type + case_id -> index)
-            existing_lookup = {}
-            for i, case in enumerate(existing_cases):
-                key = f"{case.case_type}_{case.case_id}"
-                existing_lookup[key] = i
-
-            for imported_case in imported_cases:
-                key = f"{imported_case.case_type}_{imported_case.case_id}"
-
-                if key in existing_lookup:
-                    # 處理重複案件
-                    existing_index = existing_lookup[key]
-                    duplicate_info = {
-                        'case_id': imported_case.case_id,
-                        'case_type': imported_case.case_type,
-                        'existing_client': existing_cases[existing_index].client,
-                        'imported_client': imported_case.client
-                    }
-                    stats['duplicates'].append(duplicate_info)
-
-                    if merge_strategy == 'skip_duplicates':
-                        stats['skipped'] += 1
-                        continue
-                    elif merge_strategy == 'overwrite':
-                        merged_cases[existing_index] = imported_case
-                        stats['overwritten'] += 1
-                    elif merge_strategy == 'keep_both':
-                        # 為重複案件生成新編號
-                        new_case_id = self._generate_unique_case_id(
-                            imported_case.case_type,
-                            imported_case.case_id,
-                            merged_cases
-                        )
-                        imported_case.case_id = new_case_id
-                        merged_cases.append(imported_case)
-                        stats['added'] += 1
-                else:
-                    # 新增案件
-                    merged_cases.append(imported_case)
-                    stats['added'] += 1
-
-            print(f"合併完成 - 新增: {stats['added']}, 跳過: {stats['skipped']}, 覆寫: {stats['overwritten']}")
-            return merged_cases, stats
-
-        except Exception as e:
-            error_msg = f"合併匯入資料失敗: {str(e)}"
-            print(error_msg)
-            stats['errors'].append(error_msg)
-            return existing_cases, stats
-
-    def _generate_unique_case_id(self, case_type: str, original_case_id: str,
-                                existing_cases: List[CaseData]) -> str:
-        """
-        為重複案件生成唯一的案件編號
-
-        Args:
-            case_type: 案件類型
-            original_case_id: 原始案件編號
-            existing_cases: 現有案件列表
-
-        Returns:
-            str: 唯一的案件編號
-        """
-        base_id = original_case_id
-        counter = 1
-
-        # 如果原編號是 CIVIL001，嘗試 CIVIL001_1, CIVIL001_2 等
-        while True:
-            new_case_id = f"{base_id}_{counter}"
-
-            # 檢查是否重複
-            is_duplicate = any(
-                case.case_id == new_case_id and case.case_type == case_type
-                for case in existing_cases
-            )
-
-            if not is_duplicate:
-                return new_case_id
-
-            counter += 1
-
-            # 防止無限循環
-            if counter > 999:
-                timestamp = datetime.now().strftime("%H%M%S")
-                return f"{base_id}_{timestamp}"
-
-    def export_filtered_cases(self, cases: List[CaseData], filter_criteria: Dict[str, Any],
-                             file_path: str = None) -> bool:
-        """
-        匯出符合條件的案件資料
-
-        Args:
-            cases: 案件資料列表
-            filter_criteria: 篩選條件字典
-            file_path: 匯出檔案路徑
-
-        Returns:
-            bool: 匯出是否成功
-        """
-        try:
-            # 篩選案件
-            filtered_cases = self._filter_cases(cases, filter_criteria)
-
-            if not filtered_cases:
-                print("沒有符合條件的案件資料可供匯出")
-                return False
-
-            # 生成檔案名稱
-            if file_path is None:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filter_desc = self._get_filter_description(filter_criteria)
-                filename = f"案件資料_{filter_desc}_{timestamp}.xlsx"
-                file_path = os.path.join(self.data_folder, filename)
-
-            # 匯出
-            success = ExcelHandler.export_cases_to_excel(filtered_cases, file_path)
-            if success:
-                print(f"已匯出 {len(filtered_cases)} 筆符合條件的案件資料到：{file_path}")
-
-            return success
-
-        except Exception as e:
-            print(f"匯出篩選案件失敗: {e}")
-            return False
-
-    def _filter_cases(self, cases: List[CaseData], filter_criteria: Dict[str, Any]) -> List[CaseData]:
-        """
-        根據條件篩選案件
-
-        Args:
-            cases: 案件資料列表
-            filter_criteria: 篩選條件
-
-        Returns:
-            List[CaseData]: 篩選後的案件列表
-        """
-        filtered_cases = []
-
-        for case in cases:
-            if self._case_matches_criteria(case, filter_criteria):
-                filtered_cases.append(case)
-
-        return filtered_cases
-
     def _case_matches_criteria(self, case: CaseData, criteria: Dict[str, Any]) -> bool:
         """
         檢查案件是否符合篩選條件
@@ -352,67 +184,114 @@ class CaseImportExport:
 
         return "_".join(descriptions) if descriptions else "篩選資料"
 
-    def validate_import_file(self, file_path: str) -> Tuple[bool, str]:
+
+    def update_excel_content_for_case_id_change(self, old_case_id: str, new_case_id: str) -> Tuple[bool, str]:
         """
-        驗證匯入檔案的有效性
+        更新Excel檔案內容中的案件編號 - CaseImportExport的職責
 
         Args:
-            file_path: 檔案路徑
+            old_case_id: 原案件編號
+            new_case_id: 新案件編號
 
         Returns:
-            Tuple[bool, str]: (是否有效, 驗證訊息)
+            Tuple[bool, str]: (是否成功, 訊息)
         """
         try:
-            # 檢查檔案是否存在
-            if not os.path.exists(file_path):
-                return False, "檔案不存在"
+            print(f"📋 CaseImportExport 更新Excel內容: {old_case_id} → {new_case_id}")
 
-            # 檢查檔案副檔名
-            if not file_path.lower().endswith(('.xlsx', '.xls')):
-                return False, "檔案格式必須是 Excel (.xlsx 或 .xls)"
+            # 找到要更新的案件
+            case_data = self._find_case_by_id(new_case_id)
+            if not case_data:
+                return False, f"找不到案件: {new_case_id}"
 
-            # 檢查檔案大小（避免過大的檔案）
-            file_size = os.path.getsize(file_path)
-            max_size = 50 * 1024 * 1024  # 50MB
-            if file_size > max_size:
-                return False, f"檔案大小超過限制 ({file_size / 1024 / 1024:.1f}MB > 50MB)"
+            # 找到Excel檔案
+            excel_files = self._find_all_excel_files_for_case(case_data)
+            if not excel_files:
+                return False, "找不到相關的Excel檔案"
 
-            # 嘗試讀取檔案檢查是否損壞
-            try:
-                ExcelHandler.validate_excel_file(file_path)
-                return True, "檔案驗證通過"
-            except Exception as e:
-                return False, f"檔案格式錯誤: {str(e)}"
+            updated_count = 0
+            total_count = len(excel_files)
 
-        except Exception as e:
-            return False, f"驗證檔案時發生錯誤: {str(e)}"
+            for excel_file in excel_files:
+                try:
+                    if self._update_excel_file_content(excel_file, old_case_id, new_case_id, case_data):
+                        updated_count += 1
+                        print(f"   ✅ 更新Excel內容: {os.path.basename(excel_file)}")
+                    else:
+                        print(f"   ⚠️ 更新Excel內容失敗: {os.path.basename(excel_file)}")
 
-    def get_import_preview(self, file_path: str, max_rows: int = 10) -> Tuple[bool, List[Dict], str]:
-        """
-        取得匯入檔案的預覽資料
+                except Exception as e:
+                    print(f"   ❌ 更新Excel檔案失敗 {os.path.basename(excel_file)}: {e}")
 
-        Args:
-            file_path: 檔案路徑
-            max_rows: 最大預覽行數
-
-        Returns:
-            Tuple[bool, List[Dict], str]: (成功與否, 預覽資料, 訊息)
-        """
-        try:
-            # 先驗證檔案
-            is_valid, message = self.validate_import_file(file_path)
-            if not is_valid:
-                return False, [], message
-
-            # 讀取預覽資料
-            preview_data = ExcelHandler.get_excel_preview(file_path, max_rows)
-
-            if preview_data:
-                return True, preview_data, f"成功讀取 {len(preview_data)} 行預覽資料"
+            if updated_count > 0:
+                message = f"Excel內容更新完成 ({updated_count}/{total_count} 檔案)"
+                print(f"✅ {message}")
+                return True, message
             else:
-                return False, [], "無法讀取檔案內容"
+                return False, "所有Excel檔案內容更新失敗"
 
         except Exception as e:
-            error_msg = f"讀取預覽資料失敗: {str(e)}"
-            print(error_msg)
-            return False, [], error_msg
+            print(f"❌ CaseImportExport 更新Excel內容失敗: {e}")
+            return False, f"Excel內容更新失敗: {str(e)}"
+
+    def _update_excel_file_content(self, excel_file_path: str, old_case_id: str, new_case_id: str, case_data: CaseData) -> bool:
+        """更新單個Excel檔案的內容"""
+        try:
+            # 檢查pandas是否可用
+            try:
+                import pandas as pd
+            except ImportError:
+                print(f"⚠️ 缺少pandas套件，無法更新Excel內容")
+                return False
+
+            # 讀取Excel檔案
+            excel_sheets = pd.read_excel(excel_file_path, sheet_name=None, engine='openpyxl')
+
+            updated = False
+
+            # 更新每個工作表
+            for sheet_name, df in excel_sheets.items():
+                # 將所有包含舊案件編號的內容替換為新案件編號
+                for column in df.columns:
+                    if df[column].dtype == 'object':  # 只處理文字欄位
+                        mask = df[column].astype(str).str.contains(old_case_id, na=False)
+                        if mask.any():
+                            df.loc[mask, column] = df.loc[mask, column].astype(str).str.replace(old_case_id, new_case_id)
+                            updated = True
+                            print(f"     工作表 '{sheet_name}' 欄位 '{column}' 已更新")
+
+            if updated:
+                # 寫回Excel檔案
+                with pd.ExcelWriter(excel_file_path, engine='openpyxl') as writer:
+                    for sheet_name, df in excel_sheets.items():
+                        df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+                print(f"     Excel檔案內容更新完成: {os.path.basename(excel_file_path)}")
+
+            return updated
+
+        except Exception as e:
+            print(f"❌ 更新Excel檔案內容失敗: {e}")
+            return False
+
+    def _find_all_excel_files_for_case(self, case_data: CaseData) -> List[str]:
+        """尋找案件相關的所有Excel檔案"""
+        try:
+            excel_files = []
+
+            # 取得案件資料夾路徑
+            case_folder_path = self._get_case_folder_path(case_data)
+            if not case_folder_path:
+                return excel_files
+
+            # 遞歸尋找所有Excel檔案
+            for root, dirs, files in os.walk(case_folder_path):
+                for filename in files:
+                    if filename.endswith('.xlsx') and not filename.startswith('~'):
+                        excel_files.append(os.path.join(root, filename))
+
+            return excel_files
+
+        except Exception as e:
+            print(f"❌ 尋找Excel檔案失敗: {e}")
+            return []

@@ -253,6 +253,71 @@ class CaseController:
             print(f"❌ 取得案件失敗: {e}")
             return None
 
+    def update_case_id(self, old_case_id: str, case_type: str, new_case_id: str) -> Tuple[bool, str]:
+        """
+        更新案件編號 - 委託和協調各管理器
+
+        Args:
+            old_case_id: 原案件編號
+            case_type: 案件類型
+            new_case_id: 新案件編號
+
+        Returns:
+            Tuple[bool, str]: (是否成功, 訊息)
+        """
+        try:
+            print(f"🔄 CaseController 協調案件編號更新: {old_case_id} → {new_case_id}")
+
+            # 步驟1: 委託給 validator 進行驗證
+            validation_success, validation_message = self.validator.validate_case_id_update(
+                old_case_id, case_type, new_case_id
+            )
+            if not validation_success:
+                return False, validation_message
+
+            # 步驟2: 委託給 data_manager 處理核心資料和檔案重新命名
+            data_update_success, data_message = self.data_manager.update_case_id_with_files(
+                old_case_id, case_type, new_case_id
+            )
+            if not data_update_success:
+                return False, data_message
+
+            # 步驟3: 委託給 import_export 更新Excel檔案內容
+            excel_update_success, excel_message = self.import_export.update_excel_content_for_case_id_change(
+                old_case_id, new_case_id
+            )
+            if not excel_update_success:
+                print(f"⚠️ Excel內容更新失敗: {excel_message}")
+                # 不中斷主流程
+
+            # 步驟4: 委託給 progress_manager 更新進度相關檔案
+            progress_update_success, progress_message = self.progress_manager.update_progress_files_for_case_id_change(
+                old_case_id, new_case_id
+            )
+            if not progress_update_success:
+                print(f"⚠️ 進度檔案更新失敗: {progress_message}")
+                # 不中斷主流程
+
+            # 步驟5: 同步各管理器
+            self._sync_managers()
+
+            # 整理結果訊息
+            result_parts = [data_message]
+            if excel_update_success:
+                result_parts.append("Excel內容已更新")
+            if progress_update_success:
+                result_parts.append("進度檔案已更新")
+
+            final_message = "，".join(result_parts)
+            print(f"✅ CaseController 協調完成: {final_message}")
+
+            return True, final_message
+
+        except Exception as e:
+            print(f"❌ CaseController.update_case_id 失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, f"協調更新失敗: {str(e)}"
 
     def get_cases(self) -> List[CaseData]:
         """取得所有案件"""

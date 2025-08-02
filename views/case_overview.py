@@ -1129,7 +1129,7 @@ class CaseOverviewWindow:
                 self._finish_edit_case_id()
 
     def _finish_edit_case_id(self):
-        """完成編輯案件編號 - 🔥 修正：添加必需的case_type參數"""
+        """完成編輯案件編號 - 修正版本"""
         if not self.edit_entry or not self.edit_item or not self.is_editing:
             return
 
@@ -1150,14 +1150,14 @@ class CaseOverviewWindow:
             if case_index is not None and case_index < len(self.case_data):
                 case_data = self.case_data[case_index]
                 old_case_id = case_data.case_id
-                case_type = case_data.case_type  # 🔥 修正：取得案件類型
+                case_type = case_data.case_type
 
                 # 如果沒有變更，直接結束編輯
                 if new_case_id == old_case_id:
                     self._cleanup_edit()
                     return
 
-                # 🔥 修正：傳入必需的case_type參數
+                # ✅ 修正：使用正確的方法名稱和參數
                 success, message = self.case_controller.update_case_id(old_case_id, case_type, new_case_id)
 
                 # 先清理編輯組件

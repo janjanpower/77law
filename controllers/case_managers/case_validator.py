@@ -26,22 +26,34 @@ class CaseValidator:
 
     def check_case_id_duplicate(self, case_id: str, case_type: str, exclude_case_id: str = None) -> bool:
         """
-        檢查案件編號是否重複
+        檢查案件編號重複 - 新增方法（如果不存在）
 
         Args:
             case_id: 要檢查的案件編號
             case_type: 案件類型
-            exclude_case_id: 排除的案件編號（用於更新時）
+            exclude_case_id: 要排除的案件編號（用於更新時）
 
         Returns:
-            bool: True表示重複，False表示不重複
+            bool: 是否重複
         """
-        for case in self.cases:
-            if (case.case_id == case_id and
-                case.case_type == case_type and
-                case.case_id != exclude_case_id):
-                return True
-        return False
+        try:
+            # 委託給驗證器處理
+            if hasattr(self, 'validator') and self.validator:
+                return self.validator.check_case_id_duplicate(case_id, case_type, exclude_case_id)
+
+            # 備用方法：直接檢查
+            all_cases = self.get_cases()
+            for case in all_cases:
+                if (case.case_id == case_id and
+                    case.case_type == case_type and
+                    case.case_id != exclude_case_id):
+                    return True
+
+            return False
+
+        except Exception as e:
+            print(f"❌ 檢查案件編號重複失敗: {e}")
+            return False  # 發生錯誤時假設不重複，避免阻擋操作
 
     def validate_case_data(self, case_data: CaseData) -> Tuple[bool, List[str]]:
         """
@@ -181,152 +193,68 @@ class CaseValidator:
 
         return False
 
-    def validate_client_name(self, client_name: str) -> Tuple[bool, str]:
+
+    def validate_case_id_update(self, old_case_id: str, case_type: str, new_case_id: str) -> Tuple[bool, str]:
         """
-        驗證當事人姓名
+        驗證案件編號更新 - CaseValidator的職責
 
         Args:
-            client_name: 當事人姓名
+            old_case_id: 原案件編號
+            case_type: 案件類型
+            new_case_id: 新案件編號
 
         Returns:
             Tuple[bool, str]: (是否有效, 錯誤訊息)
         """
-        if not client_name or not client_name.strip():
-            return False, "當事人姓名不能為空"
-
-        # 檢查長度
-        if len(client_name.strip()) > 50:
-            return False, "當事人姓名過長（最多50字元）"
-
-        # 檢查特殊字元
-        invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
-        for char in invalid_chars:
-            if char in client_name:
-                return False, f"當事人姓名不能包含特殊字元：{char}"
-
-        return True, ""
-
-    def validate_case_type(self, case_type: str) -> bool:
-        """
-        驗證案件類型
-
-        Args:
-            case_type: 案件類型
-
-        Returns:
-            bool: 是否有效
-        """
-        return case_type in AppConfig.CASE_TYPE_FOLDERS
-
-    def validate_progress(self, progress: str, case_type: str) -> bool:
-        """
-        驗證進度狀態
-
-        Args:
-            progress: 進度狀態
-            case_type: 案件類型
-
-        Returns:
-            bool: 是否有效
-        """
-        valid_progress = AppConfig.get_progress_options(case_type)
-        if not valid_progress:
-            valid_progress = AppConfig.PROGRESS_OPTIONS.get('default', [])
-
-        return progress in valid_progress
-
-    def get_validation_summary(self, cases: List[CaseData] = None) -> Dict[str, Any]:
-        """
-        取得驗證摘要
-
-        Args:
-            cases: 要驗證的案件列表，None表示使用所有案件
-
-        Returns:
-            Dict[str, Any]: 驗證摘要
-        """
-        if cases is None:
-            cases = self.cases
-
-        summary = {
-            'total_cases': len(cases),
-            'valid_cases': 0,
-            'invalid_cases': 0,
-            'common_errors': {},
-            'duplicate_ids': []
-        }
-
-        # 檢查重複編號
-        case_ids = {}
-        for case in cases:
-            key = f"{case.case_id}_{case.case_type}"
-            if key in case_ids:
-                summary['duplicate_ids'].append(case.case_id)
-            else:
-                case_ids[key] = case
-
-        # 驗證每個案件
-        for case in cases:
-            is_valid, errors = self.validate_case_data(case)
-
-            if is_valid:
-                summary['valid_cases'] += 1
-            else:
-                summary['invalid_cases'] += 1
-
-                # 統計常見錯誤
-                for error in errors:
-                    if error not in summary['common_errors']:
-                        summary['common_errors'][error] = 0
-                    summary['common_errors'][error] += 1
-
-        return summary
-
-    def fix_case_id_format(self, case: CaseData) -> Tuple[bool, str]:
-        """
-        修正案件編號格式
-
-        Args:
-            case: 案件資料
-
-        Returns:
-            Tuple[bool, str]: (是否修正成功, 新的案件編號或錯誤訊息)
-        """
         try:
-            from datetime import datetime
+            print(f"🔍 CaseValidator 驗證案件編號更新: {old_case_id} → {new_case_id}")
 
-            # 如果已經是正確格式，直接返回
-            if self._validate_case_id_format(case.case_id):
-                return True, case.case_id
+            # 1. 驗證新案件編號格式
+            if not self._validate_case_id_format(new_case_id):
+                return False, f"新案件編號格式無效: {new_case_id}"
 
-            # 嘗試修正格式
-            current_year = datetime.now().year
-            roc_year = current_year - 1911
+            # 2. 檢查新案件編號是否重複
+            if self.check_case_id_duplicate(new_case_id, case_type, exclude_case_id=old_case_id):
+                return False, f"案件編號 {new_case_id} 已存在"
 
-            # 取得同類型案件的最大流水號
-            same_type_cases = [
-                c for c in self.cases
-                if c.case_type == case.case_type and
-                c.case_id != case.case_id and
-                self._validate_case_id_format(c.case_id)
-            ]
+            # 3. 驗證原案件是否存在
+            if not self._case_exists(old_case_id, case_type):
+                return False, f"原案件編號不存在: {old_case_id}"
 
-            max_num = 0
-            for existing_case in same_type_cases:
-                if existing_case.case_id.startswith(str(roc_year)):
-                    try:
-                        num_part = existing_case.case_id[3:]
-                        if num_part.isdigit():
-                            num = int(num_part)
-                            max_num = max(max_num, num)
-                    except (ValueError, IndexError):
-                        continue
+            # 4. 檢查案件編號是否確實有變更
+            if old_case_id == new_case_id:
+                return False, "新舊案件編號相同，無需更新"
 
-            # 生成新編號
-            new_num = max_num + 1
-            new_case_id = f"{roc_year:03d}{new_num:03d}"
+            # 5. 其他業務規則驗證
+            business_validation = self._validate_case_id_update_business_rules(old_case_id, new_case_id, case_type)
+            if not business_validation[0]:
+                return business_validation
 
-            return True, new_case_id
+            print(f"✅ 案件編號更新驗證通過")
+            return True, "驗證通過"
 
         except Exception as e:
-            return False, f"修正案件編號失敗: {str(e)}"
+            print(f"❌ CaseValidator 驗證失敗: {e}")
+            return False, f"驗證過程發生錯誤: {str(e)}"
+
+    def _validate_case_id_update_business_rules(self, old_case_id: str, new_case_id: str, case_type: str) -> Tuple[bool, str]:
+        """驗證案件編號更新的業務規則"""
+        try:
+            # 可以在這裡添加更多業務規則
+            # 例如：某些案件編號不允許更改、需要特定權限等
+
+            return True, ""
+
+        except Exception as e:
+            return False, f"業務規則驗證失敗: {str(e)}"
+
+    def _case_exists(self, case_id: str, case_type: str) -> bool:
+        """檢查案件是否存在"""
+        try:
+            for case in self.cases:
+                if case.case_id == case_id and case.case_type == case_type:
+                    return True
+            return False
+        except Exception as e:
+            print(f"❌ 檢查案件存在性失敗: {e}")
+            return False

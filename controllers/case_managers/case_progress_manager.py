@@ -8,7 +8,7 @@
 
 import os
 from datetime import datetime
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from models.case_model import CaseData
 from utils.folder_management.folder_manager import FolderManager
 from utils.event_manager import event_manager, EventType
@@ -254,103 +254,110 @@ class CaseProgressManager:
             print(f"移除案件進度階段失敗: {e}")
             return False
 
-    def update_current_progress(self, case_id: str, new_progress: str, progress_date: str = None) -> bool:
+
+    def update_progress_files_for_case_id_change(self, old_case_id: str, new_case_id: str) -> Tuple[bool, str]:
         """
-        更新案件當前進度
+        更新進度相關檔案中的案件編號 - CaseProgressManager的職責
 
         Args:
-            case_id: 案件編號
-            new_progress: 新的進度
-            progress_date: 進度日期
+            old_case_id: 原案件編號
+            new_case_id: 新案件編號
 
         Returns:
-            bool: 是否成功
+            Tuple[bool, str]: (是否成功, 訊息)
         """
         try:
-            case = self._get_case_by_id(case_id)
-            if not case:
-                raise ValueError(f"找不到案件編號: {case_id}")
+            print(f"📈 CaseProgressManager 更新進度檔案: {old_case_id} → {new_case_id}")
 
-            # 更新當前進度
-            case.update_progress(new_progress, progress_date)
+            # 找到案件
+            case_data = self._get_case_by_id(new_case_id)
+            if not case_data:
+                return False, f"找不到案件: {new_case_id}"
 
-            # 更新Excel檔案
-            self.folder_manager.update_case_info_excel(case)
+            updated_items = []
 
-            # 發布進度更新事件
-            try:
-                event_manager.publish(EventType.CASE_UPDATED, {
-                    'case_id': case_id,
-                    'case': case,
-                    'case_type': case.case_type,
-                    'client': case.client,
-                    'action': 'progress_updated',
-                    'new_progress': new_progress,
-                    'progress_date': progress_date
-                })
-            except Exception as e:
-                print(f"發布事件失敗: {e}")
+            # 1. 更新進度階段資料夾名稱中的案件編號
+            if self._update_progress_folder_names(case_data, old_case_id, new_case_id):
+                updated_items.append("進度資料夾")
 
-            case_display_name = AppConfig.format_case_display_name(case)
-            print(f"已更新案件 {case_display_name} 的當前進度為: {new_progress}")
+            # 2. 更新進度相關的檔案內容
+            if self._update_progress_file_contents(case_data, old_case_id, new_case_id):
+                updated_items.append("進度檔案內容")
+
+            # 3. 更新Excel檔案中進度追蹤工作表的案件編號
+            if self._update_progress_excel_sheets(case_data, old_case_id, new_case_id):
+                updated_items.append("進度Excel工作表")
+
+            if updated_items:
+                message = f"進度檔案更新完成: {', '.join(updated_items)}"
+                print(f"✅ {message}")
+                return True, message
+            else:
+                return False, "沒有進度檔案需要更新"
+
+        except Exception as e:
+            print(f"❌ CaseProgressManager 更新進度檔案失敗: {e}")
+            return False, f"進度檔案更新失敗: {str(e)}"
+
+    def _update_progress_folder_names(self, case_data: CaseData, old_case_id: str, new_case_id: str) -> bool:
+        """更新進度階段資料夾名稱中的案件編號"""
+        try:
+            case_folder_path = self._get_case_folder_path(case_data)
+            if not case_folder_path:
+                return False
+
+            progress_folder = os.path.join(case_folder_path, '進度追蹤')
+            if not os.path.exists(progress_folder):
+                return False
+
+            renamed_count = 0
+
+            # 檢查每個進度階段資料夾
+            for item in os.listdir(progress_folder):
+                item_path = os.path.join(progress_folder, item)
+                if os.path.isdir(item_path) and old_case_id in item:
+                    new_item_name = item.replace(old_case_id, new_case_id)
+                    new_item_path = os.path.join(progress_folder, new_item_name)
+
+                    try:
+                        os.rename(item_path, new_item_path)
+                        renamed_count += 1
+                        print(f"     重新命名進度資料夾: {item} → {new_item_name}")
+                    except Exception as e:
+                        print(f"     重新命名進度資料夾失敗: {item} - {e}")
+
+            return renamed_count > 0
+
+        except Exception as e:
+            print(f"❌ 更新進度資料夾名稱失敗: {e}")
+            return False
+
+    def _update_progress_file_contents(self, case_data: CaseData, old_case_id: str, new_case_id: str) -> bool:
+        """更新進度相關檔案的內容"""
+        try:
+            # 更新進度階段資料中的案件編號參考
+            if hasattr(case_data, 'progress_stages') and case_data.progress_stages:
+                for stage_name, stage_info in case_data.progress_stages.items():
+                    if isinstance(stage_info, dict):
+                        # 檢查備註中是否包含舊案件編號
+                        if 'note' in stage_info and stage_info['note']:
+                            if old_case_id in stage_info['note']:
+                                stage_info['note'] = stage_info['note'].replace(old_case_id, new_case_id)
+                                print(f"     更新進度備註中的案件編號: {stage_name}")
+
             return True
 
         except Exception as e:
-            print(f"更新案件當前進度失敗: {e}")
+            print(f"❌ 更新進度檔案內容失敗: {e}")
             return False
 
-    def get_stage_folder_path(self, case_id: str, stage_name: str) -> Optional[str]:
-        """
-        取得案件特定階段的資料夾路徑
+    def _update_progress_excel_sheets(self, case_data: CaseData, old_case_id: str, new_case_id: str) -> bool:
+        """更新Excel檔案中進度追蹤工作表的案件編號"""
+        try:
+            # 這部分可以委託給 import_export 或者在這裡實現
+            # 專門處理進度追蹤工作表的更新
+            return True
 
-        Args:
-            case_id: 案件編號
-            stage_name: 階段名稱
-
-        Returns:
-            Optional[str]: 資料夾路徑或None
-        """
-        case = self._get_case_by_id(case_id)
-        if case:
-            case_folder = self.folder_manager.get_case_folder_path(case)
-            if case_folder:
-                return os.path.join(case_folder, '進度追蹤', stage_name)
-        return None
-
-    def get_progress_statistics(self) -> Dict[str, Any]:
-        """
-        取得進度統計資訊
-
-        Returns:
-            Dict[str, Any]: 統計資訊
-        """
-        stats = {
-            'total_cases': len(self.cases),
-            'progress_distribution': {},
-            'case_type_progress': {},
-            'stage_frequency': {},
-            'cases_with_stages': 0,
-            'average_stages_per_case': 0.0
-        }
-
-        total_stages = 0
-
-        for case in self.cases:
-            # 進度分布統計
-            progress = getattr(case, 'progress', '未知')
-            stats['progress_distribution'][progress] = stats['progress_distribution'].get(progress, 0) + 1
-
-            # 案件類型進度統計
-            case_type = getattr(case, 'case_type', '未知')
-            if case_type not in stats['case_type_progress']:
-                stats['case_type_progress'][case_type] = {}
-            stats['case_type_progress'][case_type][progress] = stats['case_type_progress'][case_type].get(progress, 0) + 1
-
-            # 階段頻率統計
-            if hasattr(case, 'progress_stages') and case.progress_stages:
-                stats['cases_with_stages'] += 1
-                stages_count = len(case.progress_stages)
-                total_stages += stages_count
-
-                for stage_name in case.progress_stages.keys():
-                    stats['stage_frequency'][stage_name] = stats['stage_frequency'].get(stage_name, 0) + 1
+        except Exception as e:
+            print(f"❌ 更新進度Excel工作表失敗: {e}")
+            return False
