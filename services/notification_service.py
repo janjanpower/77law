@@ -53,8 +53,6 @@ class NotificationService:
         # 確保通知資料夾存在
         os.makedirs(self.notification_folder, exist_ok=True)
 
-        # 載入通知歷史
-        self.notification_history = self._load_notification_history()
 
         print("✅ NotificationService 初始化完成")
 
@@ -280,75 +278,6 @@ class NotificationService:
         )
         self._send_notification(notification)
 
-    # ==================== 通知管理 ====================
-
-    def get_notifications(self, limit: int = 50,
-                         notification_type: NotificationType = None,
-                         level: NotificationLevel = None,
-                         since: datetime = None) -> List[Dict[str, Any]]:
-        """
-        取得通知歷史
-
-        Args:
-            limit: 限制數量
-            notification_type: 篩選通知類型
-            level: 篩選通知級別
-            since: 篩選起始時間
-
-        Returns:
-            通知列表
-        """
-        notifications = self.notification_history.copy()
-
-        # 篩選條件
-        if notification_type:
-            notifications = [n for n in notifications if n.get('type') == notification_type.value]
-
-        if level:
-            notifications = [n for n in notifications if n.get('level') == level.value]
-
-        if since:
-            notifications = [n for n in notifications
-                           if datetime.fromisoformat(n.get('timestamp', '')) >= since]
-
-        # 按時間倒序排序並限制數量
-        notifications.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-        return notifications[:limit]
-
-    def get_unread_notifications(self) -> List[Dict[str, Any]]:
-        """取得未讀通知"""
-        return [n for n in self.notification_history if not n.get('read', False)]
-
-    def mark_notification_as_read(self, notification_id: str):
-        """標記通知為已讀"""
-        for notification in self.notification_history:
-            if notification.get('id') == notification_id:
-                notification['read'] = True
-                notification['read_at'] = datetime.now().isoformat()
-                break
-        self._save_notification_history()
-
-    def mark_all_as_read(self):
-        """標記所有通知為已讀"""
-        for notification in self.notification_history:
-            notification['read'] = True
-            notification['read_at'] = datetime.now().isoformat()
-        self._save_notification_history()
-
-    def clear_old_notifications(self, days_to_keep: int = 30):
-        """清除舊通知"""
-        cutoff_date = datetime.now() - timedelta(days=days_to_keep)
-
-        original_count = len(self.notification_history)
-        self.notification_history = [
-            n for n in self.notification_history
-            if datetime.fromisoformat(n.get('timestamp', '')) > cutoff_date
-        ]
-
-        cleared_count = original_count - len(self.notification_history)
-        if cleared_count > 0:
-            print(f"🗑️ 已清除 {cleared_count} 個舊通知")
-            self._save_notification_history()
 
     # ==================== 統計和報告 ====================
 
@@ -417,9 +346,6 @@ class NotificationService:
     def _send_notification(self, notification: Dict[str, Any]):
         """發送通知"""
         try:
-            # 1. 添加到歷史記錄
-            self.notification_history.append(notification)
-            self._save_notification_history()
 
             # 2. 呼叫訂閱者的回調函數
             notification_type = NotificationType(notification['type'])
@@ -479,66 +405,3 @@ class NotificationService:
 
         return changes
 
-    def _load_notification_history(self) -> List[Dict[str, Any]]:
-        """載入通知歷史"""
-        try:
-            if os.path.exists(self.notification_history_file):
-                with open(self.notification_history_file, 'r', encoding='utf-8') as f:
-                    history = json.load(f)
-                print(f"✅ 載入通知歷史: {len(history)} 筆記錄")
-                return history
-            else:
-                return []
-        except Exception as e:
-            print(f"⚠️ 載入通知歷史失敗: {e}")
-            return []
-
-    def _save_notification_history(self):
-        """儲存通知歷史"""
-        try:
-            with open(self.notification_history_file, 'w', encoding='utf-8') as f:
-                json.dump(self.notification_history, f, ensure_ascii=False, indent=2, default=str)
-        except Exception as e:
-            print(f"⚠️ 儲存通知歷史失敗: {e}")
-
-    # ==================== 進階功能 ====================
-
-    def create_custom_notification(self, title: str, message: str,
-                                 level: NotificationLevel = NotificationLevel.INFO,
-                                 data: Dict[str, Any] = None):
-        """建立自訂通知"""
-        notification = self._create_notification(
-            type=NotificationType.SYSTEM_ERROR,  # 使用通用類型
-            level=level,
-            title=title,
-            message=message,
-            data=data
-        )
-        self._send_notification(notification)
-
-    def schedule_reminder(self, case_data: CaseData, reminder_date: datetime,
-                         description: str):
-        """排程提醒（簡化實作）"""
-        # 這裡可以實作排程功能，例如使用 APScheduler
-        print(f"📅 已排程提醒: {case_data.client} - {description} 於 {reminder_date}")
-
-        # 暫時直接添加到案件的重要日期中
-        if not case_data.important_dates:
-            case_data.important_dates = []
-
-        # 這裡需要適當的日期資料結構
-        # case_data.important_dates.append({
-        #     'date': reminder_date,
-        #     'description': description,
-        #     'type': 'reminder'
-        # })
-
-    def get_notification_summary(self) -> str:
-        """取得通知摘要"""
-        unread_count = len(self.get_unread_notifications())
-        total_count = len(self.notification_history)
-
-        if unread_count > 0:
-            return f"您有 {unread_count} 個未讀通知（共 {total_count} 個）"
-        else:
-            return f"所有通知已讀（共 {total_count} 個）"

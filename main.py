@@ -1,16 +1,33 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-案件管理系統 - 主程式入口（相容版本）
-保持原有介面不變，後端使用新的Repository架構
+案件管理系統 - 主程式入口（新 Services 架構版本）
 """
 
 import locale
 import os
 import sys
 import tkinter as tk
-from datetime import datetime
 from tkinter import messagebox
+
+from datetime import datetime
+
+try:
+    from services.services_controller import ServicesController
+    from controllers.case_controller import CaseController  # 新的簡化版控制器
+    from models.case_model import CaseData
+    SERVICES_AVAILABLE = True
+    print("✅ 新 Services 架構載入成功")
+except ImportError as e:
+    print(f"⚠️ 警告：新 Services 架構載入失敗 - {e}")
+    print("🔄 嘗試使用舊版控制器...")
+    try:
+        from controllers.case_controller import CaseController
+        SERVICES_AVAILABLE = False
+        print("✅ 舊版控制器載入成功")
+    except ImportError:
+        print("❌ 無法載入任何控制器")
+        SERVICES_AVAILABLE = False
 
 
 def fix_encoding():
@@ -43,6 +60,7 @@ def fix_encoding():
 
     except Exception as e:
         print(f"⚠️ 編碼設定警告: {e}")
+        # 編碼設定失敗不影響程式執行
         return True
 
 
@@ -55,20 +73,36 @@ def fix_import_path():
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
 
-        # 添加到路徑
+        # 確保基礎路徑在 sys.path 中
         if base_path not in sys.path:
             sys.path.insert(0, base_path)
 
-        print(f"✅ 路徑設定完成: {base_path}")
-        return True
+        # 預載入關鍵模組以避免導入錯誤
+        try:
+            from config.settings import AppConfig
+            print("✅ 配置模組載入成功")
+
+            # 檢查是否有 GUI 相關模組
+            try:
+                from views.base_window import BaseWindow
+                from views.dialogs import UnifiedMessageDialog
+                print("✅ GUI 模組載入成功")
+                return True
+            except ImportError:
+                print("⚠️ GUI 模組載入失敗，將使用命令列模式")
+                return True
+
+        except ImportError as e:
+            print(f"⚠️ 警告：配置模組載入失敗 - {e}")
+            return False
 
     except Exception as e:
-        print(f"⚠️ 路徑設定警告: {e}")
-        return True
+        print(f"❌ 模組路徑修正失敗: {e}")
+        return False
 
 
 def create_error_dialog(message, title="系統錯誤"):
-    """建立標準錯誤對話框"""
+    """建立標準錯誤對話框 - 編碼安全版本"""
     try:
         root = tk.Tk()
         root.withdraw()
@@ -87,223 +121,77 @@ def create_error_dialog(message, title="系統錯誤"):
         print(f"原始錯誤: {message}")
 
 
-def initialize_backend_architecture():
-    """初始化後端架構（不影響前端介面）"""
+def initialize_services_architecture(data_folder="./data"):
+    """初始化新的 Services 架構"""
     try:
-        print("🔧 正在初始化後端Repository架構...")
+        print("\n🏗️ 初始化 Services 架構...")
 
-        # 設定資料夾
-        data_folder = "./data"
+        # 確保資料夾存在
         os.makedirs(data_folder, exist_ok=True)
 
-        # 嘗試初始化新的Repository架構
-        backend_initialized = False
+        # 初始化 Services 控制器
+        services = ServicesController(data_folder)
 
+        # 初始化簡化的案件控制器
+        controller = CaseController(data_folder)
+
+        print("✅ Services 架構初始化完成")
+
+        # 顯示系統狀態
         try:
-            from repositories.case_repository import CaseRepository
-            from repositories.progress_repository import ProgressRepository
-            from repositories.file_repository import FileRepository
+            dashboard = services.get_system_dashboard()
+            case_stats = dashboard.get('case_statistics', {})
+            system_health = dashboard.get('system_health', {})
 
-            # 初始化Repository層
-            case_repo = CaseRepository(os.path.join(data_folder, "cases.json"))
-            progress_repo = ProgressRepository(data_folder)
-            file_repo = FileRepository(data_folder)
+            print(f"\n📊 系統狀態:")
+            print(f"   總案件數: {case_stats.get('total_cases', 0)}")
+            print(f"   系統健康: {system_health.get('overall_status', 'unknown')}")
+            print(f"   服務狀態: {len([s for s in system_health.get('services_status', {}).values() if s == 'healthy'])} 個服務正常")
 
-            print("✅ Repository層初始化成功")
-            backend_initialized = True
+        except Exception as e:
+            print(f"⚠️ 系統狀態檢查失敗: {e}")
 
-        except ImportError as e:
-            print(f"⚠️ Repository層載入失敗: {e}")
-
-        # 嘗試初始化服務層（可選）
-        try:
-            from services.services_controller import ServicesController
-            services = ServicesController(data_folder)
-            print("✅ Services層初始化成功")
-        except ImportError as e:
-            print(f"⚠️ Services層載入失敗，使用基本功能: {e}")
-            services = None
-
-        return {
-            'backend_initialized': backend_initialized,
-            'data_folder': data_folder,
-            'services': services
-        }
+        return services, controller
 
     except Exception as e:
-        print(f"❌ 後端架構初始化失敗: {e}")
-        return {
-            'backend_initialized': False,
-            'data_folder': "./data",
-            'services': None
-        }
-
-
-def create_compatible_controller(backend_info):
-    """創建相容的控制器（保持原有介面）"""
-    try:
-        data_folder = backend_info['data_folder']
-
-        # 優先使用新架構的控制器
-        if backend_info['backend_initialized']:
-            try:
-                # 嘗試使用更新版本的控制器
-                from controllers.case_controller import CaseController
-                controller = CaseController(data_folder)
-                print("✅ 使用新架構控制器")
-                return controller
-            except ImportError:
-                print("⚠️ 新架構控制器不可用")
-
-        # 回退到舊版控制器或創建相容版本
-        try:
-            # 檢查是否有舊版控制器
-            from controllers.case_controller import CaseController
-            controller = CaseController(data_folder)
-            print("✅ 使用相容控制器")
-            return controller
-        except ImportError:
-            print("⚠️ 控制器模組不可用，創建基本控制器")
-
-            # 創建基本的控制器類別
-            class BasicCaseController:
-                def __init__(self, data_folder):
-                    self.data_folder = data_folder
-                    os.makedirs(data_folder, exist_ok=True)
-
-                    # 嘗試使用Repository
-                    try:
-                        from repositories.case_repository import CaseRepository
-                        self.case_repository = CaseRepository(os.path.join(data_folder, "cases.json"))
-                    except ImportError:
-                        self.case_repository = None
-
-                def add_case(self, case_data, **kwargs):
-                    if self.case_repository:
-                        return self.case_repository.create_case(case_data)
-                    return False
-
-                def get_cases(self):
-                    if self.case_repository:
-                        return self.case_repository.get_all_cases()
-                    return []
-
-                def get_case_by_id(self, case_id):
-                    if self.case_repository:
-                        return self.case_repository.get_case_by_id(case_id)
-                    return None
-
-                def update_case(self, case_data, **kwargs):
-                    if self.case_repository:
-                        return self.case_repository.update_case(case_data)
-                    return False
-
-                def delete_case(self, case_id, **kwargs):
-                    if self.case_repository:
-                        return self.case_repository.delete_case(case_id)
-                    return False
-
-                def search_cases(self, keyword, **kwargs):
-                    if self.case_repository:
-                        return self.case_repository.search_cases(keyword)
-                    return []
-
-                def get_cases_by_client(self, client_name):
-                    if self.case_repository:
-                        return self.case_repository.get_cases_by_client(client_name)
-                    return []
-
-                def get_cases_by_type(self, case_type):
-                    if self.case_repository:
-                        return self.case_repository.get_cases_by_type(case_type)
-                    return []
-
-            return BasicCaseController(data_folder)
-
-    except Exception as e:
-        print(f"❌ 控制器創建失敗: {e}")
-        return None
+        print(f"❌ Services 架構初始化失敗: {e}")
+        raise
 
 
 def run_gui_mode():
-    """執行 GUI 模式（保持原有介面）"""
+    """執行 GUI 模式"""
     try:
-        print("\n🖥️ 啟動圖形介面模式...")
+        print("\n🖥️ 啟動 GUI 模式...")
 
-        # 初始化後端架構
-        backend_info = initialize_backend_architecture()
+        # 嘗試載入主視窗
+        from views.main_window import MainWindow
 
-        # 創建相容的控制器
-        controller = create_compatible_controller(backend_info)
+        # 初始化 Services 架構
+        services, controller = initialize_services_architecture()
 
-        if controller is None:
-            print("❌ 無法初始化控制器")
-            return False
+        # 建立主視窗並傳入新的控制器
+        app = MainWindow()
 
-        # 嘗試載入原有的主視窗
-        try:
-            from views.main_window import MainWindow
+        # 如果主視窗支援新架構，更新控制器
+        if hasattr(app, 'update_controller'):
+            app.update_controller(controller)
+            print("✅ 主視窗已更新為新架構")
+        elif hasattr(app, 'case_controller'):
+            app.case_controller = controller
+            print("✅ 主視窗控制器已更新")
+        else:
+            print("⚠️ 主視窗未支援新架構，將使用預設控制器")
 
-            # 創建主視窗實例
-            main_window = MainWindow()
+        print("✅ GUI 模式啟動完成")
+        app.run()
+        return True
 
-            # 如果主視窗支援控制器注入，則更新控制器
-            if hasattr(main_window, 'case_controller'):
-                main_window.case_controller = controller
-                print("✅ 主視窗控制器已更新為新架構")
-            elif hasattr(main_window, 'controller'):
-                main_window.controller = controller
-                print("✅ 主視窗控制器已更新")
-            else:
-                print("⚠️ 主視窗未支援控制器注入，使用預設設定")
-
-            print("✅ 圖形介面初始化成功")
-            print("🚀 啟動原有介面...")
-
-            # 執行主視窗
-            main_window.run()
-            return True
-
-        except ImportError as e:
-            print(f"❌ 原有主視窗載入失敗: {e}")
-
-            # 創建基本的GUI
-            root = tk.Tk()
-            root.title("案件管理系統")
-            root.geometry("600x400")
-
-            import tkinter.ttk as ttk
-
-            frame = ttk.Frame(root, padding="20")
-            frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-
-            ttk.Label(frame, text="案件管理系統", font=("Arial", 16, "bold")).grid(row=0, column=0, pady=10)
-            ttk.Label(frame, text="主視窗暫時不可用，請使用基本功能").grid(row=1, column=0, pady=5)
-
-            # 狀態顯示
-            status_text = tk.Text(frame, height=8, width=50)
-            status_text.grid(row=2, column=0, pady=10)
-
-            cases = controller.get_cases() if controller else []
-            status_info = f"""
-系統狀態:
-- 後端架構: {'已初始化' if backend_info['backend_initialized'] else '基本模式'}
-- 控制器: {'可用' if controller else '不可用'}
-- 案件數量: {len(cases)}
-
-這是臨時介面，原有介面將在修復後恢復正常。
-"""
-            status_text.insert(tk.END, status_info)
-            status_text.config(state=tk.DISABLED)
-
-            ttk.Button(frame, text="關閉", command=root.quit).grid(row=3, column=0, pady=10)
-
-            print("✅ 基本GUI界面啟動")
-            root.mainloop()
-            return True
-
+    except ImportError:
+        print("❌ GUI 模組不可用，將切換到命令列模式")
+        return False
     except Exception as e:
-        print(f"❌ GUI模式啟動失敗: {e}")
+        print(f"❌ GUI 模式啟動失敗: {e}")
+        create_error_dialog(f"GUI 啟動失敗:\n{str(e)}", "GUI 錯誤")
         return False
 
 
@@ -312,157 +200,43 @@ def run_console_mode():
     try:
         print("\n💻 啟動命令列模式...")
 
-        # 初始化後端架構
-        backend_info = initialize_backend_architecture()
+        # 初始化 Services 架構
+        services, controller = initialize_services_architecture()
 
-        # 創建相容的控制器
-        controller = create_compatible_controller(backend_info)
+        # 匯入並執行命令列應用程式
+        from new_main_example import CaseManagementApp
 
-        if controller is None:
-            print("❌ 無法初始化控制器")
-            return False
+        # 建立命令列應用程式實例
+        console_app = CaseManagementApp(data_folder="./data")
 
-        # 載入或創建案件模型
+        print("✅ 命令列模式啟動完成")
+
+        # 詢問執行模式
+        print("\n請選擇執行模式:")
+        print("1. 互動式示範 (完整功能測試)")
+        print("2. 快速示範 (自動建立測試資料)")
+        print("3. 系統維護模式")
+        print("4. API 模式 (僅啟動服務)")
+
         try:
-            from models.case_model import CaseData
-        except ImportError:
-            print("⚠️ 案件模型不可用，使用基本模型")
+            choice = input("請選擇 (1-4): ").strip()
 
-            class CaseData:
-                def __init__(self, case_id, client, case_type, **kwargs):
-                    self.case_id = case_id
-                    self.client = client
-                    self.case_type = case_type
-                    for key, value in kwargs.items():
-                        setattr(self, key, value)
+            if choice == '1':
+                console_app.run_interactive_demo()
+            elif choice == '2':
+                console_app.run_quick_demo()
+            elif choice == '3':
+                run_maintenance_mode(services, controller)
+            elif choice == '4':
+                run_api_mode(services, controller)
+            else:
+                print("❌ 無效的選擇，啟動互動式示範")
+                console_app.run_interactive_demo()
 
-        def show_menu():
-            print("\n" + "=" * 50)
-            print("📋 案件管理系統 - 命令列模式")
-            print("=" * 50)
-            print("1. 查看所有案件")
-            print("2. 新增案件")
-            print("3. 搜尋案件")
-            print("4. 系統狀態")
-            print("0. 退出")
-            print("=" * 50)
-
-        def list_cases():
-            cases = controller.get_cases()
-            if not cases:
-                print("📭 目前沒有案件資料")
-                return
-
-            print(f"\n📁 共有 {len(cases)} 筆案件:")
-            print("-" * 60)
-            for i, case in enumerate(cases, 1):
-                client = getattr(case, 'client', '未知')
-                case_type = getattr(case, 'case_type', '未知')
-                case_id = getattr(case, 'case_id', '未知')
-                print(f"{i:2d}. [{case_id}] {client} - {case_type}")
-
-        def add_case():
-            print("\n➕ 新增案件")
-            print("-" * 30)
-
-            try:
-                case_id = input("案件ID (按 Enter 自動生成): ").strip()
-                if not case_id:
-                    case_id = f"CASE_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-                client = input("當事人姓名: ").strip()
-                if not client:
-                    print("❌ 當事人姓名不能為空")
-                    return
-
-                case_type = input("案件類型 (民事/刑事/行政): ").strip()
-                if not case_type:
-                    case_type = "一般案件"
-
-                notes = input("備註 (可選): ").strip()
-
-                new_case = CaseData(
-                    case_id=case_id,
-                    client=client,
-                    case_type=case_type,
-                    notes=notes if notes else None
-                )
-
-                if controller.add_case(new_case):
-                    print(f"✅ 成功新增案件: {client}")
-                else:
-                    print("❌ 案件新增失敗")
-
-            except KeyboardInterrupt:
-                print("\n❌ 操作已取消")
-            except Exception as e:
-                print(f"❌ 新增案件時發生錯誤: {e}")
-
-        def search_cases():
-            print("\n🔍 搜尋案件")
-            print("-" * 30)
-
-            try:
-                keyword = input("請輸入搜尋關鍵字: ").strip()
-                if not keyword:
-                    print("❌ 搜尋關鍵字不能為空")
-                    return
-
-                results = controller.search_cases(keyword)
-
-                if not results:
-                    print(f"🔍 沒有找到包含 '{keyword}' 的案件")
-                    return
-
-                print(f"\n🎯 找到 {len(results)} 筆相關案件:")
-                print("-" * 60)
-                for i, case in enumerate(results, 1):
-                    client = getattr(case, 'client', '未知')
-                    case_type = getattr(case, 'case_type', '未知')
-                    case_id = getattr(case, 'case_id', '未知')
-                    print(f"{i:2d}. [{case_id}] {client} - {case_type}")
-
-            except KeyboardInterrupt:
-                print("\n❌ 操作已取消")
-            except Exception as e:
-                print(f"❌ 搜尋時發生錯誤: {e}")
-
-        def show_status():
-            print("\n📊 系統狀態")
-            print("-" * 30)
-            print(f"後端架構: {'Repository架構' if backend_info['backend_initialized'] else '基本模式'}")
-            print(f"資料夾: {backend_info['data_folder']}")
-            cases = controller.get_cases()
-            print(f"案件數量: {len(cases)}")
-
-        # 主命令列循環
-        while True:
-            try:
-                show_menu()
-                choice = input("\n請選擇操作 (0-4): ").strip()
-
-                if choice == '0':
-                    print("\n👋 謝謝使用，再見！")
-                    break
-                elif choice == '1':
-                    list_cases()
-                elif choice == '2':
-                    add_case()
-                elif choice == '3':
-                    search_cases()
-                elif choice == '4':
-                    show_status()
-                else:
-                    print("❌ 無效的選擇，請重新輸入")
-
-                input("\n按 Enter 繼續...")
-
-            except KeyboardInterrupt:
-                print("\n\n👋 謝謝使用，再見！")
-                break
-            except Exception as e:
-                print(f"❌ 發生錯誤: {e}")
-                input("\n按 Enter 繼續...")
+        except KeyboardInterrupt:
+            print("\n👋 使用者中斷程式")
+        except Exception as e:
+            print(f"❌ 命令列模式執行失敗: {e}")
 
         return True
 
@@ -471,65 +245,196 @@ def run_console_mode():
         return False
 
 
-def main():
-    """主函數"""
+def run_maintenance_mode(services, controller):
+    """執行系統維護模式"""
+    print("\n🔧 系統維護模式")
+    print("=" * 40)
+
     try:
-        print("=" * 60)
-        print("🚀 案件管理系統啟動中...")
-        print("📝 保持原有介面，後端使用Repository架構")
-        print("=" * 60)
+        # 執行系統健康檢查
+        print("1️⃣ 執行系統健康檢查...")
+        dashboard = services.get_system_dashboard()
+        system_health = dashboard.get('system_health', {})
 
-        # 修正編碼和路徑
-        fix_encoding()
-        fix_import_path()
+        print(f"系統健康狀態: {system_health.get('overall_status', 'unknown')}")
 
-        # 檢查啟動參數
-        if len(sys.argv) > 1:
-            mode = sys.argv[1].lower()
-            if mode in ['console', 'cmd', 'cli']:
-                print("🎯 強制使用命令列模式")
-                success = run_console_mode()
-            elif mode in ['gui', 'window']:
-                print("🎯 強制使用圖形介面模式")
-                success = run_gui_mode()
-            else:
-                print(f"❌ 未知的啟動模式: {mode}")
-                print("💡 可用模式: console, gui")
-                return False
+        if system_health.get('issues'):
+            print("發現的問題:")
+            for issue in system_health['issues']:
+                print(f"  - {issue}")
+
+        # 執行資料驗證
+        print("\n2️⃣ 執行資料完整性檢查...")
+        validation_result = controller.validate_all_cases()
+
+        if 'error' in validation_result:
+            print(f"❌ 驗證失敗: {validation_result['error']}")
         else:
-            # 自動選擇模式 - 優先GUI
-            print("\n🎯 嘗試啟動圖形介面模式...")
+            print(f"總案件數: {validation_result['total_cases']}")
+            print(f"有效案件: {validation_result['valid_cases']}")
+            print(f"無效案件: {validation_result['invalid_cases']}")
 
+        # 執行系統維護
+        print("\n3️⃣ 執行系統維護...")
+        maintenance_result = services.perform_system_maintenance()
+
+        print(f"維護狀態: {maintenance_result['status']}")
+        print(f"發現問題: {maintenance_result['total_issues_found']}")
+        print(f"修復問題: {maintenance_result['total_issues_fixed']}")
+
+        print("\n✅ 系統維護完成")
+
+    except Exception as e:
+        print(f"❌ 系統維護失敗: {e}")
+
+
+def run_api_mode(services, controller):
+    """執行 API 模式"""
+    print("\n🔌 API 模式")
+    print("=" * 40)
+
+    try:
+        print("🚀 服務已啟動，可以通過以下方式使用:")
+        print("")
+        print("📋 基本操作:")
+        print("# 取得所有案件")
+        print("cases = controller.get_cases()")
+        print("")
+        print("# 建立新案件")
+        print("from models.case_model import CaseData")
+        print("case = CaseData(case_id='', client='測試', case_type='民事')")
+        print("success = controller.add_case(case, create_folder=True)")
+        print("")
+        print("# 取得系統狀態")
+        print("dashboard = controller.get_system_dashboard()")
+        print("")
+        print("📊 進階操作:")
+        print("# 套用進度範本")
+        print("templates = controller.get_available_progress_templates()")
+        print("controller.apply_progress_template(case_id, template_name)")
+        print("")
+        print("# 批量操作")
+        print("result = controller.batch_create_folders(case_ids)")
+        print("")
+        print("# 匯入匯出")
+        print("controller.import_from_excel(file_path)")
+        print("controller.export_to_excel(file_path)")
+
+        # 顯示當前狀態
+        dashboard = services.get_system_dashboard()
+        case_stats = dashboard.get('case_statistics', {})
+
+        print(f"\n📈 當前狀態:")
+        print(f"總案件數: {case_stats.get('total_cases', 0)}")
+        print(f"緊急案件: {case_stats.get('urgent_cases', 0)}")
+
+        print(f"\n💡 服務已準備就緒，您可以開始使用 API")
+        print(f"按 Ctrl+C 停止服務")
+
+        # 保持服務運行
+        try:
+            while True:
+                import time
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n👋 API 服務已停止")
+
+    except Exception as e:
+        print(f"❌ API 模式啟動失敗: {e}")
+
+
+def check_services_compatibility():
+    """檢查 Services 架構相容性"""
+    try:
+        print("\n🔍 檢查 Services 架構相容性...")
+
+        # 檢查必要的模組
+        required_modules = [
+            'services.services_controller',
+            'services.case_service',
+            'services.folder_service',
+            'services.notification_service'
+        ]
+
+        missing_modules = []
+        for module in required_modules:
             try:
-                # 檢查是否有圖形環境
-                root = tk.Tk()
-                root.withdraw()
-                root.destroy()
+                __import__(module)
+                print(f"  ✅ {module}")
+            except ImportError:
+                missing_modules.append(module)
+                print(f"  ❌ {module}")
 
-                print("✅ 檢測到圖形環境")
-                success = run_gui_mode()
-
-                if not success:
-                    print("\n❌ GUI模式啟動失敗，切換到命令列模式")
-                    success = run_console_mode()
-
-            except:
-                print("⚠️ 未檢測到圖形環境，使用命令列模式")
-                success = run_console_mode()
-
-        if success:
-            print("\n✅ 程式正常結束")
+        if missing_modules:
+            print(f"\n⚠️ 缺少以下 Services 模組:")
+            for module in missing_modules:
+                print(f"   - {module}")
+            print(f"\n將使用舊版架構...")
+            return False
         else:
-            print("\n❌ 程式異常結束")
+            print(f"✅ Services 架構相容性檢查通過")
+            return True
 
-        return success
+    except Exception as e:
+        print(f"❌ 相容性檢查失敗: {e}")
+        return False
+
+
+def main():
+    """主程式入口"""
+    print("🎯 案件管理系統啟動")
+    print("版本: Services 架構版本")
+    print("=" * 50)
+
+    try:
+        # 步驟 1: 修正編碼問題
+        print("🔧 步驟 1: 修正編碼設定")
+        if not fix_encoding():
+            print("⚠️ 編碼設定有問題，但將嘗試繼續執行")
+
+        # 步驟 2: 修正模組導入路徑
+        print("\n📁 步驟 2: 初始化模組路徑")
+        if not fix_import_path():
+            create_error_dialog(
+                "模組路徑初始化失敗！\n\n請確認程式檔案結構完整",
+                "初始化失敗"
+            )
+            return False
+
+        # 步驟 3: 檢查 Services 架構
+        print("\n🏗️ 步驟 3: 檢查 Services 架構")
+        services_available = check_services_compatibility()
+
+        if not services_available:
+            print("⚠️ Services 架構不完整，將嘗試使用舊版功能")
+
+        # 步驟 4: 選擇啟動模式
+        print("\n🚀 步驟 4: 選擇啟動模式")
+
+        # 嘗試啟動 GUI 模式
+        gui_success = run_gui_mode()
+
+        if not gui_success:
+            print("\n🔄 GUI 模式不可用，切換到命令列模式")
+            console_success = run_console_mode()
+
+            if not console_success:
+                print("❌ 所有啟動模式都失敗")
+                create_error_dialog(
+                    "系統無法啟動！\n\n請檢查程式檔案完整性",
+                    "啟動失敗"
+                )
+                return False
+
+        return True
 
     except KeyboardInterrupt:
-        print("\n\n👋 使用者中斷程式，再見！")
+        print("\n👋 程式被使用者中斷")
         return True
     except Exception as e:
-        print(f"\n❌ 程式執行時發生嚴重錯誤: {e}")
-        create_error_dialog(f"程式啟動失敗:\n{str(e)}", "系統錯誤")
+        error_msg = f"程式啟動失敗:\n{str(e)}"
+        print(f"❌ 程式啟動失敗: {e}")
+        create_error_dialog(error_msg, "啟動失敗")
         import traceback
         traceback.print_exc()
         return False
@@ -542,4 +447,10 @@ if __name__ == "__main__":
 
     # 執行主程式
     success = main()
+
+    if success:
+        print("\n✅ 程式正常結束")
+    else:
+        print("\n❌ 程式異常結束")
+
     sys.exit(0 if success else 1)
