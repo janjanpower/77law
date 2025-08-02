@@ -1335,7 +1335,7 @@ class CaseOverviewWindow:
         """載入案件資料 - 🔥 修正：只在這裡更新日期提醒控件"""
         if self.case_controller:
             try:
-                self.case_data = self.case_controller.get_all_cases()
+                self.case_data = self.case_controller.get_cases()
                 self.filtered_case_data = self.case_data.copy()
 
                 print(f"載入案件資料: {len(self.case_data)} 個案件")

@@ -1,4 +1,4 @@
-FOLDER_MANAGER_CONTENT = '''#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -22,11 +22,8 @@ class FolderManager:
         # 預設的案件資料夾結構
         self.default_subfolders = [
             "案件資訊",
-            "法院文件",
-            "當事人資料",
-            "相關證據",
-            "往來信件",
-            "其他文件"
+           "進度追蹤",
+           "狀紙"
         ]
 
     def create_case_folder_structure(self, case_data) -> bool:
@@ -48,17 +45,54 @@ class FolderManager:
             return False
 
     def get_case_folder_path(self, case_data) -> Optional[str]:
-        """取得案件資料夾路徑"""
-        try:
-            folder_name = self._generate_folder_name(case_data)
-            case_folder = self.base_folder / folder_name
+        """
+        取得案件的資料夾路徑 - 邏輯層方法
 
-            if case_folder.exists():
-                return str(case_folder)
-            return None
+        Args:
+            case_data: CaseData物件或字典
+
+        Returns:
+            Optional[str]: 資料夾路徑或None
+        """
+        try:
+            # 🔥 關鍵修復：型別檢查和轉換
+            if isinstance(case_data, str):
+                print(f"❌ 錯誤：收到字串參數 '{case_data}'，預期為 CaseData 物件")
+                return None
+
+            # 🔥 處理字典型別的案件資料
+            if isinstance(case_data, dict):
+                case_type = case_data.get('case_type')
+                client = case_data.get('client')
+            elif hasattr(case_data, 'case_type') and hasattr(case_data, 'client'):
+                # 🔥 處理 CaseData 物件
+                case_type = case_data.case_type
+                client = case_data.client
+            else:
+                print(f"❌ 無法識別的案件資料格式: {type(case_data)}")
+                return None
+
+            # 🔥 驗證必要欄位
+            if not case_type or not client:
+                print(f"❌ 案件資料缺少必要欄位 - case_type: {case_type}, client: {client}")
+                return None
+
+            # 取得案件類型資料夾
+            case_type_folder = self._get_case_type_folder(case_type)
+            if not case_type_folder:
+                print(f"❌ 無法取得案件類型資料夾: {case_type}")
+                return None
+
+            # 清理當事人姓名並建構路徑
+            safe_client_name = self._sanitize_folder_name(client)
+            client_folder = os.path.join(case_type_folder, safe_client_name)
+
+            return client_folder if os.path.exists(client_folder) else None
 
         except Exception as e:
-            print(f"取得案件資料夾路徑失敗: {e}")
+            print(f"❌ 取得案件資料夾路徑失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _generate_folder_name(self, case_data) -> str:
@@ -167,4 +201,49 @@ class FolderManager:
                 'file_count': 0,
                 'size_mb': 0
             }
-'''
+
+# ==================== 輔助驗證方法 ====================
+
+# 3. 新增驗證輔助方法 (加入到 utils/folder_manager.py)
+def validate_case_data(self, case_data) -> bool:
+    """
+    驗證案件資料的完整性
+
+    Args:
+        case_data: 案件資料
+
+    Returns:
+        bool: 是否有效
+    """
+    try:
+        # 檢查是否為空
+        if not case_data:
+            print("❌ 案件資料為空")
+            return False
+
+        # 檢查是否為字串（錯誤的參數型別）
+        if isinstance(case_data, str):
+            print(f"❌ 錯誤：收到字串參數，應該是案件資料物件")
+            return False
+
+        # 檢查必要屬性
+        required_attrs = ['case_type', 'client']
+
+        if isinstance(case_data, dict):
+            for attr in required_attrs:
+                if attr not in case_data or not case_data[attr]:
+                    print(f"❌ 案件資料缺少必要欄位: {attr}")
+                    return False
+        else:
+            for attr in required_attrs:
+                if not hasattr(case_data, attr) or not getattr(case_data, attr):
+                    print(f"❌ 案件資料缺少必要屬性: {attr}")
+                    return False
+
+        return True
+
+    except Exception as e:
+        print(f"❌ 驗證案件資料時發生錯誤: {e}")
+        return False
+
+

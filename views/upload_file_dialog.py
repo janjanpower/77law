@@ -46,15 +46,25 @@ class UploadFileDialog(BaseWindow):
     """統一的檔案上傳對話框"""
 
     def __init__(self, parent, case_data: CaseData, folder_manager, on_upload_complete: Callable = None):
-        """
-        初始化上傳檔案對話框
+        """初始化上傳檔案對話框"""
+        try:
+            # 🔥 關鍵修改：確保傳入正確的案件資料物件
+            if not case_data or not hasattr(case_data, 'case_type'):
+                raise ValueError("無效的案件資料物件")
 
-        Args:
-            parent: 父視窗
-            case_data: 選中的案件資料
-            folder_manager: 資料夾管理器
-            on_upload_complete: 上傳完成回調函數
-        """
+            self.case_data = case_data
+            self.folder_manager = folder_manager
+            self.on_upload_complete = on_upload_complete
+
+            # 🔥 安全的資料夾路徑取得
+            self.case_folder_path = self._get_safe_case_folder_path()
+            if not self.case_folder_path:
+                raise ValueError(f"無法取得案件 {case_data.client} 的資料夾路徑")
+
+        except Exception as e:
+            print(f"❌ 初始化上傳對話框失敗: {e}")
+            raise
+
         self.case_data = case_data
         self.folder_manager = folder_manager
         self.on_upload_complete = on_upload_complete
@@ -68,6 +78,28 @@ class UploadFileDialog(BaseWindow):
 
         # 🔥 統一的視窗置頂處理
         self._setup_window_topmost()
+
+    def _get_safe_case_folder_path(self) -> Optional[str]:
+        """安全的取得案件資料夾路徑"""
+        try:
+            # 🔥 驗證案件資料
+            if not self.folder_manager.validate_case_data(self.case_data):
+                return None
+
+            # 🔥 取得資料夾路徑
+            folder_path = self.folder_manager.get_case_folder_path(self.case_data)
+
+            if folder_path and os.path.exists(folder_path):
+                print(f"✅ 成功取得案件資料夾路徑: {folder_path}")
+                return folder_path
+            else:
+                print(f"❌ 案件資料夾不存在: {self.case_data.client}")
+                return None
+
+        except Exception as e:
+            print(f"❌ 取得案件資料夾路徑時發生錯誤: {e}")
+            return None
+
 
     def _setup_window_topmost(self):
         """🔥 統一的視窗置頂設定"""
