@@ -384,7 +384,7 @@ class CaseService:
     def generate_case_id(self, case_data: CaseData) -> str:
         """生成案件ID"""
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        case_type_code = case_data.case_type[:2].upper() if case_data.case_type else "XX"
+        case_type_code = case_data[:2].upper() if case_data else "XX"
         unique_suffix = str(uuid.uuid4())[:8].upper()
 
         return f"{case_type_code}{timestamp}{unique_suffix}"

@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-驗證業務邏輯服務 - 修復版本
+驗證業務邏輯服務 - 修正案件ID驗證規則
 專責處理各種資料驗證的業務邏輯，增強屬性檢查
 """
 
@@ -13,11 +13,11 @@ import os
 
 
 class ValidationService:
-    """驗證業務邏輯服務 - 修復版本"""
+    """驗證業務邏輯服務 - 修正版本"""
 
     def __init__(self):
         """初始化驗證服務"""
-        # 驗證規則配置
+        # 修正後的驗證規則配置
         self.validation_rules = {
             'client_name': {
                 'max_length': 50,
@@ -26,12 +26,12 @@ class ValidationService:
                 'required': True
             },
             'case_id': {
-                'max_length': 20,
-                'pattern': r'^[A-Z0-9_-]+$',
+                'length': 6,  # 修正：固定6位數字
+                'pattern': r'^\d{6}$',  # 修正：6位純數字格式
                 'required': False  # 可以自動生成
             },
             'case_type': {
-                'allowed_values': ['民事訴訟', '刑事辯護', '行政訴訟', '商事糾紛', '家事案件', '其他'],
+                'allowed_values': ['民事', '刑事', '行政訴訟', '商事糾紛', '家事案件', '其他'],  # 修正：簡化類型
                 'required': True
             },
             'status': {
@@ -40,7 +40,7 @@ class ValidationService:
             }
         }
 
-        print("✅ ValidationService 初始化完成")
+        print("✅ ValidationService 初始化完成 (已修正案件ID驗證規則)")
 
     # ==================== 安全屬性檢查 ====================
 
@@ -181,20 +181,38 @@ class ValidationService:
         return errors
 
     def _validate_case_id(self, case_id: str) -> List[str]:
-        """驗證案件ID"""
+        """驗證案件ID - 修正為6位數字格式"""
         errors = []
 
         if not case_id:
             return errors
 
-        # 長度檢查
-        if len(case_id) > self.validation_rules['case_id']['max_length']:
-            errors.append(f"案件ID過長（最多{self.validation_rules['case_id']['max_length']}字元）")
+        # 修正：長度檢查 - 必須是6位數字
+        if len(case_id) != self.validation_rules['case_id']['length']:
+            errors.append(f"案件ID長度錯誤（必須是{self.validation_rules['case_id']['length']}位數字）")
+            return errors
 
-        # 格式檢查
+        # 修正：格式檢查 - 必須是純數字
         pattern = self.validation_rules['case_id']['pattern']
         if not re.match(pattern, case_id):
-            errors.append("案件ID格式不正確（只能包含大寫字母、數字、底線和短橫線）")
+            errors.append("案件ID格式不正確（必須是6位純數字，格式：民國年3碼+流水號3碼，例如：114001）")
+            return errors
+
+        # 修正：加入民國年範圍檢查
+        try:
+            year_part = int(case_id[:3])  # 前3碼：民國年
+            number_part = int(case_id[3:])  # 後3碼：流水號
+
+            # 民國年範圍檢查
+            if year_part < 100 or year_part > 200:
+                errors.append("案件ID年份範圍錯誤（民國年應在100-200年之間）")
+
+            # 流水號範圍檢查
+            if number_part < 1 or number_part > 999:
+                errors.append("案件ID流水號範圍錯誤（流水號應在001-999之間）")
+
+        except ValueError:
+            errors.append("案件ID格式錯誤（無法解析年份和流水號）")
 
         return errors
 
@@ -231,7 +249,9 @@ class ValidationService:
             elif not isinstance(date_value, datetime):
                 errors.append(f"{field_name}格式不正確")
         except ValueError:
-            errors.append(f"{field_name}格式不正確，請使用 YYYY-MM-DD 格式")
+            errors.append(f"{field_name}格式不正確（應為YYYY-MM-DD格式）")
+        except Exception as e:
+            errors.append(f"{field_name}驗證失敗: {str(e)}")
 
         return errors
 
@@ -239,33 +259,21 @@ class ValidationService:
         """驗證重要日期列表"""
         errors = []
 
-        if not important_dates:
-            return errors
-
         try:
-            if isinstance(important_dates, list):
-                for i, date_info in enumerate(important_dates):
-                    if isinstance(date_info, dict):
-                        if 'date' in date_info and date_info['date']:
-                            date_errors = self._validate_date(date_info['date'], f"重要日期{i+1}")
-                            errors.extend(date_errors)
+            if not isinstance(important_dates, list):
+                errors.append("重要日期應為列表格式")
+                return errors
 
-                        if 'description' in date_info:
-                            if not date_info['description'] or str(date_info['description']).strip() == "":
-                                errors.append(f"重要日期{i+1}缺少描述")
-                    else:
-                        # 處理物件格式的日期資訊
-                        if self._has_attr(date_info, 'date') and self._safe_getattr(date_info, 'date'):
-                            date_errors = self._validate_date(
-                                self._safe_getattr(date_info, 'date'),
-                                f"重要日期{i+1}"
-                            )
-                            errors.extend(date_errors)
+            for i, date_item in enumerate(important_dates):
+                if not isinstance(date_item, dict):
+                    errors.append(f"重要日期{i+1}格式不正確（應為字典格式）")
+                    continue
 
-                        if self._has_attr(date_info, 'description'):
-                            desc = self._safe_getattr(date_info, 'description', '')
-                            if not desc or str(desc).strip() == "":
-                                errors.append(f"重要日期{i+1}缺少描述")
+                if 'date' not in date_item:
+                    errors.append(f"重要日期{i+1}缺少日期欄位")
+
+                if 'description' not in date_item or not date_item['description']:
+                    errors.append(f"重要日期{i+1}缺少描述")
         except Exception as e:
             errors.append(f"重要日期格式錯誤: {str(e)}")
 
@@ -400,3 +408,34 @@ class ValidationService:
                     case_ids.append(case_id)
 
         return errors
+
+    # ==================== 新增：案件ID生成輔助方法 ====================
+
+    def validate_case_id_format(self, case_id: str) -> bool:
+        """
+        驗證案件編號格式（與CaseController兼容）
+
+        Args:
+            case_id: 案件ID
+
+        Returns:
+            bool: 格式是否正確
+        """
+        if not case_id or len(case_id) != 6:
+            return False
+
+        try:
+            # 檢查前三碼是否為數字（民國年分）
+            year_part = int(case_id[:3])
+            # 檢查後三碼是否為數字（流水號）
+            number_part = int(case_id[3:])
+
+            # 基本範圍檢查
+            if year_part < 100 or year_part > 200:  # 民國100-200年合理範圍
+                return False
+            if number_part < 1 or number_part > 999:
+                return False
+
+            return True
+        except ValueError:
+            return False

@@ -40,11 +40,23 @@ class CaseController:
         self.progress_repository = self.case_service.progress_repository
         self.file_repository = FileRepository(self.data_folder)
 
+        self.load_cases()
         # 延遲初始化其他服務
         self.folder_service = None
         self.import_export_service = None
 
         print("✅ CaseController 初始化完成 (使用 Repository 架構)")
+
+    def load_cases(self) -> None:
+        """
+        載入所有案件資料，儲存在 self.cases 屬性中
+        """
+        try:
+            self.cases = self.case_repository.get_all_cases()
+            print(f"📂 已載入案件資料，共 {len(self.cases)} 筆")
+        except Exception as e:
+            self.cases = []
+            print(f"❌ 載入案件資料失敗: {str(e)}")
 
     def _get_folder_service(self):
         """延遲取得資料夾服務"""
@@ -62,29 +74,103 @@ class CaseController:
 
     # ==================== 案件CRUD操作 ====================
 
-    def add_case(self, case_data: CaseData, create_folder: bool = True,
-                 apply_template: str = None) -> bool:
+    def add_case(self, case_data: CaseData) -> bool:
         """
-        新增案件
+        新增案件 - 修正：整合新的驗證邏輯
 
         Args:
             case_data: 案件資料
-            create_folder: 是否建立資料夾
-            apply_template: 套用的進度範本名稱
 
         Returns:
-            bool: 是否新增成功
+            bool: 新增是否成功
         """
         try:
-            result = self.case_service.create_case(case_data, create_folder, apply_template)
-            if result[0]:
-                print(f"✅ 控制器: 成功新增案件 {case_data.client}")
+            print(f"➕ 控制器: 開始新增案件 - {case_data.client}")
+
+            # 1. 基本驗證（使用修正後的ValidationService）
+            validation_result = self.validate_case_data(case_data)
+            if not validation_result[0]:
+                print(f"❌ 控制器: 案件資料驗證失敗 - {validation_result[1]}")
+                return False
+
+            # 2. 自動生成案件編號（如果沒有提供）
+            if not case_data.case_id:
+                case_data.case_id = self.generate_case_id(case_data.case_type)
+                print(f"📝 控制器: 自動生成案件編號 - {case_data.case_id}")
+
+            # 3. 檢查同類型內是否重複（修正後的邏輯）
+            if self.check_case_id_duplicate(case_data.case_id, case_data.case_type):
+                print(f"❌ 控制器: 案件編號重複 - {case_data.case_id} (類型: {case_data.case_type})")
+                return False
+
+            # 4. 委託給服務層處理業務邏輯
+            success, message = self.case_service.create_case(case_data)
+
+            if success:
+                # 5. 重新載入案件資料
+                self.load_cases()
+                print(f"✅ 控制器: 案件新增成功 - {case_data.case_id}")
+                return True
             else:
-                print(f"❌ 控制器: 新增案件失敗 - {result[1]}")
-            return result[0]
+                print(f"❌ 控制器: 新增案件失敗 - {message}")
+                return False
+
         except Exception as e:
-            print(f"❌ CaseController.add_case 失敗: {e}")
+            print(f"❌ 控制器: 新增案件時發生錯誤 - {str(e)}")
+            import traceback
+            traceback.print_exc()
             return False
+
+    def update_case_id(self, old_case_id: str, new_case_id: str, case_type: str) -> tuple:
+        """
+        更新案件編號 - 修正：加入案件類型檢查
+
+        Args:
+            old_case_id: 舊案件編號
+            new_case_id: 新案件編號
+            case_type: 案件類型
+
+        Returns:
+            tuple: (成功與否, 訊息)
+        """
+        try:
+            # 驗證新編號格式
+            if not self.validate_case_id_format(new_case_id):
+                return False, "案件編號格式錯誤，應為6位數字(民國年分3碼+流水號3碼)"
+
+            # 檢查同類型內是否重複（修正後的邏輯）
+            if self.check_case_id_duplicate(new_case_id, case_type, old_case_id):
+                return False, f"案件編號 {new_case_id} 在 {case_type} 類型中已存在"
+
+            # 找到並更新案件
+            for case in self.cases:
+                if case.case_id == old_case_id:
+                    case.case_id = new_case_id
+                    from datetime import datetime
+                    case.updated_date = datetime.now()
+
+                    success = self.save_cases()
+                    if success:
+                        # 更新案件資訊Excel檔案
+                        try:
+                            self.folder_manager.update_case_info_excel(case)
+                        except Exception as e:
+                            print(f"更新Excel失敗: {e}")
+
+                        from config.settings import AppConfig
+                        case_display_name = AppConfig.format_case_display_name(case)
+                        print(f"已更新案件編號：{old_case_id} → {new_case_id} ({case_display_name})")
+                        return True, "案件編號更新成功"
+                    else:
+                        return False, "儲存案件資料失敗"
+
+            return False, f"找不到案件編號: {old_case_id}"
+
+        except Exception as e:
+            print(f"更新案件編號失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, f"更新失敗: {str(e)}"
 
     def update_case(self, case_data: CaseData, update_folder: bool = False,
                    sync_progress: bool = False) -> bool:
@@ -721,17 +807,78 @@ class CaseController:
 
     # ==================== 輔助功能 ====================
 
-    def generate_case_id(self, case_data: CaseData) -> str:
+    def check_case_id_duplicate(self, case_id: str, case_type: str, exclude_case_id: str = None) -> bool:
         """
-        生成案件ID（委託給服務層）
+        檢查案件編號是否重複 - 修正：按案件類型分別檢查
 
         Args:
-            case_data: 案件資料
+            case_id: 要檢查的案件編號
+            case_type: 案件類型（民事/刑事）
+            exclude_case_id: 排除的案件編號（更新時用）
 
         Returns:
-            str: 生成的案件ID
+            bool: 是否重複
         """
-        return self.case_service.generate_case_id(case_data)
+        for case in self.cases:
+            # 修正：同一案件類型內才檢查重複
+            if (case.case_id == case_id and
+                case.case_type == case_type and
+                case.case_id != exclude_case_id):
+                return True
+        return False
+
+    def generate_case_id(self, case_type: str = None) -> str:
+        """
+        產生新的案件編號 - 修正：按案件類型分別生成
+        格式：民國年分(三碼)+流水號(三碼)
+
+        Args:
+            case_type: 案件類型，用於檢查同類型內的重複
+
+        Returns:
+            str: 新的案件編號
+        """
+        try:
+            import datetime
+
+            # 計算民國年分
+            current_year = datetime.datetime.now().year
+            minguo_year = current_year - 1911
+
+            # 如果沒有指定案件類型，使用預設邏輯
+            if not case_type:
+                case_type = "民事"  # 預設為民事
+
+            # 取得同類型案件的現有編號
+            same_type_cases = [case for case in self.cases if case.case_type == case_type]
+            existing_ids = {case.case_id for case in same_type_cases}
+
+            # 找出當年度最大編號（只在同類型案件中查找）
+            current_year_prefix = f"{minguo_year:03d}"
+            max_number = 0
+
+            for case_id in existing_ids:
+                if case_id.startswith(current_year_prefix) and len(case_id) == 6:
+                    try:
+                        number = int(case_id[3:])
+                        max_number = max(max_number, number)
+                    except ValueError:
+                        continue
+
+            # 產生新編號
+            new_number = max_number + 1
+            new_case_id = f"{current_year_prefix}{new_number:03d}"
+
+            return new_case_id
+
+        except Exception as e:
+            print(f"產生案件編號失敗: {e}")
+            # 備用方案
+            import datetime
+            current_year = datetime.datetime.now().year
+            minguo_year = current_year - 1911
+            return f"{minguo_year:03d}001"
+
 
     def validate_case_data(self, case_data: CaseData) -> Tuple[bool, str]:
         """
