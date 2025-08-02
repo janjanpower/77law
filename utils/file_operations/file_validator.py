@@ -8,7 +8,7 @@
 """
 
 import os
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional
 from config.settings import AppConfig
 
 
