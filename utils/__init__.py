@@ -35,23 +35,6 @@ except ImportError:
     print("⚠️ NotificationManager 無法載入")
     NotificationManager = None
 
-# 🔧 修復：正確匯入資料夾管理模組
-try:
-    from .folder_management import (
-        FolderManager,
-        FolderCreator,
-        FolderValidator,
-        FolderOperations,
-        ExcelGenerator
-    )
-    print("✅ 資料夾管理模組載入成功")
-    FOLDER_MANAGEMENT_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ 資料夾管理模組載入失敗: {e}")
-    FOLDER_MANAGEMENT_AVAILABLE = False
-    # 設定為None以避免NameError
-    FolderManager = FolderCreator = FolderValidator = FolderOperations = ExcelGenerator = None
-
 # 可選模組
 try:
     from .hardware_utils import HardwareUtils
@@ -93,18 +76,6 @@ for name, obj in [
     if obj is not None:
         __all__.append(name)
 
-# 資料夾管理模組
-if FOLDER_MANAGEMENT_AVAILABLE:
-    for name, obj in [
-        ('FolderManager', FolderManager),
-        ('FolderCreator', FolderCreator),
-        ('FolderValidator', FolderValidator),
-        ('FolderOperations', FolderOperations),
-        ('ExcelGenerator', ExcelGenerator)
-    ]:
-        if obj is not None:
-            __all__.append(name)
-
 # 可選模組
 for name, available, obj in [
     ('HardwareUtils', HARDWARE_UTILS_AVAILABLE, HardwareUtils),
@@ -132,11 +103,6 @@ def check_module_status():
         ('ExcelHandler', ExcelHandler is not None),
         ('DateReminderManager', DateReminderManager is not None),
         ('NotificationManager', NotificationManager is not None),
-        ('FolderManager', FolderManager is not None),
-        ('FolderCreator', FolderCreator is not None),
-        ('FolderValidator', FolderValidator is not None),
-        ('FolderOperations', FolderOperations is not None),
-        ('ExcelGenerator', ExcelGenerator is not None),
         ('SmartExcelAnalyzer', SMART_EXCEL_AVAILABLE),
         ('DataCleaner', DATA_CLEANER_AVAILABLE),
         ('EventManager', EVENT_MANAGER_AVAILABLE)
