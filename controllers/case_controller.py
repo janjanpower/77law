@@ -166,47 +166,93 @@ class CaseController:
             print(f"CaseController.update_case 失敗: {e}")
             return False
 
-    def delete_case(self, case_id: str, case_type: str,delete_folder: bool = True) -> bool:
+    def delete_case(self, case_id: str, case_type: str = None, delete_folder: bool = True) -> bool:
         """
-        刪除案件 - 支援選擇是否刪除資料夾
-
-        Args:
-            case_id: 案件編號
-            delete_folder: 是否同時刪除資料夾
-
-        Returns:
-            bool: 是否刪除成功
+        刪除案件 - 修正版本：確保資料夾正確刪除
         """
         try:
-            # 如果需要刪除資料夾，先處理資料夾
-            if delete_folder:
-                case = self.get_case_by_id(case_id,case_type)
-                if case:
-                    try:
-                        folder_deleted = self.delete_case_folder(case_id,case_type)
-                        if folder_deleted:
-                            print(f"✅ 成功刪除案件資料夾: {case.client}")
-                        else:
-                            print(f"⚠️ 案件資料夾刪除失敗或不存在: {case.client}")
-                    except Exception as e:
-                        print(f"❌ 刪除資料夾時發生錯誤: {e}")
-                        # 繼續執行資料刪除，不因為資料夾刪除失敗而中斷
+            print(f"🗑️ 開始刪除案件: {case_id}")
 
-            # 刪除案件資料 - 修正：確保使用正確的參數
-            result = self.data_manager.delete_case(case_id,case_type)  # 只傳遞 case_id
-            if result:
-                self._sync_managers()
-                print(f"✅ 成功刪除案件資料: {case_id}")
+            # 如果沒有提供 case_type，從案件資料中取得
+            if case_type is None:
+                case = self.get_case_by_id(case_id)
+                if not case:
+                    print(f"❌ 找不到案件: {case_id}")
+                    return False
+                case_type = case.case_type
             else:
-                print(f"❌ 案件資料刪除失敗: {case_id}")
+                # 驗證提供的 case_type 是否正確
+                case = self.get_case_by_id_and_type(case_id, case_type)
+                if not case:
+                    print(f"❌ 找不到案件: {case_id} (類型: {case_type})")
+                    return False
 
-            return result
+            # 如果需要刪除資料夾，先處理資料夾
+            folder_deletion_success = True
+            if delete_folder:
+                print(f"📁 準備刪除資料夾...")
+                try:
+                    folder_deletion_success = self.delete_case_folder(case_id)
+                    if folder_deletion_success:
+                        print(f"✅ 成功刪除案件資料夾: {case.client}")
+                    else:
+                        print(f"⚠️ 案件資料夾刪除失敗: {case.client}")
+                        # 不中斷執行，繼續刪除資料記錄
+                except Exception as e:
+                    print(f"❌ 刪除資料夾時發生錯誤: {e}")
+                    folder_deletion_success = False
+                    # 不中斷執行，繼續刪除資料記錄
+
+            # 刪除案件資料記錄
+            print(f"📋 準備刪除案件資料記錄...")
+            data_deletion_success = self.data_manager.delete_case(case_id, case_type)
+
+            if data_deletion_success:
+                self._sync_managers()
+                print(f"✅ 成功刪除案件資料記錄: {case_id}")
+            else:
+                print(f"❌ 案件資料記錄刪除失敗: {case_id}")
+
+            # 評估整體成功狀態
+            overall_success = data_deletion_success
+
+            if delete_folder:
+                if folder_deletion_success and data_deletion_success:
+                    print(f"✅ 案件完全刪除成功 (包含資料夾)")
+                elif data_deletion_success and not folder_deletion_success:
+                    print(f"⚠️ 案件資料刪除成功，但資料夾刪除失敗")
+                elif not data_deletion_success:
+                    print(f"❌ 案件資料刪除失敗")
+
+            return overall_success
 
         except Exception as e:
             print(f"❌ CaseController.delete_case 失敗: {e}")
             import traceback
             traceback.print_exc()
             return False
+
+    def get_case_by_id_and_type(self, case_id: str, case_type: str) -> Optional[CaseData]:
+        """
+        根據編號和類型取得案件 - 新增方法確保精確匹配
+
+        Args:
+            case_id: 案件編號
+            case_type: 案件類型
+
+        Returns:
+            匹配的案件資料或 None
+        """
+        try:
+            all_cases = self.get_cases()
+            for case in all_cases:
+                if case.case_id == case_id and case.case_type == case_type:
+                    return case
+            return None
+        except Exception as e:
+            print(f"❌ 取得案件失敗: {e}")
+            return None
+
 
     def get_cases(self) -> List[CaseData]:
         """取得所有案件"""
@@ -400,29 +446,110 @@ class CaseController:
             return None
 
     def delete_case_folder(self, case_id: str) -> bool:
-        """刪除案件資料夾"""
+        """
+        刪除案件資料夾 - 修正版本：加強除錯與多重備用方案
+
+        Args:
+            case_id: 案件編號
+
+        Returns:
+            bool: 是否刪除成功
+        """
         try:
+            # 取得案件資料
             case = self.get_case_by_id(case_id)
             if not case:
                 print(f"❌ 找不到案件: {case_id}")
                 return False
 
-            # 檢查 folder_manager 是否有對應的刪除方法
+            print(f"🗂️ 準備刪除案件資料夾 - 案件: {case.case_id}, 當事人: {case.client}, 類型: {case.case_type}")
+
+            # 嘗試多種方法取得資料夾路徑
+            folder_path = None
+
+            # 方法1：使用 folder_manager
+            if hasattr(self.folder_manager, 'get_case_folder_path'):
+                try:
+                    folder_path = self.folder_manager.get_case_folder_path(case)
+                    print(f"📁 方法1 (folder_manager) 取得路徑: {folder_path}")
+                except Exception as e:
+                    print(f"⚠️ 方法1 失敗: {e}")
+
+            # 方法2：使用 operations
+            if not folder_path and hasattr(self.folder_manager, 'operations') and self.folder_manager.operations:
+                try:
+                    folder_path = self.folder_manager.operations.get_case_folder_path(case)
+                    print(f"📁 方法2 (operations) 取得路徑: {folder_path}")
+                except Exception as e:
+                    print(f"⚠️ 方法2 失敗: {e}")
+
+            # 檢查路徑是否有效
+            if not folder_path:
+                print(f"❌ 無法取得有效的資料夾路徑")
+                return False
+
+            # 檢查資料夾是否存在
+            import os
+            if not os.path.exists(folder_path):
+                print(f"ℹ️ 資料夾不存在，視為刪除成功: {folder_path}")
+                return True
+
+            # 顯示資料夾資訊
+            try:
+                folder_contents = os.listdir(folder_path)
+                print(f"📋 資料夾內容: {len(folder_contents)} 個項目")
+                if folder_contents:
+                    print(f"   項目: {folder_contents[:5]}{'...' if len(folder_contents) > 5 else ''}")
+            except Exception as e:
+                print(f"⚠️ 無法讀取資料夾內容: {e}")
+
+            # 嘗試刪除資料夾
+            deletion_success = False
+
+            # 嘗試1：使用 folder_manager 的刪除方法
             if hasattr(self.folder_manager, 'delete_case_folder'):
-                return self.folder_manager.delete_case_folder(case)
-            elif hasattr(self.folder_manager, 'operations') and self.folder_manager.operations:
-                success, message = self.folder_manager.operations.delete_case_folder(case)
-                if not success:
-                    print(f"❌ 刪除資料夾失敗: {message}")
+                try:
+                    deletion_success = self.folder_manager.delete_case_folder(case)
+                    print(f"🗑️ 方法1 (folder_manager.delete_case_folder): {'成功' if deletion_success else '失敗'}")
+                except Exception as e:
+                    print(f"⚠️ 方法1 刪除失敗: {e}")
+
+            # 嘗試2：使用 operations 的刪除方法
+            if not deletion_success and hasattr(self.folder_manager, 'operations') and self.folder_manager.operations:
+                try:
+                    success, message = self.folder_manager.operations.delete_case_folder(case)
+                    deletion_success = success
+                    print(f"🗑️ 方法2 (operations.delete_case_folder): {'成功' if success else '失敗'} - {message}")
+                except Exception as e:
+                    print(f"⚠️ 方法2 刪除失敗: {e}")
+
+            # 嘗試3：直接使用 shutil.rmtree（最終備用方案）
+            if not deletion_success:
+                try:
+                    import shutil
+                    shutil.rmtree(folder_path)
+                    deletion_success = True
+                    print(f"🗑️ 方法3 (直接刪除): 成功")
+                except Exception as e:
+                    print(f"❌ 方法3 刪除失敗: {e}")
+
+            # 驗證刪除結果
+            if deletion_success:
+                # 再次檢查資料夾是否真的被刪除
+                if os.path.exists(folder_path):
+                    print(f"⚠️ 警告：刪除操作回報成功，但資料夾仍然存在: {folder_path}")
+                    deletion_success = False
                 else:
-                    print(f"✅ 刪除資料夾成功: {message}")
-                return success
-            else:
-                # 備用刪除方法
-                return self._delete_case_folder_basic(case)
+                    print(f"✅ 成功刪除案件資料夾: {folder_path}")
+
+            return deletion_success
+
         except Exception as e:
             print(f"❌ CaseController.delete_case_folder 失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
 
     def _delete_case_folder_basic(self, case: CaseData) -> bool:
         """備用的資料夾刪除方法"""

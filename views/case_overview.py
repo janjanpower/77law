@@ -2386,7 +2386,7 @@ class CaseOverviewWindow:
                 context_menu.grab_release()
 
     def _on_delete_case(self):
-        """刪除案件（含資料夾刪除確認）"""
+        """刪除案件（含資料夾刪除確認）- 修正版本"""
         selection = self.tree.selection()
         if not selection:
             return
@@ -2432,24 +2432,37 @@ class CaseOverviewWindow:
                     confirm_message
                 ):
                     try:
-                        success = self.case_controller.delete_case(case.case_id, delete_folder=True)
+                        # 🔥 修正：提供完整的參數
+                        success = self.case_controller.delete_case(
+                            case_id=case.case_id,
+                            case_type=case.case_type,  # 明確提供 case_type
+                            delete_folder=True
+                        )
+
                         if success:
                             self._load_cases()
 
                             if folder_info['exists']:
-                                UnifiedMessageDialog.show_success(self.window,  f"案件 {case_display_name} 已刪除\n案件資料夾已同時刪除")
+                                UnifiedMessageDialog.show_success(
+                                    self.window,
+                                    f"案件 {case_display_name} 已刪除\n案件資料夾已同時刪除"
+                                )
                             else:
-                                UnifiedMessageDialog.show_success(self.window,  f"案件 {case_display_name} 已刪除")
+                                UnifiedMessageDialog.show_success(
+                                    self.window,
+                                    f"案件 {case_display_name} 已刪除"
+                                )
                         else:
-                            UnifiedMessageDialog.show_error(self.window,  "案件刪除失敗")
+                            UnifiedMessageDialog.show_error(self.window, "案件刪除失敗")
                     except Exception as e:
-                        UnifiedMessageDialog.show_error(self.window,  f"刪除案件失敗：{str(e)}")
+                        UnifiedMessageDialog.show_error(self.window, f"刪除案件失敗：{str(e)}")
             else:
                 print(f"無法取得有效的案件索引：tags={tags}")
 
         except (ValueError, IndexError) as e:
             print(f"刪除案件失敗: {e}")
-            UnifiedMessageDialog.show_error(self.window,  "無法刪除案件")
+            UnifiedMessageDialog.show_error(self.window, "無法刪除案件")
+
 
     def _on_open_case_folder(self):
         """開啟案件資料夾"""

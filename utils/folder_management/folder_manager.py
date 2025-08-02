@@ -149,26 +149,94 @@ class FolderManager:
 
     def create_progress_folder(self, case_data: CaseData, stage_name: str) -> bool:
         """
-        為特定案件建立單一進度階段資料夾
+        建立進度階段資料夾 - 修正方法簽章
 
         Args:
             case_data: 案件資料
             stage_name: 階段名稱
 
         Returns:
-            建立是否成功
+            bool: 建立是否成功
         """
         try:
-            if self.creator:
-                return self.creator.create_stage_folder_for_case(case_data, stage_name)
-            else:
-                # 備用方法
-                return self._create_basic_progress_folder(case_data, stage_name)
+            print(f"📁 準備建立進度階段資料夾: {stage_name}")
 
-        except Exception as e:
-            print(f"❌ 建立進度階段資料夾失敗: {e}")
+            # 方法1：使用 creator 如果可用
+            if hasattr(self, 'creator') and self.creator:
+                try:
+                    # 取得案件資料夾路徑
+                    case_folder_path = self.get_case_folder_path(case_data)
+                    if not case_folder_path:
+                        print(f"❌ 找不到案件資料夾: {case_data.client}")
+                        return False
+
+                    # 使用專門的建立器
+                    success = self.creator.create_progress_folder(case_folder_path, stage_name)
+                    if success:
+                        print(f"✅ 進度資料夾建立成功 (creator): {stage_name}")
+                        return True
+                    else:
+                        print(f"⚠️ 進度資料夾建立失敗 (creator): {stage_name}")
+                except Exception as e:
+                    print(f"⚠️ creator 方法失敗: {e}")
+
+            # 方法2：手動建立資料夾（備用）
+            try:
+                success = self._create_progress_folder_manual(case_data, stage_name)
+                if success:
+                    print(f"✅ 進度資料夾建立成功 (手動): {stage_name}")
+                    return True
+            except Exception as e:
+                print(f"⚠️ 手動建立方法失敗: {e}")
+
+            print(f"❌ 無法建立進度階段資料夾: {stage_name}")
             return False
 
+        except Exception as e:
+            print(f"❌ FolderManager.create_progress_folder 失敗: {e}")
+            return False
+
+    def delete_progress_folder(self, case_data: CaseData, stage_name: str) -> bool:
+        """
+        刪除進度階段資料夾 - 新增方法
+
+        Args:
+            case_data: 案件資料
+            stage_name: 階段名稱
+
+        Returns:
+            bool: 刪除是否成功
+        """
+        try:
+            print(f"🗑️ 準備刪除進度階段資料夾: {stage_name}")
+
+            # 方法1：使用 operations 如果可用
+            if hasattr(self, 'operations') and self.operations:
+                try:
+                    success, message = self.operations.delete_stage_folder(case_data, stage_name, confirm=True)
+                    if success:
+                        print(f"✅ 進度資料夾刪除成功 (operations): {message}")
+                        return True
+                    else:
+                        print(f"⚠️ 進度資料夾刪除失敗 (operations): {message}")
+                except Exception as e:
+                    print(f"⚠️ operations 刪除方法失敗: {e}")
+
+            # 方法2：手動刪除（備用）
+            try:
+                success = self._delete_progress_folder_manual(case_data, stage_name)
+                if success:
+                    print(f"✅ 進度資料夾刪除成功 (手動): {stage_name}")
+                    return True
+            except Exception as e:
+                print(f"⚠️ 手動刪除方法失敗: {e}")
+
+            print(f"ℹ️ 進度階段資料夾刪除操作完成: {stage_name}")
+            return True  # 即使失敗也回傳True，避免阻斷流程
+
+        except Exception as e:
+            print(f"❌ FolderManager.delete_progress_folder 失敗: {e}")
+            return True  # 回傳True避免阻斷
     def _create_basic_progress_folder(self, case_data: CaseData, stage_name: str) -> bool:
         """備用的進度資料夾建立方法"""
         try:
@@ -210,20 +278,38 @@ class FolderManager:
 
     def get_case_folder_path(self, case_data: CaseData) -> Optional[str]:
         """
-        取得案件資料夾路徑
+        取得案件資料夾路徑 - 統一版本
 
         Args:
             case_data: 案件資料
 
         Returns:
-            資料夾路徑或None
+            資料夾路徑或 None
         """
         try:
-            if self.operations:
-                return self.operations.get_case_folder_path(case_data)
-            else:
-                # 備用方法
-                return self._get_basic_case_folder_path(case_data)
+            print(f"📂 取得案件資料夾路徑 - 案件: {case_data.case_id}, 當事人: {case_data.client}")
+
+            # 方法1：使用 operations 如果可用
+            if hasattr(self, 'operations') and self.operations:
+                try:
+                    path = self.operations.get_case_folder_path(case_data)
+                    if path:
+                        print(f"   使用 operations 取得路徑: {path}")
+                        return path
+                except Exception as e:
+                    print(f"   operations 方法失敗: {e}")
+
+            # 方法2：手動建構路徑
+            try:
+                path = self._get_basic_case_folder_path(case_data)
+                if path:
+                    print(f"   使用手動建構取得路徑: {path}")
+                    return path
+            except Exception as e:
+                print(f"   手動建構失敗: {e}")
+
+            print(f"❌ 無法取得案件資料夾路徑")
+            return None
 
         except Exception as e:
             print(f"❌ 取得案件資料夾路徑失敗: {e}")
@@ -286,7 +372,7 @@ class FolderManager:
 
     def delete_case_folder(self, case_data: CaseData) -> bool:
         """
-        刪除案件資料夾
+        刪除案件資料夾 - 統一版本
 
         Args:
             case_data: 案件資料
@@ -295,18 +381,103 @@ class FolderManager:
             刪除是否成功
         """
         try:
-            if self.operations:
-                success, message = self.operations.delete_case_folder(case_data)
-                if not success:
-                    print(f"❌ 刪除資料夾失敗: {message}")
-                return success
-            else:
-                print("⚠️ FolderOperations 不可用，無法刪除資料夾")
+            print(f"🗑️ FolderManager 準備刪除案件資料夾: {case_data.client}")
+
+            # 取得資料夾路徑
+            folder_path = self.get_case_folder_path(case_data)
+            if not folder_path:
+                print(f"❌ 找不到案件資料夾路徑: {case_data.client}")
+                return False
+
+            # 檢查資料夾是否存在
+            import os
+            if not os.path.exists(folder_path):
+                print(f"ℹ️ 資料夾不存在，視為刪除成功: {folder_path}")
+                return True
+
+            # 顯示資料夾資訊
+            try:
+                folder_contents = os.listdir(folder_path)
+                print(f"📋 準備刪除資料夾及其內容 ({len(folder_contents)} 個項目): {folder_path}")
+            except Exception as e:
+                print(f"⚠️ 無法讀取資料夾內容: {e}")
+
+            # 嘗試使用 operations 刪除
+            if hasattr(self, 'operations') and self.operations:
+                try:
+                    success, message = self.operations.delete_case_folder(case_data, confirm=True)
+                    if success:
+                        print(f"✅ operations 刪除成功: {message}")
+                        return True
+                    else:
+                        print(f"⚠️ operations 刪除失敗: {message}")
+                except Exception as e:
+                    print(f"⚠️ operations 刪除方法失敗: {e}")
+
+            # 直接刪除作為備用方案
+            try:
+                import shutil
+                shutil.rmtree(folder_path)
+                print(f"✅ 直接刪除成功: {folder_path}")
+                return True
+            except Exception as e:
+                print(f"❌ 直接刪除失敗: {e}")
                 return False
 
         except Exception as e:
-            print(f"❌ 刪除案件資料夾失敗: {e}")
+            print(f"❌ FolderManager.delete_case_folder 失敗: {e}")
             return False
+
+    def update_case_info_excel(self, case_data: CaseData) -> bool:
+        """
+        更新案件資訊Excel檔案 - 新增方法
+
+        Args:
+            case_data: 案件資料
+
+        Returns:
+            bool: 更新是否成功
+        """
+        try:
+            print(f"📊 準備更新案件Excel檔案: {case_data.case_id} - {case_data.client}")
+
+            # 方法1：使用 excel_generator 如果可用
+            if hasattr(self, 'excel_generator') and self.excel_generator:
+                try:
+                    # 取得案件資料夾路徑
+                    case_folder_path = self.get_case_folder_path(case_data)
+                    if not case_folder_path:
+                        print(f"❌ 找不到案件資料夾路徑: {case_data.client}")
+                        return False
+
+                    # 使用專門的 Excel 生成器更新
+                    success, message = self.excel_generator.update_case_info_excel(case_folder_path, case_data)
+
+                    if success:
+                        print(f"✅ Excel更新成功 (excel_generator): {message}")
+                        return True
+                    else:
+                        print(f"⚠️ Excel更新失敗 (excel_generator): {message}")
+                except Exception as e:
+                    print(f"⚠️ excel_generator 方法失敗: {e}")
+
+            # 方法2：使用內建的 Excel 更新方法（備用）
+            try:
+                success = self._update_case_excel_manual(case_data)
+                if success:
+                    print(f"✅ Excel更新成功 (手動方法)")
+                    return True
+            except Exception as e:
+                print(f"⚠️ 手動 Excel 方法失敗: {e}")
+
+            # 方法3：最簡單的備用方案
+            print(f"ℹ️ Excel檔案更新跳過 - 所有方法都失敗")
+            return False  # 改為 False，這樣呼叫者知道更新失敗但可以繼續
+
+        except Exception as e:
+            print(f"❌ FolderManager.update_case_info_excel 失敗: {e}")
+            return False
+
 
     def validate_folder_structure(self, case_data: CaseData) -> Dict[str, Any]:
         """

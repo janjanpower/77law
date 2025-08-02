@@ -206,6 +206,76 @@ class CaseTransferDialog(BaseWindow):
         # 按鈕區域
         self._create_transfer_buttons(main_frame)
 
+    def _on_confirm_transfer(self):
+        """確認轉移 - 修正版本"""
+        target_folder = self.folder_var.get().strip()
+
+        if not target_folder:
+            UnifiedMessageDialog.show_error(self.window, "請選擇目標資料夾")
+            return
+
+        try:
+            # 建立完整的轉移路徑
+            folder_name = f"{self.case_data.client}_{self.case_data.case_id}"
+            target_folder = os.path.join(target_folder, folder_name)
+
+            # 取得原始資料夾路徑
+            source_folder = self.case_controller.get_case_folder_path(self.case_data.case_id)
+
+            if not source_folder or not os.path.exists(source_folder):
+                UnifiedMessageDialog.show_error(self.window, "找不到案件資料夾，無法進行轉移")
+                return
+
+            # 檢查目標是否已存在
+            if os.path.exists(target_folder):
+                if not messagebox.askyesno(
+                    "資料夾已存在",
+                    f"目標位置已存在資料夾「{folder_name}」，是否要覆蓋？\n\n此操作無法復原。"
+                ):
+                    return
+
+                # 先刪除現有資料夾
+                try:
+                    shutil.rmtree(target_folder)
+                except Exception as e:
+                    UnifiedMessageDialog.show_error(self.window, f"無法刪除現有資料夾：{str(e)}")
+                    return
+
+            # 執行轉移
+            try:
+                shutil.move(source_folder, target_folder)
+
+                # 🔥 修正：從案件控制器中刪除案件記錄，提供完整參數
+                success = self.case_controller.delete_case(
+                    case_id=self.case_data.case_id,
+                    case_type=self.case_data.case_type,  # 明確提供 case_type
+                    delete_folder=False  # 資料夾已經移動了，不需要刪除
+                )
+
+                if not success:
+                    print(f"警告：案件記錄刪除失敗，但資料夾已成功轉移")
+
+                success_message = (
+                    f"結案轉移完成！\n\n"
+                    f"轉移到：{target_folder}\n\n"
+                )
+
+                UnifiedMessageDialog.show_success(self.window, success_message)
+
+                # 呼叫完成回調
+                if self.on_transfer_complete:
+                    self.on_transfer_complete()
+
+                # 延遲關閉並確保焦點正確返回
+                self.window.after(100, self._safe_close)
+
+            except Exception as e:
+                UnifiedMessageDialog.show_error(self.window, f"轉移過程發生錯誤：{str(e)}")
+
+        except Exception as e:
+            print(f"轉移檔案時發生錯誤: {e}")
+            UnifiedMessageDialog.show_error(self.window, f"轉移過程發生錯誤：{str(e)}")
+
     def _select_transfer_folder(self):
         """選擇轉移目標資料夾 - 🔥 修正：檔案對話框置頂處理"""
         try:

@@ -169,7 +169,16 @@ class CaseDataManager:
             return False
 
     def delete_case(self, case_id: str, case_type: str) -> bool:
-        """刪除案件"""
+        """
+        刪除案件 - 確保參數一致
+
+        Args:
+            case_id: 案件編號
+            case_type: 案件類型
+
+        Returns:
+            bool: 是否刪除成功
+        """
         try:
             # 找到要刪除的案件
             case_index = None
@@ -181,7 +190,7 @@ class CaseDataManager:
                     break
 
             if case_index is None:
-                print(f"找不到要刪除的案件: {case_id}")
+                print(f"找不到要刪除的案件: {case_id} (類型: {case_type})")
                 return False
 
             # 從列表中移除
@@ -213,6 +222,7 @@ class CaseDataManager:
             import traceback
             traceback.print_exc()
             return False
+
 
     def get_cases(self) -> List[CaseData]:
         """取得所有案件"""
