@@ -901,6 +901,34 @@ class CaseOverviewWindow:
         print(f"🔍 上傳雲端按鈕被點擊")
 
         try:
+
+            # 檢查 user_data
+            if not hasattr(self, 'user_data') or not self.user_data:
+                # 嘗試從父視窗獲取
+                if hasattr(self, 'parent') and hasattr(self.parent, 'user_data'):
+                    self.user_data = self.parent.user_data
+
+                if not self.user_data:
+                    UnifiedMessageDialog.show_warning(
+                        self.window,
+                        "缺少用戶認證資料，無法上傳\n請重新登入系統"
+                    )
+                    return
+
+            # 確保有 client_id
+            client_id = (self.user_data.get('client_id') or
+                        self.user_data.get('username') or
+                        self.user_data.get('user_id'))
+
+            if not client_id:
+                UnifiedMessageDialog.show_warning(
+                    self.window,
+                    "無法取得事務所ID，無法上傳\n請檢查登入狀態"
+                )
+                return
+
+            print(f"🔍 即將上傳，user_data: {self.user_data}")
+
             # 第一層檢查：基本功能可用性
             if not DATABASE_UPLOAD_AVAILABLE:
                 print("❌ 資料庫上傳功能不可用")
