@@ -54,6 +54,22 @@ def resolve_client_by_code(db: Session, tenant_code: str) -> Optional[LoginUser]
         )
     return client
 
+# 假資料：暗號 → 事務所
+TENANTS = {
+    "55688": {
+        "id": "C001",
+        "name": "喜憨兒事務所",
+        "plan": "basic",
+        "limit": 3,
+        "usage": 1
+    }
+}
+
+class TenantCheckRequest(BaseModel):
+    tenant_code: str
+    line_user_id: str
+
+
 def count_current_usage(db: Session, client_id: str) -> int:
     """計算目前已啟用的 LINE 綁定數（你可依需求只算律師或全部）"""
     return (
@@ -138,3 +154,15 @@ def bind_user(payload: BindLawyerIn, db: Session = Depends(get_db)):
             role="lawyer",
         )
     return BindLawyerOut(success=False, reason="already_bound")
+
+@router.post("/check_tenant_plan")
+def check_tenant_plan(data: TenantCheckRequest):
+    tenant_info = TENANTS.get(data.tenant_code)
+    if not tenant_info:
+        return {"success": False, "reason": "invalid_tenant_code"}
+    return {
+        "success": True,
+        "tenant": tenant_info["name"],
+        "limit": tenant_info["limit"],
+        "usage": tenant_info["usage"]
+    }
