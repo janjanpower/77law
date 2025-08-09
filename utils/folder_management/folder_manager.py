@@ -7,6 +7,7 @@
 整合所有資料夾管理功能，提供完整的向後相容介面
 """
 
+import os
 from typing import Optional, Dict, List, Any
 from models.case_model import CaseData
 
@@ -62,6 +63,22 @@ class FolderManager:
     # ==================== 主要資料夾建立介面 ====================
 
     def create_case_folder_structure(self, case_data: CaseData) -> bool:
+        """
+        僅使用新格式建立，禁止在建立時使用舊格式或模糊比對。
+        """
+        try:
+            if not hasattr(self, 'creator') or self.creator is None:
+                from .folder_creator import FolderCreator
+                self.creator = FolderCreator(self.base_data_folder)
+            success, msg = self.creator.create_case_folder_structure(case_data)
+            if not success:
+                print(f"❌ 新增案件資料夾失敗（嚴格模式）: {msg}")
+                return False
+            return True
+        except Exception as e:
+            print(f"❌ 建立案件資料夾例外（嚴格模式）: {e}")
+            return False
+
         """
         🔥 修改：為案件建立完整的資料夾結構（使用新格式）
 

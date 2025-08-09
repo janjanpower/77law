@@ -9,6 +9,7 @@ views/upload_file_dialog.py
 - 自動夾帶 JWT：優先取 start_local.current_user_data['token']；其次取環境變數 API_BEARER_TOKEN
 """
 
+import json
 import os
 import tkinter as tk
 from tkinter import filedialog, ttk

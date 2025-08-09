@@ -27,7 +27,7 @@ class FolderOperations:
         self.base_data_folder = base_data_folder
         self.validator = FolderValidator()
 
-    def get_case_folder_path(self, case_data: CaseData) -> Optional[str]:
+    def get_case_folder_path(self, case_data: CaseData, strict: bool = False) -> Optional[str]:
         """
         🔥 修改：取得案件的資料夾路徑（支援新舊格式查找）
 

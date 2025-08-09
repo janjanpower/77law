@@ -67,8 +67,8 @@ class UploadProgressDialog(BaseWindow):
         """
         super().__init__(
             title="上傳案件資料到資料庫",
-            width=500,
-            height=350,
+            width=1500,
+            height=500,
             resizable=False,
             parent=parent
         )
@@ -126,7 +126,7 @@ class UploadProgressDialog(BaseWindow):
             progress_frame,
             variable=self.progress_var,
             maximum=100,
-            length=450
+            length=300
         )
         self.progress_bar.pack(pady=(0, 5))
 

@@ -1076,21 +1076,16 @@ class CaseOverviewWindow:
 
             def complete_callback(success, summary):
                 """上傳完成回調"""
-                print(f"📊 上傳完成 - 成功: {success}")
-                print(f"📋 摘要: {summary}")
 
                 if self.current_upload_dialog:
                     self.current_upload_dialog.on_upload_complete(success, summary)
-
-                # 顯示最終結果通知
-                self._show_upload_result_notification(success, summary)
 
             # 禁用按鈕防止重複操作
             if hasattr(self, 'upload_cloud_btn'):
                 self.upload_cloud_btn.config(state='disabled', text='上傳中...')
 
             # 🔥 關鍵：確保傳遞正確的用戶資料
-            print(f"🔍 即將傳遞給上傳器的用戶資料: {self.user_data}")
+            print(f"🔍 用戶資料: {self.user_data}")
 
             # 開始異步上傳
             self.database_uploader.upload_cases_async(
@@ -1141,48 +1136,6 @@ class CaseOverviewWindow:
 
         except Exception as e:
             print(f"❌ 取消上傳時發生錯誤: {e}")
-
-    def _show_upload_result_notification(self, success: bool, summary: Dict[str, Any]):
-        """顯示上傳結果通知"""
-        try:
-            # 恢復按鈕狀態
-            if hasattr(self, 'upload_cloud_btn'):
-                self.upload_cloud_btn.config(state='normal', text='上傳雲端')
-
-            # 準備結果訊息
-            uploaded = summary.get('uploaded_count', 0)
-            failed = summary.get('failed_count', 0)
-            total = summary.get('total_cases', 0)
-            success_rate = summary.get('success_rate', 0)
-
-            if success:
-                result_msg = f"✅ 案件資料上傳成功完成！\n\n"
-            else:
-                result_msg = f"⚠️ 案件資料上傳完成，但有部分失敗\n\n"
-
-            result_msg += f"📊 上傳統計：\n"
-            result_msg += f"• 總計：{total} 筆\n"
-            result_msg += f"• 成功：{uploaded} 筆\n"
-            result_msg += f"• 失敗：{failed} 筆\n"
-            result_msg += f"• 成功率：{success_rate}%\n\n"
-
-            if failed > 0:
-                result_msg += f"💡 提示：失敗的案件可能因為網路問題或資料格式問題，\n"
-                result_msg += f"請檢查網路連線後重試上傳。"
-            else:
-                result_msg += f"🎉 所有案件資料已成功同步到雲端資料庫！"
-
-            # 根據成功率顯示不同類型的對話框
-            if success_rate >= 80:
-                UnifiedMessageDialog.show_success(self.window, result_msg)
-            else:
-                UnifiedMessageDialog.show_warning(self.window, result_msg)
-
-            self.current_upload_dialog = None
-
-        except Exception as e:
-            print(f"❌ 顯示上傳結果通知失敗: {e}")
-            UnifiedMessageDialog.show_error(self.window, f"上傳完成，但顯示結果時發生錯誤：{str(e)}")
 
     def create_button(self, parent, text, command, style_type='Custom'):
         """建立標準化按鈕"""

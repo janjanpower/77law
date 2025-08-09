@@ -116,7 +116,7 @@ class CaseDatabaseUploader:
             print(f"  📈 總計: {self.total_cases} 筆")
             print(f"  ✅ 成功: {self.uploaded_count} 筆")
             print(f"  ❌ 失敗: {self.failed_count} 筆")
-            print(f"  📊 成功率: {summary['success_rate']}%")
+
 
             if complete_callback:
                 complete_callback(upload_success, summary)

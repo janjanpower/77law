@@ -79,45 +79,28 @@ class FolderCreator:
 
     def _create_case_folder(self, case_type_folder: str, case_data: CaseData) -> Optional[str]:
         """
-        🔥 修改：建立案件資料夾（使用案件編號_當事人格式）
-
-        Args:
-            case_type_folder: 案件類型資料夾路徑
-            case_data: 案件資料
-
-        Returns:
-            資料夾路徑或None
+        建立案件資料夾（使用案件編號_當事人格式），嚴格模式：不進行舊格式或模糊比對
         """
         try:
-            # 使用新的命名邏輯
-            safe_folder_name = self.validator.get_safe_case_folder_name(case_data)
+            safe_folder_name = self.validator.get_safe_case_folder_name(case_data)  # e.g. 114001_王小明
             print(f"📁 案件資料夾名稱: {safe_folder_name}")
 
-            # 檢查名稱衝突
-            has_conflict, final_name = self.validator.check_folder_conflicts(
-                case_type_folder, safe_folder_name
-            )
+            # 定位案件類型根目錄
+            from config.settings import AppConfig
+            case_type_folder_name = AppConfig.CASE_TYPE_FOLDERS.get(case_data.case_type)
+            case_type_path = os.path.join(self.base_data_folder, case_type_folder_name) if hasattr(self, 'base_data_folder') else case_type_folder
 
-            if has_conflict:
-                print(f"⚠️ 檢測到名稱衝突，使用最終名稱: {final_name}")
-                safe_folder_name = final_name
+            # 嚴格路徑：直接用新格式建立；如已存在，加尾綴避免覆蓋
+            case_folder = os.path.join(case_type_path, safe_folder_name)
+            original = case_folder
+            suffix = 2
+            while os.path.exists(case_folder):
+                case_folder = f"{original}-{suffix}"
+                suffix += 1
 
-            case_folder_path = os.path.join(case_type_folder, safe_folder_name)
-            print(f"📁 案件資料夾路徑: {case_folder_path}")
-
-            # 驗證路徑
-            is_valid, error_msg = self.validator.validate_path(case_folder_path)
-            if not is_valid:
-                print(f"❌ 案件資料夾路徑驗證失敗: {error_msg}")
-                return None
-
-            if not os.path.exists(case_folder_path):
-                os.makedirs(case_folder_path, exist_ok=True)
-                print(f"✅ 建立案件資料夾: {safe_folder_name}")
-            else:
-                print(f"ℹ️ 案件資料夾已存在: {safe_folder_name}")
-
-            return case_folder_path
+            os.makedirs(case_folder, exist_ok=True)
+            print(f"✅ 建立（或確保存在）案件資料夾: {case_folder}")
+            return case_folder
 
         except Exception as e:
             print(f"❌ 建立案件資料夾失敗: {e}")
