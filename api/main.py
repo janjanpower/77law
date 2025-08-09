@@ -33,6 +33,7 @@ from api.routes.file_routes import router as file_router
 from api.routes.case_upsert_routes import router as cases_upsert_router
 from api.routes import case_upload_routes
 from api.routes.lawyer_routes import router as lawyer_router
+from api.routes import lawyer_routes
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
@@ -43,6 +44,7 @@ app.include_router(file_router)
 app.include_router(cases_upsert_router)
 app.include_router(case_upload_routes.router)
 app.include_router(lawyer_router)
+app.include_router(lawyer_routes.router, prefix="/api")
 # 掛載 API 路由
 app.include_router(api_routes.router, prefix="/api/auth", tags=["auth"])
 

@@ -68,6 +68,7 @@ TENANTS = {
 class TenantCheckRequest(BaseModel):
     tenant_code: str
     line_user_id: str
+    is_lawyer: Optional[bool] = False
 
 
 def count_current_usage(db: Session, client_id: str) -> int:
@@ -134,29 +135,34 @@ def check_limit(payload: CheckLimitIn, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/bind-user", response_model=BindLawyerOut)
-def bind_user(payload: BindLawyerIn, db: Session = Depends(get_db)):
-    client = resolve_client_by_code(db, payload.tenant_code)
-    if not client:
-        return BindLawyerOut(success=False, reason="invalid_tenant_code")
+class BindUserRequest(BaseModel):
+    tenant_code: str
+    line_user_id: str
 
-    # （可選）保守起見再檢查一次上限
-    limit = int(getattr(client, "max_users", 0) or 0)
-    usage = count_current_usage(db, client.client_id)
-    if limit and usage >= limit:
-        return BindLawyerOut(success=False, reason="limit_reached")
+@router.post("/lawyer/bind-user")
+def bind_user(data: BindUserRequest):
+    # 假資料（之後可改為查詢資料庫）
+    tenant_info = {
+        "tenant": "喜憨兒事務所",
+        "limit": 3,
+        "usage": 1
+    }
 
-    ok = upsert_lawyer_binding(db, client.client_id, payload.line_user_id)
-    if ok:
-        return BindLawyerOut(
-            success=True,
-            tenant={"id": client.client_id, "name": client.client_name},
-            role="lawyer",
-        )
-    return BindLawyerOut(success=False, reason="already_bound")
+    # 模擬回傳
+    return {
+        "success": True,
+        "tenant": tenant_info["tenant"],
+        "limit": tenant_info["limit"],
+        "usage": tenant_info["usage"],
+        "line_user_id": data.line_user_id,
+        "message": f"已成功綁定 {tenant_info['tenant']}"
+    }
 
 @router.post("/check_tenant_plan")
 def check_tenant_plan(data: TenantCheckRequest):
+    if data.is_lawyer:  # True 才回整包假資料
+        return {"success": True, "tenants": TENANTS}
+
     tenant_info = TENANTS.get(data.tenant_code)
     if not tenant_info:
         return {"success": False, "reason": "invalid_tenant_code"}
@@ -164,5 +170,5 @@ def check_tenant_plan(data: TenantCheckRequest):
         "success": True,
         "tenant": tenant_info["name"],
         "limit": tenant_info["limit"],
-        "usage": tenant_info["usage"]
+        "usage": tenant_info["usage"],
     }
