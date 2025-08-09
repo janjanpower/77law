@@ -8,6 +8,7 @@
 """
 
 import os
+import shutil
 from typing import Optional, Dict, List, Any
 from models.case_model import CaseData
 
