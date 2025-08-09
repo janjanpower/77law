@@ -5,12 +5,13 @@ api/models_control.py
 整合 Heroku PostgreSQL 的使用者認證和 LINE 用戶管理
 """
 
-import os
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, func, Text, ForeignKey
-from sqlalchemy.orm import relationship, Session
-from sqlalchemy.ext.declarative import declarative_base
-from typing import Dict, Any, List, Optional
 from datetime import datetime
+from typing import Dict, Any, List, Optional
+
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, func, Text, ForeignKey
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, Session
+
 
 # 使用現有的 Base 或建立新的
 try:
@@ -44,13 +45,6 @@ class LoginUser(Base):
     plan_type = Column(String(30), default="basic_5", comment="方案類型")
     max_users = Column(Integer, default=5, comment="方案人數上限")
     current_users = Column(Integer, default=0, comment="目前 LINE 用戶數")
-
-    # 聯絡資訊 (可選)
-    contact_email = Column(String(100), nullable=True, comment="聯絡信箱")
-    contact_phone = Column(String(20), nullable=True, comment="聯絡電話")
-
-    # 備註欄位
-    notes = Column(Text, nullable=True, comment="備註說明")
 
     # 關聯到 LINE 用戶
     line_users = relationship("ClientLineUsers", back_populates="client", cascade="all, delete-orphan")

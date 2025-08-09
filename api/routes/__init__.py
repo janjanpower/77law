@@ -6,48 +6,8 @@ API Routes 模組
 統一管理所有API路由
 """
 
-# 導入所有路由器
-try:
-    from .webhook_routes import router as webhook_router
-    WEBHOOK_ROUTES_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ 警告：無法載入 webhook_routes - {e}")
-    webhook_router = None
-    WEBHOOK_ROUTES_AVAILABLE = False
-
-try:
-    from .case_routes import router as case_router
-    CASE_ROUTES_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ 警告：無法載入 case_routes - {e}")
-    case_router = None
-    CASE_ROUTES_AVAILABLE = False
-
-try:
-    from .health_routes import router as health_router
-    HEALTH_ROUTES_AVAILABLE = True
-except ImportError as e:
-    print(f"⚠️ 警告：無法載入 health_routes - {e}")
-    health_router = None
-    HEALTH_ROUTES_AVAILABLE = False
-
-# 路由器列表
-available_routers = []
-
-if webhook_router:
-    available_routers.append(("webhook", webhook_router, "/webhook"))
-
-if case_router:
-    available_routers.append(("cases", case_router, "/api/cases"))
-
-if health_router:
-    available_routers.append(("health", health_router, ""))
-
 # 匯出
 __all__ = [
-    "webhook_router",
-    "case_router",
-    "health_router",
     "available_routers",
     "WEBHOOK_ROUTES_AVAILABLE",
     "CASE_ROUTES_AVAILABLE",

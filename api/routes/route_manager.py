@@ -164,23 +164,23 @@ class RouteManagerLogic:
         Returns:
             Dict[str, bool]: 各路由的載入狀態
         """
-        # 定義路由配置
-        route_configs = [
-            {
-                "module_path": "routes.webhook_routes",
-                "route_name": "webhook",
-                "prefix": "/webhook",
-                "tags": ["Webhook"],
-                "require_db": False
-            },
-            {
-                "module_path": "routes.health_routes",
-                "route_name": "health",
-                "prefix": "",
-                "tags": ["健康檢查"],
-                "require_db": False
-            }
-        ]
+        # # 定義路由配置
+        # route_configs = [
+        #     {
+        #         "module_path": "routes.webhook_routes",
+        #         "route_name": "webhook",
+        #         "prefix": "/webhook",
+        #         "tags": ["Webhook"],
+        #         "require_db": False
+        #     },
+        #     {
+        #         "module_path": "routes.health_routes",
+        #         "route_name": "health",
+        #         "prefix": "",
+        #         "tags": ["健康檢查"],
+        #         "require_db": False
+        #     }
+        # ]
 
         # 需要資料庫的路由
         if database_url:
