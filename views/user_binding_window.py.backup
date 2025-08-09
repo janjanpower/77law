@@ -1,0 +1,597 @@
+
+# -*- coding: utf-8 -*-
+"""
+views/user_binding_window.py
+法律案件管理系統 - 用戶綁定狀態視窗
+顯示方案使用人數和 LINE 綁定 QR Code
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+import qrcode
+from PIL import Image, ImageTk
+import os
+import io
+from typing import Dict, Any, Optional, Callable
+import requests
+from datetime import datetime
+
+try:
+    from views.base_window import BaseWindow
+    from config.settings import AppConfig
+except ImportError as e:
+    print(f"⚠️ 導入模組失敗: {e}")
+    # 提供備用的基礎配置
+    class BaseWindow:
+        def __init__(self, title="視窗", width=400, height=300, resizable=True, parent=None):
+            self.window = tk.Tk()
+            self.window.title(title)
+            self.window.geometry(f"{width}x{height}")
+            self.title = title
+            self.width = width
+            self.height = height
+            self.window.resizable(resizable, resizable)
+
+        def close(self):
+            if self.window:
+                self.window.destroy()
+
+        def show(self):
+            if self.window:
+                self.window.deiconify()
+                self.window.lift()
+                self.window.focus_force()
+                self.window.mainloop()
+
+    class AppConfig:
+        COLORS = {
+            'window_bg': '#f0f0f0',
+            'button_bg': '#4a90e2',
+            'button_fg': 'white',
+            'text_color': '#333333',
+            'error_color': '#e74c3c',
+            'success_color': '#27ae60',
+            'info_color': '#3498db'
+        }
+        FONTS = {
+            'button': ('Microsoft JhengHei UI', 10),
+            'button': ('Microsoft JhengHei UI', 10, 'bold'),
+            'title': ('Microsoft JhengHei UI', 12, 'bold'),
+            'large': ('Microsoft JhengHei UI', 14, 'bold')
+        }
+
+
+class UserBindingWindow(BaseWindow):
+    """用戶綁定狀態視窗 - 調用現有架構"""
+
+    def __init__(
+        self,
+        user_data: Dict[str, Any],
+        api_base_url: str = "https://law-controller-4a92b3cfcb5d.herokuapp.com",
+        on_binding_success: Optional[Callable] = None,
+        on_continue: Optional[Callable] = None
+    ):
+        """
+        初始化用戶綁定狀態視窗
+
+        Args:
+            user_data: 登入成功的用戶資料
+            api_base_url: API 基礎 URL
+            on_binding_success: 綁定成功回調函數
+            on_continue: 繼續進入系統回調函數
+        """
+        # 基本屬性
+        self.user_data = user_data
+        self.api_base_url = api_base_url.rstrip('/')
+        self.on_binding_success = on_binding_success
+        self.on_continue = on_continue
+
+        # 內部狀態
+        self.client_id = user_data.get('client_id', '')
+        self.client_name = user_data.get('client_name', '未知事務所')
+        self.current_users = user_data.get('current_users', 0)
+        self.max_users = user_data.get('max_users', 5)
+
+        # 綁定狀態追蹤
+        self.has_new_binding = False  # 是否有新的綁定成功
+        self.binding_check_job = None  # 綁定檢查任務
+
+        # UI 元件變數
+        self.usage_label = None
+        self.qr_label = None
+        self.qr_image = None
+        self.refresh_btn = None
+        self.continue_btn = None
+        self.status_label = None
+        self.status_frame = None
+
+        # 使用現有的 BaseWindow 結構
+        super().__init__(
+            title="LINE 用戶綁定",
+            width=450,
+            height=600,  # 增高以容納進入系統按鈕
+            resizable=True,
+            parent=None
+        )
+
+        # 開始定期檢查綁定狀態
+        self._start_binding_check()
+
+    def _create_layout(self):
+        """重寫 BaseWindow 的佈局方法"""
+        # 調用父類建立基礎標題列
+        super()._create_layout()
+
+        # 移除標準關閉按鈕功能（避免意外關閉）
+        self.window.protocol("WM_DELETE_WINDOW", self._on_window_close)
+
+        # 建立主要內容
+        self._setup_main_content()
+        self._load_initial_data()
+
+    def _setup_main_content(self):
+        """建立主要內容區域"""
+        # 清除 content_frame 現有內容
+        for widget in self.content_frame.winfo_children():
+            widget.destroy()
+
+        # 設定內邊距
+        self.content_frame.configure(padx=20, pady=20)
+
+        # 標題區域
+        self._create_title_section()
+
+        # 使用狀況區域
+        self._create_usage_section()
+
+        # QR Code 區域
+        self._create_qrcode_section()
+
+        # 按鈕區域
+        self._create_button_section()
+
+        # 進入系統按鈕（新增）
+        self._create_enter_system_section()
+
+        # 狀態列
+        self._create_status_section()
+
+    def _create_title_section(self):
+        """建立標題區域"""
+        title_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        title_frame.pack(fill='x', pady=(0, 20))
+
+        # 綁定標題
+        title_label = tk.Label(
+            title_frame,
+            text="您好",
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color']
+        )
+        title_label.pack()
+
+        # 事務所名稱
+        name_label = tk.Label(
+            title_frame,
+            text=f"{self.client_name}",
+            font=15,
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['info_color']
+        )
+        name_label.pack(pady=(5, 0))
+
+    def _create_usage_section(self):
+        """建立使用狀況區域"""
+        usage_frame = tk.LabelFrame(
+            self.content_frame,
+            text="目前方案使用人數",
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            padx=15,
+            pady=10
+        )
+        usage_frame.pack(fill='x', pady=(0, 20))
+
+        # 使用人數顯示
+        self.usage_label = tk.Label(
+            usage_frame,
+            text=f"{self.current_users}/{self.max_users}",
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['success_color'] if self.current_users < self.max_users else AppConfig.COLORS['error_color']
+        )
+        self.usage_label.pack(pady=5)
+
+        # 說明文字
+        desc_text = f"({self.current_users} 是當前使用人數，{self.max_users} 是該方案下最大上限人數)"
+        desc_label = tk.Label(
+            usage_frame,
+            text=desc_text,
+            font=('Microsoft JhengHei UI', 9),
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#666666',
+            wraplength=350
+        )
+        desc_label.pack(pady=(0, 5))
+
+    def _create_qrcode_section(self):
+        """建立 QR Code 區域"""
+        qr_frame = tk.LabelFrame(
+            self.content_frame,
+            text="掃描QRcode綁定用戶數量",
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            padx=10,
+            pady=10
+        )
+        qr_frame.pack(fill='x', pady=(0, 20))
+
+        # QR Code 顯示區域
+        self.qr_label = tk.Label(
+            qr_frame,
+            text="正在產生 QR Code...",
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            width=30,
+            height=10,
+            relief='sunken',
+            bd=1
+        )
+        self.qr_label.pack(pady=10)
+
+        # QR Code 說明
+        qr_desc = tk.Label(
+            qr_frame,
+            text="請使用 LINE 掃描 QR Code 進行綁定",
+            font=('Microsoft JhengHei UI', 9),
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#666666'
+        )
+        qr_desc.pack()
+
+    def _create_button_section(self):
+        """建立按鈕區域（只有重新整理按鈕）"""
+        button_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        button_frame.pack(fill='x', pady=(10, 0))
+
+        # 重新整理按鈕（置中）
+        self.refresh_btn = tk.Button(
+            button_frame,
+            text="重新整理",
+            command=self._refresh_data,
+            font=AppConfig.FONTS['button'],
+            bg='#95a5a6',
+            fg='white',
+            width=12,
+            height=1,
+            relief='raised',
+            bd=2
+        )
+        self.refresh_btn.pack()
+
+    def _create_enter_system_section(self):
+        """建立進入系統按鈕區域（新增）"""
+        enter_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        enter_frame.pack(fill='x', pady=(20, 0))
+
+        # 進入系統按鈕
+        self.continue_btn = tk.Button(
+            enter_frame,
+            text="進入系統",
+            command=self._enter_system,
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            width=20,
+            height=2,
+            relief='raised',
+            bd=2
+        )
+        self.continue_btn.pack()
+
+    def _create_status_section(self):
+        """建立狀態列"""
+        self.status_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        self.status_frame.pack(fill='x', pady=(10, 0))
+
+        self.status_label = tk.Label(
+            self.status_frame,
+            text="",
+            font=('Microsoft JhengHei UI', 9),
+            bg=AppConfig.COLORS['window_bg'],
+            fg='#666666'
+        )
+        # 預設不顯示，需要時才 pack
+
+    def _load_initial_data(self):
+        """載入初始資料"""
+        try:
+            # 生成 QR Code
+            self._generate_qrcode()
+
+            # 更新狀態
+            self._update_status("請掃描 QR Code 進行 LINE 綁定", "info")
+
+        except Exception as e:
+            print(f"❌ 載入初始資料失敗: {e}")
+            self._update_status(f"初始化失敗: {str(e)}", "error")
+
+    def _start_binding_check(self):
+        """開始定期檢查綁定狀態"""
+        self._check_binding_status()
+
+    def _check_binding_status(self):
+        """檢查是否有新的綁定"""
+        try:
+            # 取得最新的用戶數量
+            original_users = self.current_users
+            self._update_user_count()
+
+            # 如果用戶數量增加，表示有新的綁定
+            if self.current_users > original_users:
+                self.has_new_binding = True
+                self._update_status("檢測到新的綁定！", "success")
+
+                # 顯示綁定成功對話框
+                self._show_binding_success_dialog()
+
+            # 繼續檢查（每5秒檢查一次）
+            self.binding_check_job = self.window.after(5000, self._check_binding_status)
+
+        except Exception as e:
+            print(f"❌ 檢查綁定狀態失敗: {e}")
+            # 繼續檢查
+            self.binding_check_job = self.window.after(5000, self._check_binding_status)
+
+    def _show_binding_success_dialog(self):
+        """顯示綁定成功對話框"""
+        try:
+            # 動態導入綁定成功對話框
+            from views.binding_success_dialog import BindingSuccessDialog
+
+            def on_confirm_callback(user_data):
+                print(f"✅ 綁定成功確認")
+                if self.on_binding_success:
+                    self.on_binding_success(user_data)
+
+            # 更新用戶資料
+            updated_user_data = self.user_data.copy()
+            updated_user_data['current_users'] = self.current_users
+            updated_user_data['max_users'] = self.max_users
+
+            # 建立並顯示對話框
+            success_dialog = BindingSuccessDialog(
+                user_data=updated_user_data,
+                on_confirm=on_confirm_callback,
+                parent=self.window
+            )
+
+            # 顯示對話框
+            success_dialog.show_dialog()
+
+        except ImportError as e:
+            print(f"⚠️ 無法載入綁定成功對話框: {e}")
+            # 使用簡單的訊息框
+            messagebox.showinfo(
+                "綁定成功",
+                f"LINE 用戶綁定成功！\n目前使用人數：{self.current_users}/{self.max_users}",
+                parent=self.window
+            )
+
+    def _enter_system(self):
+        """進入系統按鈕處理"""
+        try:
+            self._update_status("正在進入系統...", "info")
+
+            # 停止綁定檢查
+            if self.binding_check_job:
+                self.window.after_cancel(self.binding_check_job)
+                self.binding_check_job = None
+
+            # 最後一次更新用戶數量
+            self._update_user_count()
+
+            # 更新用戶資料
+            updated_user_data = self.user_data.copy()
+            updated_user_data['current_users'] = self.current_users
+            updated_user_data['max_users'] = self.max_users
+
+            # 呼叫繼續回調
+            if self.on_continue:
+                self.on_continue(updated_user_data)
+
+            # 關閉視窗
+            self.close()
+
+        except Exception as e:
+            print(f"❌ 進入系統失敗: {e}")
+            self._update_status(f"進入系統失敗: {str(e)}", "error")
+
+    def _on_window_close(self):
+        """處理視窗關閉事件"""
+        # 確認是否要關閉
+        result = messagebox.askyesno(
+            "確認關閉",
+            "是否要關閉綁定視窗？\n關閉後將直接進入系統。",
+            parent=self.window
+        )
+
+        if result:
+            self._enter_system()
+
+    def close(self):
+        """關閉視窗"""
+        # 停止綁定檢查
+        if self.binding_check_job:
+            self.window.after_cancel(self.binding_check_job)
+            self.binding_check_job = None
+
+        # 調用父類關閉方法
+        super().close()
+
+    # ==================== 公共方法 ====================
+
+    def set_binding_success_callback(self, callback: Callable):
+        """設定綁定成功回調"""
+        self.on_binding_success = callback
+
+    def set_continue_callback(self, callback: Callable):
+        """設定繼續回調"""
+        self.on_continue = callback
+
+    def update_user_data(self, new_user_data: Dict[str, Any]):
+        """更新用戶資料"""
+        self.user_data = new_user_data
+        self.current_users = new_user_data.get('current_users', self.current_users)
+        self.max_users = new_user_data.get('max_users', self.max_users)
+
+        # 重新整理顯示
+        self._refresh_data()
+
+
+    def _generate_qrcode(self):
+        """產生 LINE 綁定 QR Code"""
+        try:
+            # 建立綁定 URL（根據您的 N8N Webhook 設定）
+            # 這個 URL 應該觸發您的 LINE Webhook 並包含事務所資訊
+            binding_url = f"https://your-n8n-webhook-url.com/bind-user?client_id={self.client_id}&client_name={self.client_name}"
+
+            # 產生 QR Code
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=1,
+                border=0,
+            )
+            qr.add_data(binding_url)
+            qr.make(fit=True)
+
+            # 建立 QR Code 圖片
+            qr_image = qr.make_image(fill_color="black", back_color="white")
+
+            # 調整圖片大小
+            qr_image = qr_image.resize((100, 100), Image.Resampling.LANCZOS)
+
+            # 轉換為 Tkinter 可用的格式
+            self.qr_image = ImageTk.PhotoImage(qr_image)
+
+            # 更新顯示
+            self.qr_label.configure(
+                image=self.qr_image,
+                text="",
+                width=0,
+                height=0
+            )
+
+            print(f"✅ QR Code 已產生: {binding_url}")
+
+        except Exception as e:
+            print(f"❌ 產生 QR Code 失敗: {e}")
+            self.qr_label.configure(
+                text=f"QR Code 產生失敗\n{str(e)}",
+                image="",
+                fg=AppConfig.COLORS['error_color']
+            )
+
+    def _refresh_data(self):
+        """重新整理資料"""
+        try:
+            self._update_status("正在重新整理...", "info")
+
+            # 重新取得用戶數量
+            self._update_user_count()
+
+            # 重新產生 QR Code
+            self._generate_qrcode()
+
+            self._update_status("重新整理完成", "success")
+
+        except Exception as e:
+            print(f"❌ 重新整理失敗: {e}")
+            self._update_status(f"重新整理失敗: {str(e)}", "error")
+
+    def _update_user_count(self):
+        """更新用戶數量"""
+        try:
+            # 呼叫 API 取得最新的用戶數量
+            response = requests.get(
+                f"{self.api_base_url}/api/auth/client-status/{self.client_id}",
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                client_data = data.get('data', {})
+
+                self.current_users = client_data.get('current_users', self.current_users)
+                self.max_users = client_data.get('max_users', self.max_users)
+
+                # 更新顯示
+                self.usage_label.configure(
+                    text=f"{self.current_users}/{self.max_users}",
+                    fg=AppConfig.COLORS['success_color'] if self.current_users < self.max_users else AppConfig.COLORS['error_color']
+                )
+
+                print(f"✅ 用戶數量已更新: {self.current_users}/{self.max_users}")
+
+        except requests.RequestException as e:
+            print(f"⚠️ 無法更新用戶數量: {e}")
+        except Exception as e:
+            print(f"❌ 更新用戶數量時發生錯誤: {e}")
+
+
+    def _update_status(self, message: str, status_type: str = "info"):
+        """更新狀態訊息"""
+        color_map = {
+            "success": AppConfig.COLORS['success_color'],
+            "error": AppConfig.COLORS['error_color'],
+            "info": AppConfig.COLORS['info_color'],
+            "warning": "#f39c12"
+        }
+
+        self.status_label.configure(
+            text=message,
+            fg=color_map.get(status_type, AppConfig.COLORS['text_color'])
+        )
+
+        if message:  # 如果有訊息才顯示
+            self.status_label.pack(pady=(5, 0))
+        else:  # 清空訊息時隱藏
+            self.status_label.pack_forget()
+
+        # 自動清除狀態訊息
+        if status_type in ["success", "error"]:
+            self.window.after(3000, lambda: self._update_status("", ""))
+
+    # ==================== 公共方法 ====================
+
+
+    def show(self):
+        """顯示視窗（兼容性方法）"""
+        try:
+            self.window.deiconify()
+            self.window.lift()
+            self.window.focus_force()
+            self.window.mainloop()
+        except Exception as e:
+            print(f"❌ 顯示視窗失敗: {e}")
+
+    def show_and_wait(self) -> Dict[str, Any]:
+        """顯示視窗並等待結果"""
+        try:
+            # 顯示視窗
+            self.window.deiconify()
+            self.window.lift()
+            self.window.focus_force()
+
+            # 啟動事件循環
+            self.window.mainloop()
+
+            return self.user_data
+        except Exception as e:
+            print(f"❌ 顯示視窗失敗: {e}")
+            return self.user_data

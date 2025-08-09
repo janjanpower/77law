@@ -1,0 +1,269 @@
+# -*- coding: utf-8 -*-
+"""
+views/binding_success_dialog.py
+法律案件管理系統 - 綁定成功確認對話框（對應圖二）
+統一樣式，簡潔實用
+"""
+
+import tkinter as tk
+from tkinter import ttk
+from typing import Dict, Any, Optional, Callable
+
+try:
+    from views.base_window import BaseWindow
+    from config.settings import AppConfig
+except ImportError as e:
+    print(f"⚠️ 導入模組失敗: {e}")
+    # 提供備用配置
+    class BaseWindow:
+        def __init__(self, title="視窗", width=400, height=300, resizable=True, parent=None):
+            self.window = tk.Tk()
+            self.window.title(title)
+            self.window.geometry(f"{width}x{height}")
+            self.title = title
+
+        def _create_layout(self):
+            pass
+
+        def close(self):
+            if self.window:
+                self.window.destroy()
+
+        def show(self):
+            if self.window:
+                self.window.deiconify()
+                self.window.lift()
+                self.window.focus_force()
+                self.window.mainloop()
+
+    class AppConfig:
+        COLORS = {
+            'window_bg': '#f0f0f0',
+            'button_bg': '#4a90e2',
+            'button_fg': 'white',
+            'text_color': '#333333',
+            'success_color': '#27ae60'
+        }
+        FONTS = {
+            'default': ('Microsoft JhengHei UI', 10),
+            'button': ('Microsoft JhengHei UI', 10, 'bold'),
+            'title': ('Microsoft JhengHei UI', 12, 'bold')
+        }
+
+
+class BindingSuccessDialog(BaseWindow):
+    """綁定成功確認對話框 - 對應圖二的視窗"""
+
+    def __init__(
+        self,
+        user_data: Dict[str, Any],
+        on_confirm: Optional[Callable] = None,
+        parent=None
+    ):
+        """
+        初始化綁定成功對話框
+
+        Args:
+            user_data: 用戶資料
+            on_confirm: 確認回調函數
+            parent: 父視窗
+        """
+        self.user_data = user_data
+        self.on_confirm = on_confirm
+        self.parent_window = parent
+        self.confirmed = False
+
+        # 提取用戶資訊
+        self.client_name = user_data.get('client_name', '事務所')
+        self.current_users = user_data.get('current_users', 0)
+        self.max_users = user_data.get('max_users', 5)
+
+        # 初始化視窗
+        super().__init__(
+            title="綁定成功",
+            width=350,
+            height=280,
+            resizable=True,
+            parent=parent
+        )
+
+        # 設定為模態對話框
+        if parent:
+            self.window.transient(parent)
+            self.window.grab_set()
+
+    def _create_layout(self):
+        """建立對話框佈局"""
+        # 呼叫父類建立基礎佈局
+        super()._create_layout()
+
+        # 建立主要內容
+        self._setup_dialog_content()
+
+    def _setup_dialog_content(self):
+        """建立對話框內容"""
+        # 清除 content_frame 現有內容（如果有的話）
+        if hasattr(self, 'content_frame'):
+            for widget in self.content_frame.winfo_children():
+                widget.destroy()
+        else:
+            # 如果沒有 content_frame，直接在 window 上建立
+            self.content_frame = tk.Frame(
+                self.window,
+                bg=AppConfig.COLORS['window_bg'],
+                padx=20,
+                pady=20
+            )
+            self.content_frame.pack(fill='both', expand=True)
+
+        # 標題區域
+        self._create_title_section()
+
+        # 成功訊息區域
+        self._create_message_section()
+
+        # 按鈕區域
+        self._create_button_section()
+
+    def _create_title_section(self):
+        """建立標題區域"""
+        title_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        title_frame.pack(fill='x', pady=(0, 15))
+
+    def _create_title_section(self):
+        """建立標題區域"""
+        title_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        title_frame.pack(fill='x', pady=(0, 15))
+
+        # 綁定成功標題
+        title_label = tk.Label(
+            title_frame,
+            text="綁定成功",
+            font=AppConfig.FONTS['title'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['success_color']
+        )
+        title_label.pack()
+
+    def _create_message_section(self):
+        """建立訊息區域"""
+        message_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        message_frame.pack(fill='both', expand=True, pady=(0, 20))
+
+        # user_id 綁定成功訊息
+        user_msg_label = tk.Label(
+            message_frame,
+            text="user_id綁定成功",
+            font=AppConfig.FONTS['default'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color']
+        )
+        user_msg_label.pack(pady=(0, 10))
+
+        # 按鈕說明區域
+        button_desc_frame = tk.Frame(message_frame, bg=AppConfig.COLORS['window_bg'])
+        button_desc_frame.pack(fill='x', pady=(0, 10))
+
+        # 按鈕說明標題
+        button_title = tk.Label(
+            button_desc_frame,
+            text="按鈕：",
+            font=AppConfig.FONTS['default'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color']
+        )
+        button_title.pack(anchor='w')
+
+        # 使用人數資訊
+        usage_info = tk.Label(
+            button_desc_frame,
+            text=f"• 目前使用人數：{self.current_users}/{self.max_users}",
+            font=AppConfig.FONTS['default'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color']
+        )
+        usage_info.pack(anchor='w', padx=(10, 0))
+
+        # 提醒文字
+        reminder_text = tk.Label(
+            button_desc_frame,
+            text="• 請通知其他同事使用程式時系統時要輸入您的帳號密碼",
+            font=AppConfig.FONTS['default'],
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            wraplength=280,
+            justify='left'
+        )
+        reminder_text.pack(anchor='w', padx=(10, 0), pady=(5, 0))
+
+    def _create_button_section(self):
+        """建立按鈕區域"""
+        button_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        button_frame.pack(fill='x', pady=(10, 0))
+
+        # 確定按鈕
+        confirm_btn = tk.Button(
+            button_frame,
+            text="確定",
+            command=self._on_confirm,
+            font=AppConfig.FONTS['button'],
+            bg=AppConfig.COLORS['button_bg'],
+            fg=AppConfig.COLORS['button_fg'],
+            width=12,
+            height=1,
+            relief='raised',
+            bd=2
+        )
+        confirm_btn.pack()
+
+        # 設定為預設按鈕（按 Enter 可觸發）
+        confirm_btn.focus_set()
+        self.window.bind('<Return>', lambda e: self._on_confirm())
+
+    def _on_confirm(self):
+        """確定按鈕事件"""
+        self.confirmed = True
+
+        # 呼叫回調函數
+        if self.on_confirm:
+            self.on_confirm(self.user_data)
+
+        # 關閉對話框
+        self.close()
+
+    def show_dialog(self) -> bool:
+        """顯示對話框並等待結果"""
+        try:
+            self.window.deiconify()
+            self.window.lift()
+            self.window.focus_force()
+            self.window.mainloop()
+            return self.confirmed
+        except Exception as e:
+            print(f"❌ 顯示綁定成功對話框失敗: {e}")
+            return True  # 發生錯誤時也算確認
+
+
+# ==================== 使用範例 ====================
+
+if __name__ == "__main__":
+    """測試綁定成功對話框"""
+
+    # 測試用戶資料
+    test_user_data = {
+        'client_name': '不專業法律事務所',
+        'current_users': 3,
+        'max_users': 5
+    }
+
+    def on_confirm_callback(user_data):
+        print(f"✅ 用戶確認，資料: {user_data}")
+
+    # 建立並顯示對話框
+    dialog = BindingSuccessDialog(
+        user_data=test_user_data,
+        on_confirm=on_confirm_callback
+    )
+
+    result = dialog.show_dialog()
+    print(f"對話框結果: {result}")

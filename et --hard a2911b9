@@ -1,0 +1,53 @@
+* [33ma2911b9[m[33m ([m[1;32mmaster[m[33m)[m Add PyJWT for JWT authentication
+* [33md7fc9f6[m[33m ([m[1;31mheroku/main[m[33m, [m[1;31mheroku/HEAD[m[33m)[m 整理代碼3
+* [33medc8467[m 整理代碼2
+* [33m972171e[m 整理代碼1
+* [33m88c29ec[m[33m ([m[1;31morigin/master[m[33m, [m[1;31morigin/HEAD[m[33m)[m 維護代碼1
+* [33m02898cc[m[33m ([m[1;31mheroku/master[m[33m)[m 修正6
+* [33m7b3926f[m[33m ([m[1;36mHEAD[m[33m)[m 修正5
+* [33m1629c95[m 修正4
+* [33m0735bfc[m 修正3
+* [33m8bba2d0[m 修正2
+* [33md4a9cec[m 修正
+* [33mfca96be[m 緊急修復: 簡化webhook邏輯，移除N8N轉發
+* [33m8edee34[m 緊急修復: 添加 httpx 依賴
+* [33m6833e44[m 緊急修復: 添加 httpx 依賴
+* [33m471a949[m 修復 CloudStorageManager 和 cloud_storage 屬性錯誤
+* [33m9184101[m fix: clean .python-version with correct encoding
+* [33mad147ef[m chore: ignore runtime.txt and remove from Git tracking
+* [33mf0d9686[m chore: remove runtime.txt to fix Heroku deploy
+* [33m1ab2f83[m fix: replace runtime.txt with .python-version
+* [33m47c3f08[m Add deployment files
+* [33m68014e6[m Add Heroku deployment files
+* [33m51b69f6[m 目前正常
+* [33mfdc41c3[m 檔案如何下載
+* [33m6584724[m 處理資料夾管理器
+* [33m3b5b54c[m 新2
+* [33m10bd020[m 新1
+* [33m07d0a9b[m 用戶查不到當事人，修復中
+* [33m6298d04[m 修正1
+* [33m79cd7bd[m 修正本地1
+* [33m0796d22[m N8N串聯7
+* [33m1151756[m N8N串聯6
+* [33m9bbf3d3[m N8N串聯5
+* [33mcc85d84[m N8N串聯4
+* [33mdd5edb5[m N8N串聯3
+* [33m95797da[m N8N串聯2
+* [33mc633999[m N8N串聯
+* [33m078d76d[m 修復ing
+* [33m704dafd[m 修復中10
+* [33m57f8a34[m 修復中9
+* [33m35329de[m 修復中8
+* [33mecdbba7[m 修復中7
+* [33m10591bc[m 修復中6
+* [33m6c45a0d[m 修復中5
+* [33m2452bb0[m 修復中4
+* [33m95f1e66[m 修復中3
+* [33m4802317[m 修復中22222
+* [33mffd9753[m 修復中!!!!!
+* [33m70708f6[m 拆分中1
+* [33m2098e20[m 拆分控制、邏輯層中
+* [33m42b6492[m 整理完成
+* [33m1d6a5a6[m[33m ([m[1;31morigin/main[m[33m, [m[1;31morigin/backup-main-[m[33m)[m 修復完成
+* [33m43ef643[m 修復中2
+* [33m9f33195[m 修復中
