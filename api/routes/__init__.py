@@ -9,9 +9,6 @@ API Routes 模組
 # 匯出
 __all__ = [
     "available_routers",
-    "WEBHOOK_ROUTES_AVAILABLE",
-    "CASE_ROUTES_AVAILABLE",
-    "HEALTH_ROUTES_AVAILABLE"
 ]
 
 # 路由註冊函數
@@ -40,21 +37,3 @@ def register_routes(app):
     print(f"📋 總計註冊 {registered_count} 個路由模組")
     return registered_count
 
-def get_route_info():
-    """取得路由資訊摘要"""
-    return {
-        "total_routers": len(available_routers),
-        "available_routes": [
-            {
-                "name": name,
-                "prefix": prefix,
-                "available": True
-            }
-            for name, _, prefix in available_routers
-        ],
-        "unavailable_routes": [
-            {"name": "webhook", "available": WEBHOOK_ROUTES_AVAILABLE},
-            {"name": "cases", "available": CASE_ROUTES_AVAILABLE},
-            {"name": "health", "available": HEALTH_ROUTES_AVAILABLE}
-        ]
-    }
