@@ -54,21 +54,12 @@ def resolve_client_by_code(db: Session, tenant_code: str) -> Optional[LoginUser]
         )
     return client
 
-# 假資料：暗號 → 事務所
-TENANTS = {
-    "55688": {
-        "id": "C001",
-        "name": "喜憨兒事務所",
-        "plan": "basic",
-        "limit": 3,
-        "usage": 1
-    }
-}
+
 
 class TenantCheckRequest(BaseModel):
     tenant_code: str
     line_user_id: str
-    is_lawyer: Optional[bool] = False
+    allow_bind: bool
 
 
 def count_current_usage(db: Session, client_id: str) -> int:
@@ -135,29 +126,50 @@ def check_limit(payload: CheckLimitIn, db: Session = Depends(get_db)):
     )
 
 
-class BindUserRequest(BaseModel):
-    tenant_code: str
-    line_user_id: str
+@router.post("/bind-user", response_model=BindLawyerOut)
+def bind_user(payload: BindLawyerIn):
+    """
+    綁定用戶 API
+    - 如果 allow_bind = False，直接拒絕
+    - 如果 allow_bind = True，直接回傳假資料（不連資料庫）
+    """
 
-@router.post("/lawyer/bind-user")
-def bind_user(data: BindUserRequest):
-    # 假資料（之後可改為查詢資料庫）
-    tenant_info = {
-        "tenant": "喜憨兒事務所",
+    # 如果不是 True，直接拒絕
+    if not payload.allow_bind:
+        return BindLawyerOut(
+            success=False,
+            reason="bind_not_allowed"
+        )
+
+    # 假資料（不連資料庫）
+    fake_tenant = {
+        "id": "C001",
+        "name": "喜憨兒事務所",
+        "plan": "basic",
         "limit": 3,
         "usage": 1
     }
 
-    # 模擬回傳
-    return {
-        "success": True,
-        "tenant": tenant_info["tenant"],
-        "limit": tenant_info["limit"],
-        "usage": tenant_info["usage"],
-        "line_user_id": data.line_user_id,
-        "message": f"已成功綁定 {tenant_info['tenant']}"
-    }
+    # 直接回傳綁定成功
+    return BindLawyerOut(
+        success=True,
+        tenant={
+            "id": fake_tenant["id"],
+            "name": fake_tenant["name"]
+        },
+        role="lawyer"
+    )
 
+# 假資料 - 暗號 -> 事務所資料
+TENANTS = {
+    "55688": {
+        "id": "C001",
+        "name": "喜憨兒事務所",
+        "plan": "basic",
+        "limit": 3,
+        "usage": 1
+    }
+}
 @router.post("/check_tenant_plan")
 def check_tenant_plan(data: TenantCheckRequest):
     if data.is_lawyer:  # True 才回整包假資料
