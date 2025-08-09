@@ -1,12 +1,19 @@
 # api/main.py — single-start, clean routing
-import os
-import sys
-from datetime import datetime
+import os, sys
 from pathlib import Path
-from importlib import util as importlib_util
 
+# sys.path 修正（確保 api.* 可匯入）
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from datetime import datetime
+from importlib import util as importlib_util
+from api.routes import api_routes
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 
 # ----------------------------
 # App
@@ -16,7 +23,8 @@ app = FastAPI(
     version="3.3.0",
     description="Law Controller API",
 )
-
+# 掛載 API 路由
+app.include_router(api_routes.router, prefix="/api/auth", tags=["auth"])
 # CORS（需要可自行收斂網域）
 app.add_middleware(
     CORSMiddleware,
@@ -26,11 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# sys.path 修正（確保 api.* 可匯入）
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
 
 # ----------------------------
 # Helper: include routes (with fallback) — guarded

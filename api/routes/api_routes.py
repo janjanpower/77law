@@ -1,24 +1,26 @@
 # -*- coding: utf-8 -*-
 """
 api/routes/api_routes.py
-— Consolidated auth routes (merged from auth_routes.py)
-— Uses AuthService; falls back to direct ORM when service import unavailable
+— Consolidated auth routes with JWT
+— /client-login 簽發 JWT；/me 範例端點驗證 JWT
 """
 
-from typing import Optional, Dict, Any
-from datetime import datetime
 import os
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session, sessionmaker
 
-# ==== DB session dependency ====
-# Prefer project SessionLocal; fallback to ad-hoc session maker via DATABASE_URL
+# === DB session dependency ===
 try:
-    from api.database import SessionLocal  # your project's session factory
+    from api.database import SessionLocal  # 專案既有
+    from sqlalchemy.orm import Session
 except Exception:
+    # 後備：直接用 DATABASE_URL 建立 SessionLocal（部署環境建議使用專案內的 SessionLocal）
     from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker, Session
     DATABASE_URL = os.getenv("DATABASE_URL", "")
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -32,29 +34,56 @@ def get_db():
     finally:
         db.close()
 
-# ==== Models ====
+# === ORM Models ===
 try:
     from api.models_control import LoginUser, ClientLineUsers
 except Exception:
-    # fallback relative import (if running differently)
+    # 若模組路徑不同，可視情況調整
     from models_control import LoginUser, ClientLineUsers  # type: ignore
 
-# ==== Service (preferred path) ====
-AuthService = None
-try:
-    from api.services.auth_service import AuthService as _AuthService
-    AuthService = _AuthService
-except Exception:
-    AuthService = None
+# === JWT 設定 ===
+import jwt  # PyJWT
 
-# ==== Schemas ====
+JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_TO_A_RANDOM_SECRET")
+JWT_ALG = os.getenv("JWT_ALGORITHM", "HS256")
+JWT_EXPIRE_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "8"))
+
+def _create_access_token(subject: str, claims: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    exp = now + timedelta(hours=JWT_EXPIRE_HOURS)
+    payload = {
+        "sub": subject,
+        "iat": int(now.timestamp()),
+        "exp": int(exp.timestamp()),
+    }
+    if claims:
+        payload.update(claims)
+    token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALG)
+    return {"token": token, "expires_at": exp}
+
+bearer_scheme = HTTPBearer(auto_error=True)
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> Dict[str, Any]:
+    """FastAPI 依賴：驗證並解碼 JWT，回傳 payload（無效或過期會拋 401）。"""
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+# === Schemas ===
 class ClientLoginRequest(BaseModel):
-    """Client (tenant) login request"""
-    client_id: str = Field(..., min_length=1, max_length=50, description="Tenant client_id")
-    password: str = Field(..., min_length=1, description="Password")
+    client_id: str = Field(..., min_length=1, max_length=50)
+    password: str = Field(..., min_length=1)
 
 class ClientLoginResponse(BaseModel):
-    """Client login response with usage and plan info"""
+    success: bool = True
+    token: str
+    token_type: str = "bearer"
+    expires_at: datetime
     client_id: str
     client_name: str
     user_status: str
@@ -65,80 +94,42 @@ class ClientLoginResponse(BaseModel):
     usage_percentage: Optional[float] = None
     last_login: Optional[datetime] = None
 
-# ==== Router ====
+class MeResponse(BaseModel):
+    client_id: str
+    client_name: Optional[str] = None
+    role: Optional[str] = None
+    plan: Optional[str] = None
+    exp: Optional[int] = None
+
+# === Router ===
 router = APIRouter()
 
-@router.post("/client-login", response_model=ClientLoginResponse, summary="Client credential login")
+@router.post("/client-login", response_model=ClientLoginResponse, summary="Client credential login (JWT)")
 def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> ClientLoginResponse:
     """
-    合併自 auth_routes.py 的登入端點：
-    - 以 client_id + password 驗證
-    - 僅允許 is_active 且 user_status 合規的帳戶
-    - 更新 last_login
-    - 回傳方案與使用量統計
+    驗證 client_id/password 後簽發 JWT。
+    成功回傳：token、到期時間與當前使用量統計。
     """
     client_id = payload.client_id.strip()
     password = payload.password
 
-    # 1) Preferred: use AuthService if available
-    if AuthService is not None:
-        svc = AuthService()
-        result: Optional[Dict[str, Any]] = svc.authenticate_by_client_credentials(client_id, password, db)  # type: ignore
-        if not result:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or inactive user")
-
-        # Expect result to include LoginUser-like fields; compute usage
-        # 再查算 current_users（若 service 未附帶）
-        if "current_users" not in result or result["current_users"] is None:
-            current_users = db.query(ClientLineUsers).filter(
-                ClientLineUsers.client_id == client_id,
-                ClientLineUsers.is_active == True
-            ).count()
-        else:
-            current_users = int(result["current_users"])
-
-        max_users = int(result.get("max_users", 0) or 0)
-        available_slots = max(max_users - current_users, 0) if max_users else None
-        usage_percentage = round((current_users / max_users) * 100, 2) if max_users else None
-
-        # 這裡也可由 service 更新 last_login；若未處理則在此補上
-        try:
-            client = db.query(LoginUser).filter(LoginUser.client_id == client_id).first()
-            if client:
-                client.last_login = datetime.now()
-                db.commit()
-        except Exception:
-            db.rollback()
-
-        return ClientLoginResponse(
-            client_id=result.get("client_id", client_id),
-            client_name=result.get("client_name", ""),
-            user_status=result.get("user_status", "active"),
-            plan_type=result.get("plan_type"),
-            max_users=max_users or None,
-            current_users=current_users,
-            available_slots=available_slots,
-            usage_percentage=usage_percentage,
-            last_login=result.get("last_login"),
-        )
-
-    # 2) Fallback: direct ORM logic (when AuthService import failed)
+    # TODO: 建議之後將密碼改為雜湊；此處依現有資料表邏輯比對明碼
     client = db.query(LoginUser).filter(
         LoginUser.client_id == client_id,
-        LoginUser.password == password,         # NOTE: consider hashing in production
+        LoginUser.password == password,
         LoginUser.is_active == True
     ).first()
 
     if not client:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or inactive user")
 
-    # 可選：檢查 user_status（若非 active，禁止登入）
+    # 可選：檢查 user_status
     if getattr(client, "user_status", "active") != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"user_status={client.user_status}")
 
-    # 更新 last_login
-    client.last_login = datetime.now()
+    # 更新最後登入時間（忽略失敗）
     try:
+        client.last_login = datetime.now()
         db.commit()
     except Exception:
         db.rollback()
@@ -149,18 +140,40 @@ def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> 
         ClientLineUsers.is_active == True
     ).count()
 
-    max_users = getattr(client, "max_users", None) or 0
-    available_slots = max(max_users - current_users, 0) if max_users else None
-    usage_percentage = round((current_users / max_users) * 100, 2) if max_users else None
+    max_users = int(getattr(client, "max_users", 0) or 0)
+    available_slots = (max_users - current_users) if max_users else 0
+    usage_percentage = round((current_users / max_users) * 100, 2) if max_users else 0.0
+
+    # 簽發 Token（把常用資訊放進 claims）
+    claims = {
+        "name": getattr(client, "client_name", client.client_id),
+        "role": "client",
+        "plan": getattr(client, "plan_type", None),
+    }
+    token_pack = _create_access_token(subject=client.client_id, claims=claims)
 
     return ClientLoginResponse(
+        success=True,
+        token=token_pack["token"],
+        expires_at=token_pack["expires_at"],
         client_id=client.client_id,
         client_name=getattr(client, "client_name", client.client_id),
         user_status=getattr(client, "user_status", "active"),
         plan_type=getattr(client, "plan_type", None),
         max_users=max_users or None,
         current_users=current_users,
-        available_slots=available_slots,
+        available_slots=available_slots or None,
         usage_percentage=usage_percentage,
         last_login=getattr(client, "last_login", None),
+    )
+
+@router.get("/me", response_model=MeResponse, summary="Decode token and return client info")
+def me(payload: Dict[str, Any] = Depends(verify_token)) -> MeResponse:
+    """帶 Authorization: Bearer <token>，回傳 token 內的基本資訊。"""
+    return MeResponse(
+        client_id=str(payload.get("sub")),
+        client_name=payload.get("name"),
+        role=payload.get("role"),
+        plan=payload.get("plan"),
+        exp=payload.get("exp"),
     )
