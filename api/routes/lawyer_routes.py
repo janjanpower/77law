@@ -4,11 +4,11 @@
 import datetime
 from typing import Optional, Dict, Any
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, select, text
 
 from api.database import get_db
 from api.models_control import LoginUser, ClientLineUsers
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -105,123 +105,85 @@ def upsert_lawyer_binding(db: Session, client_id: str, line_user_id: str) -> boo
 # ---------- 綁定成功 ----------
 
 
-def _get(d, *keys):
-    x = d
-    for k in keys:
-        if not isinstance(x, dict): return None
-        x = x.get(k)
-    return x
+class BindUserRequest(BaseModel):
+    success: bool = Field(..., description="n8n 判斷為 true 才執行綁定")
+    client_name: str
+    user_id: str
 
-def _extract_binding_payload(payload: dict):
-    # success flag
-    success = payload.get("success") or _get(payload, "body", "success")
+class BindUserResponse(BaseModel):
+    success: bool
+    client_name: str
+    plan_type: str | None = None
+    limit: int = 0
+    usage: int = 0
+    available: int = 0
+    message: str | None = None
 
-    # client name
-    client_name = (
-        payload.get("client_name")
-        or payload.get("tenant")
-        or _get(payload, "body", "client_name")
-        or _get(payload, "body", "tenant")
-    )
-    if isinstance(client_name, str):
-        client_name = client_name.strip()
-
-    # line user id
-    user_id = (
-        payload.get("user_id")
-        or payload.get("line_user_id")
-        or _get(payload, "body", "user_id")
-        or _get(payload, "body", "line_user_id")
-        or _get(payload, "body", "events", 0, "source", "userId")
-    )
-    return bool(success), client_name, user_id
-
-@router.post("/bind-user")
-async def bind_user(request: Request, db: Session = Depends(get_db)):
-    try:
-        payload = await request.json()
-    except Exception:
-        return {"success": False, "message": "invalid_json"}
-
-    success_flag, client_name, user_id = _extract_binding_payload(payload)
-
-    if not success_flag:
-        return {"success": False, "message": "verification_failed"}
-    if not client_name or not user_id:
-        return {"success": False, "message": "missing_client_or_user"}
-
-    org = (
-        db.query(LoginUser)
-        .filter(func.btrim(LoginUser.client_name) == client_name.strip())
-        .first()
-    )
-    if not org:
-        return {"success": False, "message": "client_not_found", "client_name": client_name}
-
-    limit_val = getattr(org, "user_limit", None) or getattr(org, "max_users", None)
-
-    active_count = (
-        db.query(func.count(ClientLineUser.id))
-        .filter(and_(ClientLineUser.client_name == client_name, ClientLineUser.is_active == True))
-        .scalar()
-    ) or 0
-
-    existed = (
-        db.query(ClientLineUser)
-        .filter(and_(ClientLineUser.client_name == client_name, ClientLineUser.line_user_id == user_id))
-        .first()
-    )
-
-    if (limit_val is not None) and (not existed or (existed and not existed.is_active)):
-        if active_count >= int(limit_val):
-            return {
-                "success": False,
-                "message": "limit_reached",
-                "client_name": client_name,
-                "limit": int(limit_val),
-                "usage": active_count,
-                "available": max(int(limit_val) - active_count, 0)
-            }
-
-    if existed:
-        if not getattr(existed, "is_active", True):
-            existed.is_active = True
-            existed.updated_at = datetime.utcnow()
-            db.add(existed); db.commit()
-            active_count += 1
-            status = "reactivated"
-        else:
-            status = "already_bound"
-    else:
-        rec = ClientLineUser(
-            client_name=client_name,
-            line_user_id=user_id,
-            is_active=True,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
+@router.post("/bind-user", response_model=BindUserResponse)
+def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
+    if not payload.success:
+        return BindUserResponse(
+            success=False,
+            client_name=payload.client_name,
+            message="success=false，未執行綁定"
         )
-        db.add(rec); db.commit()
-        active_count += 1
-        status = "bound"
 
-    if hasattr(org, "current_users"):
-        org.current_users = active_count
-        db.add(org); db.commit()
+    # 1) 找到對應的 tenant/login_user（以 client_name 為準；你也可改用 client_id）
+    tenant: LoginUser | None = db.execute(
+        select(LoginUser).where(LoginUser.client_name == payload.client_name)
+    ).scalars().first()
 
-    available = None
-    if limit_val is not None:
-        available = max(int(limit_val) - active_count, 0)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="找不到對應的事務所")
 
-    return {
-        "success": True,
-        "status": status,
-        "client_name": client_name,
-        "user_id": user_id,
-        "limit": int(limit_val) if limit_val is not None else None,
-        "usage": active_count,
-        "available": available
-    }
+    client_id = tenant.client_id  # 你的模型若欄位不同，對應調整
+    max_users = int(tenant.max_users or 0)
+    plan_type = tenant.plan_type
 
+    # 2) 先寫入 client_line_users（避免重覆，使用 upsert）
+    upsert_sql = text("""
+        INSERT INTO client_line_users (client_id, client_name, user_id)
+        VALUES (:client_id, :client_name, :user_id)
+        ON CONFLICT (client_id, user_id) DO NOTHING
+        RETURNING id;
+    """)
+    inserted = db.execute(upsert_sql, {
+        "client_id": client_id,
+        "client_name": payload.client_name,
+        "user_id": payload.user_id
+    }).first()
+
+    # 3) 重新計算 usage（該 client_id 的當前綁定數）
+    count_sql = text("""
+        SELECT COUNT(*)::int AS c
+        FROM client_line_users
+        WHERE client_id = :client_id
+    """)
+    usage = db.execute(count_sql, {"client_id": client_id}).scalar_one()
+
+    # 4) 同步回寫 login_users.current_users
+    tenant.current_users = usage
+    db.add(tenant)
+    db.commit()
+    db.refresh(tenant)
+
+    available = max(0, max_users - usage)
+
+    # 5) 組回應訊息
+    if inserted:
+        msg = "綁定成功"
+    else:
+        msg = "此使用者已綁定於該事務所"
+
+    return BindUserResponse(
+        success=True,
+        client_name=payload.client_name,
+        plan_type=plan_type,
+        limit=max_users,
+        usage=usage,
+        available=available,
+        message=msg
+    )
 #===========驗證 secret_code ============
 class VerifySecretIn(BaseModel):
     # n8n/簡化後的格式

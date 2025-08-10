@@ -18,8 +18,9 @@ import requests
 from config.settings import AppConfig
 from views.base_window import BaseWindow
 from views.login_logic import LoginLogic
-from views.dialog_base import CustomDialog, open_modal_dialog
-
+from views.dialog_base import ModalDialog, AppConfig
+from views.windowing import open_modal
+from views.register_dialog import RegisterDialog
 # 安全導入對話框
 try:
     from views.dialogs import UnifiedMessageDialog
@@ -758,111 +759,18 @@ class LoginController(BaseWindow):
 # ==================== 整合現有系統的管理類別 ====================
 
     def _open_register_dialog(self):
-        result, dlg = open_modal_dialog(self.window, RegisterDialog, self.api_base_url, borderless=True)
+        dlg = RegisterDialog(self.window, self.api_base_url)
+        self.window.wait_window(dlg.win)
+        result = dlg.result
         if result and result.get("success"):
             sc = result.get("secret_code") or ""
-            try:
-                if DIALOGS_AVAILABLE:
-                    UnifiedMessageDialog.show_success(self.window, f"註冊成功！\n\n您的律師登陸號：{sc}", "註冊完成")
-                else:
-                    messagebox.showinfo("註冊完成", f"註冊成功！\n\n您的律師登陸號：{sc}")
-            except Exception:
+            if 'UnifiedMessageDialog' in globals() and DIALOGS_AVAILABLE:
+                UnifiedMessageDialog.show_success(self.window, f"註冊成功！\n\n您的律師登陸號：{sc}", "註冊完成")
+            else:
                 messagebox.showinfo("註冊完成", f"註冊成功！\n\n您的律師登陸號：{sc}")
-
-            if result.get("client_id"):
-                self.username_var.set(result["client_id"])
-            if result.get("password"):
-                self.password_var.set(result["password"])
-                self.password_entry.focus_set()
-
-
-class RegisterDialog(CustomDialog):
-        def __init__(self, parent, api_base_url: str, borderless: bool = True):
-            self.api_base_url = api_base_url.rstrip('/')
-            self.result = None
-            super().__init__(parent, title="註冊用戶", size=(340, 280), borderless=borderless, modal=True)
-
-        def build_body(self, parent):
-            import tkinter as tk
-            from tkinter import messagebox
-
-            from config.settings import AppConfig  # 與你的檔案一致的匯入
-
-            tk.Label(parent, text="事務所名稱", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                    bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
-                    fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=0, column=0, sticky='w', pady=(0,4))
-            self.var_name = tk.StringVar()
-            self.entry_name = tk.Entry(parent, textvariable=self.var_name,
-                                    font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
-            self.entry_name.grid(row=1, column=0, sticky='we', pady=(0,8))
-
-            tk.Label(parent, text="帳號（client_id）", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                    bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
-                    fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=2, column=0, sticky='w', pady=(0,4))
-            self.var_id = tk.StringVar()
-            self.entry_id = tk.Entry(parent, textvariable=self.var_id,
-                                    font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
-            self.entry_id.grid(row=3, column=0, sticky='we', pady=(0,8))
-
-            tk.Label(parent, text="密碼", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                    bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
-                    fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=4, column=0, sticky='w', pady=(0,4))
-            self.var_pwd = tk.StringVar()
-            self.entry_pwd = tk.Entry(parent, textvariable=self.var_pwd,
-                                    font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                                    show='*', width=26)
-            self.entry_pwd.grid(row=5, column=0, sticky='we', pady=(0,8))
-
-            parent.grid_columnconfigure(0, weight=1)
-
-            btns = tk.Frame(parent, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
-            btns.grid(row=6, column=0, pady=(6, 0))
-            tk.Button(btns, text="送出註冊",
-                    font=AppConfig.FONTS.get('button', ('Microsoft JhengHei', 10, 'bold')),
-                    bg=AppConfig.COLORS.get('button_bg', '#3498db'),
-                    fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
-                    width=10, command=self._submit).pack(side='left', padx=10)
-            tk.Button(btns, text="取消",
-                    font=AppConfig.FONTS.get('button', ('Microsoft JhengHei', 10, 'bold')),
-                    bg=AppConfig.COLORS.get('button_bg', '#3498db'),
-                    fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
-                    width=10, command=self.close).pack(side='left', padx=10)
-
-            # 指定第一個聚焦欄位
-            self.first_focus = lambda: (self.entry_name.focus_set(), self.entry_name.icursor('end'))
-
-            # 快捷鍵
-            self.top.bind('<Return>', lambda e: self._submit())
-            self.top.bind('<Escape>', lambda e: self.close())
-
-        def _submit(self):
-            import requests, tkinter as tk
-            from tkinter import messagebox
-            name = self.var_name.get().strip()
-            cid  = self.var_id.get().strip()
-            pwd  = self.var_pwd.get().strip()
-            if not name:
-                messagebox.showwarning("提示", "請輸入事務所名稱"); return
-            if len(cid) < 3:
-                messagebox.showwarning("提示", "帳號長度至少 3 個字元"); return
-            if len(pwd) < 6:
-                messagebox.showwarning("提示", "密碼長度至少 6 個字元"); return
-
-            url = f"{self.api_base_url}/register"
-            try:
-                resp = requests.post(url, json={"client_name": name, "client_id": cid, "password": pwd}, timeout=15)
-                if resp.status_code == 201:
-                    data = resp.json()
-                    self.result = {"success": True, "client_id": data.get("client_id"),
-                                "secret_code": data.get("secret_code"), "password": pwd}
-                    self.close()
-                else:
-                    try: msg = resp.json().get("detail") or resp.text
-                    except Exception: msg = resp.text
-                    messagebox.showwarning("提示", f"註冊失敗：{msg}")
-            except Exception as e:
-                messagebox.showwarning("提示", f"連線失敗：{e}")
-
+            self.username_var.set(result.get("client_id",""))
+            self.password_var.set(result.get("password",""))
+            self.password_entry.focus_set()
 class LoginManager:
     """登入管理器 - 增強版"""
 
