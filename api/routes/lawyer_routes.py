@@ -119,71 +119,66 @@ class BindUserResponse(BaseModel):
     available: int = 0
     message: str | None = None
 
-@router.post("/bind-user", response_model=BindUserResponse)
-def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
-    if not payload.success:
-        return BindUserResponse(
-            success=False,
-            client_name=payload.client_name,
-            message="success=false，未執行綁定"
-        )
-
-    # 1) 找到對應的 tenant/login_user（以 client_name 為準；你也可改用 client_id）
-    tenant: LoginUser | None = db.execute(
-        select(LoginUser).where(LoginUser.client_name == payload.client_name)
-    ).scalars().first()
-
-    if not tenant:
-        raise HTTPException(status_code=404, detail="找不到對應的事務所")
-
-    client_id = tenant.client_id  # 你的模型若欄位不同，對應調整
-    max_users = int(tenant.max_users or 0)
-    plan_type = tenant.plan_type
-
-    # 2) 先寫入 client_line_users（避免重覆，使用 upsert）
-    upsert_sql = text("""
-    INSERT INTO client_line_users (client_id, client_name, line_user_id)
-    VALUES (:client_id, :client_name, :line_user_id)
-    ON CONFLICT (client_id, line_user_id) DO NOTHING
-    RETURNING id;
-    """)
-    inserted = db.execute(upsert_sql, {
-        "client_id": client_id,
-        "client_name": payload.client_name,
-        "line_user_id": payload.user_id
-    }).first()
-
-    # 3) 重新計算 usage（該 client_id 的當前綁定數）
-    count_sql = text("""
-        SELECT COUNT(*)::int AS c
-        FROM client_line_users
-        WHERE client_id = :client_id
-    """)
-    usage = db.execute(count_sql, {"client_id": client_id}).scalar_one()
-
-    # 4) 同步回寫 login_users.current_users
-    tenant.current_users = usage
-    db.add(tenant)
-    db.commit()
-    db.refresh(tenant)
-
-    available = max(0, max_users - usage)
-
-    # 5) 組回應訊息
-    if inserted:
-        msg = "綁定成功"
-    else:
-        msg = "此使用者已綁定於該事務所"
-
-    return BindUserResponse(
-        success=True,
-        client_name=payload.client_name,
-        plan_type=plan_type,
-        limit=max_users,
-        usage=usage,
-        available=available,
-        message=msg
+def _build_plan_message(title: str, client_name: str, plan_type: str | None, limit_val: int | None, usage_val: int) -> str:
+    """統一格式：把方案/上限/當前填入訊息"""
+    plan = plan_type or "未設定"
+    lim  = str(limit_val) if isinstance(limit_val, int) else "未設定"
+    return (
+        f"{title}\n"
+        f"事務所：{client_name}\n"
+        f"方案：{plan}\n"
+        f"上限人數：{lim}\n"
+        f"當前人數：{usage_val}"
     )
+
+
+@router.post("/check-client-plan")
+async def check_client_plan(request: Request, db: Session = Depends(get_db)):
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "invalid_json"}
+
+    client_name = _extract_client_name(payload)
+    if not client_name:
+        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_name_required"}
+
+    user = (
+        db.query(LoginUser)
+        .filter(func.btrim(LoginUser.client_name) == client_name.strip())
+        .first()
+    )
+    if not user:
+        return {"success": False, "client_name": client_name, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_not_found"}
+
+    plan_type = getattr(user, "plan_type", None)
+    limit_val = getattr(user, "user_limit", None) or getattr(user, "max_users", None)
+    usage_val = getattr(user, "current_users", 0) or getattr(user, "bound_count", 0)
+    if usage_val is None:
+        usage_val = 0
+
+    available = None
+    if isinstance(limit_val, int) and isinstance(usage_val, int):
+        available = max(limit_val - usage_val, 0)
+
+    # 文案：若已滿則提示升級，否則顯示目前使用
+    if isinstance(limit_val, int) and usage_val >= limit_val:
+        msg = _build_plan_message("⚠️ 已額滿，需要升級方案", user.client_name, plan_type, limit_val, usage_val)
+        ok = False
+    else:
+        msg = _build_plan_message("✅ 目前方案資訊", user.client_name, plan_type, limit_val, usage_val)
+        ok = True
+
+    return {
+        "success": ok,
+        "client_name": getattr(user, "client_name", client_name),
+        "plan_type": plan_type,
+        "limit": limit_val,
+        "usage": usage_val,
+        "available": available,
+        "message": msg
+    }
+
 #===========驗證 secret_code ============
 class VerifySecretIn(BaseModel):
     # n8n/簡化後的格式
