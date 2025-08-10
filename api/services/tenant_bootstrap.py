@@ -2,6 +2,7 @@
 # 覆蓋整檔
 
 import os
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from sqlalchemy import create_engine, text
 from api.database import Base, DATABASE_URL
 from api.models_cases import CaseRecord  # 讓 ORM 知道要建哪些索引/表
@@ -13,13 +14,18 @@ def _schema_name(client_id: str) -> str:
 
 def _compose_schema_url(base_url: str, schema: str) -> str:
     """
-    強制附上 search_path=schema。若原本有 ?options= 直接去掉重加，避免搞混。
+    在原連線字串上保留既有 query 參數（如 sslmode=require），
+    並加入 options=-csearch_path=<schema>
     """
     if not base_url:
         raise RuntimeError("DATABASE_URL not configured")
-    base_no_opts = base_url.split("?", 1)[0]
-    sep = "&" if "?" in base_no_opts else "?"
-    return f"{base_no_opts}{sep}options=-csearch_path%3D{schema}"
+
+    parts = urlsplit(base_url)
+    qs = dict(parse_qsl(parts.query, keep_blank_values=True))
+    qs["options"] = f"-csearch_path={schema}"
+    new_query = urlencode(qs, doseq=True)
+
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
 
 def _set_search_path(engine, schema: str):
     with engine.begin() as cx:

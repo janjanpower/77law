@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 # api/routes/case_upload_routes.py
-# 支援單筆或多筆上傳；JSONB 以 ::jsonb 轉型
+# 依 client_id 寫入該租戶(schema)的 case_records；回傳 debug 資訊方便你確認寫到哪裡
 
-from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, Body
+from typing import List, Dict, Any, Optional, Tuple
+from fastapi import APIRouter, HTTPException, Body, Query
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from datetime import datetime
-import json
-import os
+import os, json
 
 from api.database import DATABASE_URL
 from api.services.tenant_bootstrap import ensure_tenant_schema
@@ -16,37 +15,44 @@ from api.services.tenant_bootstrap import ensure_tenant_schema
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 # -------------------------
-# helpers
+# Helpers
 # -------------------------
 
-_ALLOWED_ITEM_KEYS = {
-    "case_id", "case_type", "client", "lawyer", "legal_affairs",
-    "progress", "case_reason", "case_number", "opposing_party",
-    "court", "division", "progress_date",
-    "progress_stages", "progress_notes", "progress_times",
-    "created_date", "updated_date", "uploaded_by"
-}
+def _mask_url(u: Optional[str]) -> str:
+    if not u:
+        return ""
+    try:
+        # postgres://user:pass@host:port/db?...  -> user:***@host:port/db?...（遮蔽密碼）
+        if "://" in u and "@" in u:
+            head, rest = u.split("://", 1)
+            creds, tail = rest.split("@", 1)
+            user = creds.split(":")[0]
+            return f"{head}://{user}:***@{tail}"
+    except Exception:
+        pass
+    return u
 
-def _as_jsonb_str(v: Optional[Any]) -> str:
-    """dict/None/'' 轉為合規 JSON 字串，其餘保留或序列化。"""
+def _iso_or_none(v: Any) -> Optional[str]:
     if v is None:
-        return "{}"
-    if isinstance(v, dict):
+        return None
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    return str(v)
+
+def _as_jsonb_str(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    if isinstance(v, (dict, list)):
         return json.dumps(v, ensure_ascii=False)
     if isinstance(v, str):
         s = v.strip()
-        return s if s else "{}"
-    try:
-        return json.dumps(v, ensure_ascii=False)
-    except Exception:
-        return "{}"
-
-def _iso_or_none(v: Optional[Any]) -> Optional[str]:
-    """空白->None；其它轉字串回傳（DB timestamptz 可吃 ISO 字串）。"""
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s if s else None
+        if not s:
+            return None
+        # 若是「字典樣字串」，原樣丟給 ::jsonb 轉
+        return s
+    return json.dumps(v, ensure_ascii=False)
 
 def _get_root_engine() -> Engine:
     db_url = os.getenv("DATABASE_URL", DATABASE_URL)
@@ -54,142 +60,165 @@ def _get_root_engine() -> Engine:
         raise RuntimeError("DATABASE_URL not configured")
     return create_engine(db_url, pool_pre_ping=True)
 
-def _get_tenant_engine(client_id: str) -> Engine:
-    """優先從 login_users.tenant_db_url 取；若無則 ensure_tenant_schema 後回傳。"""
+def _get_tenant_engine_and_url(client_id: str) -> Tuple[Engine, str]:
+    """優先用 login_users.tenant_db_url；沒有就建立 schema 後回傳。"""
+    if not client_id or not str(client_id).strip():
+        raise HTTPException(status_code=400, detail="client_id is required")
+
     root = _get_root_engine()
+    tenant_url: Optional[str] = None
     with root.connect() as cx:
         row = cx.execute(
             text("SELECT tenant_db_url FROM login_users WHERE client_id = :cid"),
             {"cid": client_id}
         ).mappings().first()
-    tenant_url: Optional[str] = row["tenant_db_url"] if row else None
+        if row and row.get("tenant_db_url"):
+            tenant_url = row["tenant_db_url"]
+
     if not tenant_url:
         tenant_url = ensure_tenant_schema(client_id)
-    return create_engine(tenant_url, pool_pre_ping=True)
+
+    return create_engine(tenant_url, pool_pre_ping=True), tenant_url
 
 def _extract_items(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    同時支援：
+    支援：
     1) 多筆：payload['items'] 為 list
     2) 單筆：欄位直接在最外層（含 case_id/…）
-    3) 單筆包在 payload['data']（若你之後改格式）
+    3) 單筆包在 payload['data']（你的 Desktop 目前是這種：{client_id, case_id, data:{...}}）
     """
     if isinstance(payload.get("items"), list) and payload["items"]:
         return payload["items"]
 
-    # 單筆在最外層（你現在的情況）
-    # 從 payload 萃取允許欄位變成一筆 item
-    top_has_any_case_field = any(k in payload for k in _ALLOWED_ITEM_KEYS.union({"case_id"}))
-    if top_has_any_case_field:
-        single = {k: payload.get(k) for k in _ALLOWED_ITEM_KEYS if k in payload}
-        # 把 case_id 若落在最外層也帶進去
-        if "case_id" not in single and "case_id" in payload:
-            single["case_id"] = payload["case_id"]
-        return [single]
+    # 單筆：把外層與 data 併起來
+    data = payload.get("data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    merged = {**data}
+    # 允許外層覆蓋關鍵欄位
+    for k in [
+        "case_id","case_type","client","lawyer","legal_affairs","progress","case_reason",
+        "case_number","opposing_party","court","division","progress_date",
+        "progress_stages","progress_notes","progress_times",
+        "created_date","updated_date","uploaded_by"
+    ]:
+        if payload.get(k) is not None:
+            merged[k] = payload[k]
+    return [merged]
 
-    # 若有 data 且是 dict，當單筆資料看待
-    data = payload.get("data")
-    if isinstance(data, dict):
-        single = {k: data.get(k) for k in _ALLOWED_ITEM_KEYS if k in data}
-        if "case_id" not in single and "case_id" in data:
-            single["case_id"] = data["case_id"]
-        return [single] if single else []
-
-    return []
-
-# -------------------------
-# SQL
-# -------------------------
-
-INSERT_SQL = text("""
-    INSERT INTO case_records (
-        client_id, case_id,
-        case_type, client, lawyer, legal_affairs,
-        progress, case_reason, case_number, opposing_party, court, division,
-        progress_date, progress_stages, progress_notes, progress_times,
-        created_date, updated_date, uploaded_by
-    ) VALUES (
-        :client_id, :case_id,
-        :case_type, :client, :lawyer, :legal_affairs,
-        :progress, :case_reason, :case_number, :opposing_party, :court, :division,
-        :progress_date,
-        :progress_stages::jsonb, :progress_notes::jsonb, :progress_times::jsonb,
-        :created_date, :updated_date, :uploaded_by
-    )
-    RETURNING id
+INSERT_UPSERT = text("""
+INSERT INTO case_records (
+    client_id, case_id,
+    case_type, client, lawyer, legal_affairs,
+    progress, case_reason, case_number, opposing_party, court, division, progress_date,
+    progress_stages, progress_notes, progress_times,
+    created_date, updated_date, uploaded_by
+)
+VALUES (
+    :client_id, :case_id,
+    :case_type, :client, :lawyer, :legal_affairs,
+    :progress, :case_reason, :case_number, :opposing_party, :court, :division, :progress_date,
+    :progress_stages::jsonb, :progress_notes::jsonb, :progress_times::jsonb,
+    :created_date, :updated_date, :uploaded_by
+)
+ON CONFLICT (client_id, case_id)
+DO UPDATE SET
+    case_type = EXCLUDED.case_type,
+    client = EXCLUDED.client,
+    lawyer = EXCLUDED.lawyer,
+    legal_affairs = EXCLUDED.legal_affairs,
+    progress = EXCLUDED.progress,
+    case_reason = EXCLUDED.case_reason,
+    case_number = EXCLUDED.case_number,
+    opposing_party = EXCLUDED.opposing_party,
+    court = EXCLUDED.court,
+    division = EXCLUDED.division,
+    progress_date = EXCLUDED.progress_date,
+    progress_stages = COALESCE(EXCLUDED.progress_stages, case_records.progress_stages),
+    progress_notes  = COALESCE(EXCLUDED.progress_notes,  case_records.progress_notes),
+    progress_times  = COALESCE(EXCLUDED.progress_times,  case_records.progress_times),
+    created_date    = COALESCE(EXCLUDED.created_date,    case_records.created_date),
+    updated_date    = COALESCE(EXCLUDED.updated_date,    case_records.updated_date),
+    uploaded_by     = EXCLUDED.uploaded_by,
+    updated_at      = now()
+RETURNING id
 """)
 
 # -------------------------
-# Route
+# Health / Debug
+# -------------------------
+
+@router.get("/health")
+def health(client_id: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    root = _get_root_engine()
+    info = {"status": "ok", "time": datetime.now().isoformat()}
+    with root.connect() as cx:
+        info["root_db"] = str(cx.engine.url)
+        info["root_url_masked"] = _mask_url(str(cx.engine.url))
+    if client_id:
+        te, turl = _get_tenant_engine_and_url(client_id)
+        with te.connect() as cx:
+            sp = cx.execute(text("SHOW search_path")).scalar()
+            schema = cx.execute(text("SELECT current_schema()")).scalar()
+            info["tenant_url_masked"] = _mask_url(turl)
+            info["tenant_search_path"] = sp
+            info["tenant_current_schema"] = schema
+            # 驗證 case_records 是否存在
+            try:
+                cx.execute(text("SELECT 1 FROM case_records LIMIT 1"))
+                info["case_records_exists"] = True
+            except Exception:
+                info["case_records_exists"] = False
+    return info
+
+# -------------------------
+# Upload
 # -------------------------
 
 @router.post("/upload")
 def upload_cases(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """
-    支援兩種請求格式：
-
-    A) 單筆（你現在的格式）
-    {
-      "client_id": "12345678",
-      "case_id": "114001",
-      "case_type": "民事",
-      "client": "大狗",
-      ...
-      "progress_stages": "{\"調解\":\"2025-08-09\"}",
-      "progress_notes":  "{}",
-      "progress_times":  "{}",
-      "created_date": "2025-08-09T23:58:02.112975",
-      "updated_date": "2025-08-09T23:58:57.171500",
-      "uploaded_by": "誰上傳"
-    }
-
-    B) 多筆
-    {
-      "client_id": "12345678",
-      "uploaded_by": "誰上傳",
-      "items": [ { ...單筆欄位... }, { ... } ]
-    }
-    """
-    client_id = str(payload.get("client_id", "")).strip()
+    client_id = str(payload.get("client_id") or "").strip()
     if not client_id:
         raise HTTPException(status_code=400, detail="client_id is required")
 
-    uploaded_by_default = str(payload.get("uploaded_by") or "").strip() or None
+    items = _extract_items(payload)
+    if not isinstance(items, list) or not items:
+        raise HTTPException(status_code=400, detail="items must resolve to a non-empty list")
 
-    items: List[Dict[str, Any]] = _extract_items(payload)
-    if not items:
-        raise HTTPException(status_code=400, detail="items must be a non-empty list or provide single case fields at top-level")
+    engine, tenant_url = _get_tenant_engine_and_url(client_id)
 
-    # 取得租戶連線
-    try:
-        tenant_eng = _get_tenant_engine(client_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"tenant init error: {e}")
+    results = {
+        "total": len(items),
+        "success": 0,
+        "failed": 0,
+        "details": [],
+        "debug": {}
+    }
 
-    results = {"total": len(items), "success": 0, "failed": 0, "details": []}
+    with engine.begin() as cx:
+        # Debug：回報實際連到哪裡、search_path 是什麼
+        results["debug"]["tenant_url_masked"] = _mask_url(tenant_url)
+        results["debug"]["search_path"] = cx.execute(text("SHOW search_path")).scalar()
+        results["debug"]["current_schema"] = cx.execute(text("SELECT current_schema()")).scalar()
 
-    with tenant_eng.begin() as cx:
-        # ⬇️ 新增這行，確保本交易都在 client_{client_id} 底下
-        cx.execute(text(f"SET search_path TO client_{client_id}"))
-        cur_schema = cx.execute(text("SELECT current_schema()")).scalar()
-        print("[upload] current_schema =", cur_schema)
-        # 逐筆寫入
         for it in items:
             try:
                 params = {
                     "client_id": client_id,
-                    "case_id": str(it.get("case_id", "")).strip(),
-                    "case_type": str(it.get("case_type", "")).strip(),
-                    "client": str(it.get("client", "")).strip(),
-                    "lawyer": str(it.get("lawyer") or "").strip() or None,
-                    "legal_affairs": str(it.get("legal_affairs") or "").strip() or None,
-                    "progress": str(it.get("progress", "待處理") or "待處理").strip(),
-                    "case_reason": str(it.get("case_reason") or "").strip() or None,
-                    "case_number": str(it.get("case_number") or "").strip() or None,
-                    "opposing_party": str(it.get("opposing_party") or "").strip() or None,
-                    "court": str(it.get("court") or "").strip() or None,
-                    "division": str(it.get("division") or "").strip() or None,
-                    "progress_date": str(it.get("progress_date") or "").strip() or None,
+                    "case_id": str(it.get("case_id") or "").strip(),
+
+                    "case_type": str(it.get("case_type") or "").strip(),
+                    "client": str(it.get("client") or "").strip(),
+                    "lawyer": str(it.get("lawyer") or "").strip(),
+                    "legal_affairs": str(it.get("legal_affairs") or "").strip(),
+
+                    "progress": str(it.get("progress") or "待處理").strip(),
+                    "case_reason": str(it.get("case_reason") or "").strip(),
+                    "case_number": str(it.get("case_number") or "").strip(),
+                    "opposing_party": str(it.get("opposing_party") or "").strip(),
+                    "court": str(it.get("court") or "").strip(),
+                    "division": str(it.get("division") or "").strip(),
+                    "progress_date": _iso_or_none(it.get("progress_date")),
 
                     "progress_stages": _as_jsonb_str(it.get("progress_stages")),
                     "progress_notes":  _as_jsonb_str(it.get("progress_notes")),
@@ -197,22 +226,20 @@ def upload_cases(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
                     "created_date": _iso_or_none(it.get("created_date")),
                     "updated_date": _iso_or_none(it.get("updated_date")),
-
-                    "uploaded_by": str(it.get("uploaded_by") or uploaded_by_default or "").strip() or None,
+                    "uploaded_by": str(it.get("uploaded_by") or "").strip() or None,
                 }
 
-                # 必填檢查
                 if not params["case_id"] or not params["case_type"] or not params["client"] or not params["progress"]:
                     raise ValueError("missing required fields (case_id/case_type/client/progress)")
 
-                new_id = cx.execute(INSERT_SQL, params).scalar()
+                new_id = cx.execute(INSERT_UPSERT, params).scalar()
                 results["success"] += 1
                 results["details"].append({"case_id": params["case_id"], "status": "ok", "id": new_id})
 
             except Exception as e:
                 results["failed"] += 1
                 results["details"].append({
-                    "case_id": str(it.get("case_id", "")),
+                    "case_id": str(it.get("case_id") or ""),
                     "status": "error",
                     "reason": str(e),
                 })
@@ -224,4 +251,5 @@ def upload_cases(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             "failed": results["failed"],
         },
         "details": results["details"],
+        "debug": results["debug"],
     }
