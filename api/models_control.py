@@ -145,22 +145,20 @@ class ClientLineUsers(Base):
     """LINE 用戶綁定表"""
     __tablename__ = "client_line_users"
 
-    # 基本欄位
     id = Column(Integer, primary_key=True, index=True)
+    client_id = Column(String(50), ForeignKey('login_users.client_id'), nullable=False, index=True, comment="所屬事務所ID")
     client_name = Column(String(100), nullable=True, comment="事務所名稱")
     line_user_id = Column(String(100), nullable=False, unique=True, index=True, comment="LINE 用戶ID")
     user_name = Column(String(50), nullable=True, comment="用戶名稱")
 
-    # 狀態和時間
     is_active = Column(Boolean, default=True, comment="是否啟用")
     bound_at = Column(DateTime(timezone=True), server_default=func.now(), comment="綁定時間")
     last_activity = Column(DateTime(timezone=True), nullable=True, comment="最後活動時間")
 
-    # 額外資訊
     user_role = Column(String(20), default="member", comment="用戶角色: admin, member, viewer")
 
-    # 建立關聯
     client = relationship("LoginUser", back_populates="line_users")
+
 
     # ==================== 計算屬性 ====================
 
