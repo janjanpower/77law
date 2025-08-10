@@ -121,7 +121,6 @@ class BindUserResponse(BaseModel):
 
 
 def _build_plan_message(title: str, client_name: str, plan_type: str | None, limit_val: int | None, usage_val: int) -> str:
-    """統一格式：把方案/上限/當前填入訊息"""
     plan = plan_type or "未設定"
     lim  = str(limit_val) if isinstance(limit_val, int) else "未設定"
     return (
@@ -135,69 +134,69 @@ def _build_plan_message(title: str, client_name: str, plan_type: str | None, lim
 @router.post("/bind-user", response_model=BindUserResponse)
 def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     if not payload.success:
-        return BindUserResponse(
-            success=False,
-            client_name=payload.client_name,
-            message="success=false，未執行綁定"
-        )
+        return BindUserResponse(success=False, client_name=payload.client_name, message="未執行綁定")
 
-    # 1) 找到對應的 tenant/login_user（以 client_name 為準；你也可改用 client_id）
     tenant: LoginUser | None = db.execute(
         select(LoginUser).where(LoginUser.client_name == payload.client_name)
     ).scalars().first()
-
     if not tenant:
-        raise HTTPException(status_code=404, detail="找不到對應的事務所")
+        return BindUserResponse(success=False, client_name=payload.client_name, message="找不到對應的事務所")
 
     client_id = tenant.client_id
-    max_users = int(tenant.max_users or 0)
     plan_type = tenant.plan_type
+    max_users = int(tenant.max_users or 0)
 
-    # 2) upsert 綁定
-    upsert_sql = text("""
-        INSERT INTO client_line_users (client_id, client_name, line_user_id)
-        VALUES (:client_id, :client_name, :line_user_id)
+    # 已綁定？
+    existed = db.execute(text("""
+        SELECT 1 FROM client_line_users
+        WHERE client_id = :client_id AND line_user_id = :line_user_id AND is_active = TRUE
+    """), {"client_id": client_id, "line_user_id": payload.user_id}).first()
+
+    # 目前人數（即時計數）
+    usage_before = db.execute(text("""
+        SELECT COUNT(*)::int FROM client_line_users
+        WHERE client_id = :client_id AND is_active = TRUE
+    """), {"client_id": client_id}).scalar_one()
+
+    if existed:
+        msg = _build_plan_message("ℹ️ 已經是綁定帳戶", payload.client_name, plan_type, max_users, usage_before)
+        return BindUserResponse(
+            success=True, client_name=payload.client_name,
+            plan_type=plan_type, limit=max_users, usage=usage_before,
+            available=max(0, max_users - usage_before), message=msg
+        )
+
+    # 額滿？
+    if max_users and usage_before >= max_users:
+        msg = _build_plan_message("⚠️ 已額滿，需要升級方案", payload.client_name, plan_type, max_users, usage_before)
+        return BindUserResponse(
+            success=False, client_name=payload.client_name,
+            plan_type=plan_type, limit=max_users, usage=usage_before,
+            available=0, message=msg
+        )
+
+    # 寫入綁定（防重）
+    inserted = db.execute(text("""
+        INSERT INTO client_line_users (client_id, client_name, line_user_id, is_active)
+        VALUES (:client_id, :client_name, :line_user_id, TRUE)
         ON CONFLICT (client_id, line_user_id) DO NOTHING
         RETURNING id;
-    """)
-    inserted = db.execute(upsert_sql, {
-        "client_id": client_id,
-        "client_name": payload.client_name,
-        "line_user_id": payload.user_id
-    }).first()
+    """), {"client_id": client_id, "client_name": payload.client_name, "line_user_id": payload.user_id}).first()
+    db.commit()
 
-    # 3) 即時計算 usage（該 client_id 的當前綁定數）
-    count_sql = text("""
-        SELECT COUNT(*)::int AS c
-        FROM client_line_users
-        WHERE client_id = :client_id
-        AND is_active = TRUE
-    """)
-    usage = db.execute(count_sql, {"client_id": client_id}).scalar_one()
+    # 再即時計數一次
+    usage_now = db.execute(text("""
+        SELECT COUNT(*)::int FROM client_line_users
+        WHERE client_id = :client_id AND is_active = TRUE
+    """), {"client_id": client_id}).scalar_one()
 
-    available = max(0, max_users - usage)
-
-    available = max(0, max_users - usage)
-
-    # 5) 組回應訊息（含 方案/上限/當前）
-    if max_users and usage >= max_users:
-        # 額滿
-        msg = _build_plan_message("⚠️ 已額滿，需要升級方案", payload.client_name, plan_type, max_users, usage)
-        ok = False
-    else:
-        # 新增或原已綁定都以成功呈現，但文案不同
-        base = "🎉 綁定成功" if inserted else "ℹ️ 已綁定於該事務所"
-        msg = _build_plan_message(base, payload.client_name, plan_type, max_users, usage)
-        ok = True
+    title = "🎉 綁定成功" if inserted else "ℹ️ 已綁定於該事務所"
+    msg = _build_plan_message(title, payload.client_name, plan_type, max_users, usage_now)
 
     return BindUserResponse(
-        success=ok,
-        client_name=payload.client_name,
-        plan_type=plan_type,
-        limit=max_users,
-        usage=usage,
-        available=available,
-        message=msg
+        success=True, client_name=payload.client_name,
+        plan_type=plan_type, limit=max_users, usage=usage_now,
+        available=max(0, max_users - usage_now), message=msg
     )
 
 #===========驗證 secret_code ============
@@ -290,17 +289,11 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
     except Exception:
-        return {
-            "success": False, "client_name": None, "plan_type": None,
-            "limit": None, "usage": None, "available": None, "message": "invalid_json"
-        }
+        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "invalid_json"}
 
     client_name = _extract_client_name(payload)
     if not client_name:
-        return {
-            "success": False, "client_name": None, "plan_type": None,
-            "limit": None, "usage": None, "available": None, "message": "client_name_required"
-        }
+        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_name_required"}
 
     user = (
         db.query(LoginUser)
@@ -308,25 +301,19 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
         .first()
     )
     if not user:
-        return {
-            "success": False, "client_name": client_name, "plan_type": None,
-            "limit": None, "usage": None, "available": None, "message": "client_not_found"
-        }
+        return {"success": False, "client_name": client_name, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_not_found"}
 
-    # 方案與上限（沿用既有欄位）
     plan_type = getattr(user, "plan_type", None)
     limit_val = getattr(user, "user_limit", None) or getattr(user, "max_users", None)
 
-    # 🔁 B 方案：即時計數，不讀 current_users
+    # 即時計數
     usage_val = db.query(func.count(ClientLineUsers.id)).filter(
         ClientLineUsers.client_id == user.client_id,
         ClientLineUsers.is_active == True
     ).scalar() or 0
     usage_val = int(usage_val)
-
     available = max(limit_val - usage_val, 0) if isinstance(limit_val, int) else None
 
-    # 文案
     if isinstance(limit_val, int) and usage_val >= limit_val:
         msg = _build_plan_message("⚠️ 已額滿，需要升級方案", user.client_name, plan_type, limit_val, usage_val)
         ok = False
@@ -336,7 +323,7 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
 
     return {
         "success": ok,
-        "client_name": getattr(user, "client_name", client_name),
+        "client_name": user.client_name,
         "plan_type": plan_type,
         "limit": limit_val,
         "usage": usage_val,
