@@ -24,6 +24,7 @@ class LoginUser(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     last_login = Column(DateTime(timezone=True), nullable=True)
+    secret_code = Column(String(32), unique=True, nullable=True)
 
 class ClientLineUsers(Base):
     __tablename__ = "client_line_users"
