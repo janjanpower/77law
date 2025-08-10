@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, constr
 from api.services.storage import s3_put_bytes
+from api.services.tenant_bootstrap import ensure_tenant_schema
 
 # === DB session dependency ===
 try:

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # views/register_dialog.py — 無邊框註冊視窗（自訂標題） + 串接 /api/auth/register
 import tkinter as tk
+from tkinter import simpledialog
 from tkinter import messagebox
 import requests
 
