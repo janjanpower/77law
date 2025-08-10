@@ -1,184 +1,165 @@
 # -*- coding: utf-8 -*-
-# views/register_dialog.py — 無邊框註冊視窗（自訂標題）
+"""
+views/auth/register_dialog.py
+A Tkinter dialog for registering a new tenant (law firm).
+Sends POST {API_BASE_URL}/api/auth/register with JSON body.
+
+Fields:
+- client_name (required)
+- client_id   (required, 3~50, A-Za-z0-9_.-)
+- password    (required, >=6)
+- plan_type   (optional, default 'unpaid')
+
+Success: show secret_code and close, or keep dialog if you want.
+"""
+
+import os
+import json
+import threading
+import re
 import tkinter as tk
-from tkinter import messagebox
-import requests
+from tkinter import ttk, messagebox
 
 try:
-    from config.settings import AppConfig
+    import requests  # make sure 'requests' exists in requirements.txt
 except Exception:
-    class AppConfig:
-        COLORS = {"window_bg": "#FFFFFF", "title_bg": "#2c3e50", "title_fg": "#ecf0f1"}
-        FONTS  = {"title": ("Microsoft JhengHei", 12, "bold"),
-                  "text": ("Microsoft JhengHei", 10),
-                  "button": ("Microsoft JhengHei", 10, "bold")}
+    requests = None
 
-def _center_on_parent(parent: tk.Misc, w: int, h: int) -> str:
-    try:
-        parent.update_idletasks()
-        px, py = parent.winfo_x(), parent.winfo_y()
-        pw, ph = parent.winfo_width(), parent.winfo_height()
-        if pw <= 1 or ph <= 1:
-            sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
-            x, y = (sw - w)//2, (sh - h)//2
+DEFAULT_API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+
+ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,50}$")
+
+class RegisterDialog(tk.Toplevel):
+    def __init__(self, master=None, api_base: str | None = None, on_success=None):
+        super().__init__(master)
+        self.title("註冊事務所")
+        self.resizable(False, False)
+        self.grab_set()  # modal window
+
+        self.api_base = (api_base or DEFAULT_API_BASE).rstrip("/")
+        self.on_success = on_success  # callback(dict)
+
+        # ===== UI =====
+        pad = {"padx": 10, "pady": 6}
+        frm = ttk.Frame(self)
+        frm.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frm, text="事務所名稱（必填）").grid(row=0, column=0, sticky="w", **pad)
+        self.var_name = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.var_name, width=32).grid(row=0, column=1, **pad)
+
+        ttk.Label(frm, text="帳號 ID（必填，3~50，英數/_.-）").grid(row=1, column=0, sticky="w", **pad)
+        self.var_id = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.var_id, width=32).grid(row=1, column=1, **pad)
+
+        ttk.Label(frm, text="密碼（必填，≥6）").grid(row=2, column=0, sticky="w", **pad)
+        self.var_pwd = tk.StringVar()
+        ttk.Entry(frm, textvariable=self.var_pwd, show="•", width=32).grid(row=2, column=1, **pad)
+
+        ttk.Label(frm, text="方案（可選，不填=unpaid）").grid(row=3, column=0, sticky="w", **pad)
+        self.var_plan = tk.StringVar(value="")  # 空字串 → 不傳，後端預設 unpaid
+        plan_box = ttk.Combobox(frm, textvariable=self.var_plan, width=29, state="readonly",
+                                values=["", "unpaid", "basic_5", "standard_10", "premium_20", "enterprise_50"])
+        plan_box.grid(row=3, column=1, **pad)
+        plan_box.set("")  # 默認空白 = 不傳
+
+        self.lbl_status = ttk.Label(frm, text="", foreground="#666")
+        self.lbl_status.grid(row=4, column=0, columnspan=2, sticky="w", **pad)
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=5, column=0, columnspan=2, sticky="e", **pad)
+        self.btn_submit = ttk.Button(btns, text="送出註冊", command=self.submit)
+        self.btn_submit.grid(row=0, column=0, padx=(0,6))
+        ttk.Button(btns, text="取消", command=self.safe_close).grid(row=0, column=1)
+
+        self.bind("<Return>", lambda e: self.submit())
+        self.bind("<Escape>", lambda e: self.safe_close())
+
+        # keyboard focus
+        self.after(100, lambda: self.focus_force())
+
+    # ===== helpers =====
+    def set_busy(self, busy: bool, msg: str = ""):
+        if busy:
+            self.btn_submit.configure(state="disabled")
+            self.lbl_status.configure(text=msg or "處理中，請稍候…")
         else:
-            x = px + max((pw - w)//2, 0)
-            y = py + max((ph - h)//2, 0)
-    except Exception:
-        sw, sh = parent.winfo_screenwidth(), parent.winfo_screenheight()
-        x, y = (sw - w)//2, (sh - h)//2
-    return f"{w}x{h}+{x}+{y}"
+            self.btn_submit.configure(state="normal")
+            self.lbl_status.configure(text=msg)
 
-class RegisterDialog:
-    """立即無邊框：在 Toplevel 建立後立刻 overrideredirect(True)"""
-    def __init__(self, parent, api_base_url: str):
-        self.parent = parent
-        self.api_base_url = api_base_url.rstrip("/")
-        self.result = None
-
-        self.win = tk.Toplevel(parent)
-        self.win.withdraw()
+    def safe_close(self):
         try:
-            self.win.overrideredirect(True)  # 立刻無邊框
+            self.grab_release()
         except Exception:
             pass
+        self.destroy()
 
-        self.win.configure(bg=AppConfig.COLORS.get("window_bg", "#FFFFFF"))
-        self.win.geometry(_center_on_parent(parent, 340, 280))
-
-        self._build_title_bar("註冊用戶")
-
-        body = tk.Frame(self.win, bg=AppConfig.COLORS.get("window_bg", "#FFFFFF"))
-        body.pack(fill="both", expand=True, padx=16, pady=12)
-        self._build_form(body)
-
-        self.win.deiconify()
-        try: self.win.attributes("-topmost", True)
-        except Exception: pass
-        self.win.lift(parent)
-        try: self.win.grab_set()
-        except Exception: pass
-        self.win.update_idletasks()
-        self.win.focus_force()
-
-        self.win.bind("<Escape>", lambda e: self.close())
-        self.win.bind("<Return>", lambda e: self._submit())
-
-    # ---------- UI ----------
-    def _build_title_bar(self, title: str):
-        bar = tk.Frame(self.win, bg=AppConfig.COLORS.get("title_bg", "#2c3e50"), height=36)
-        bar.pack(fill="x"); bar.pack_propagate(False)
-
-        lbl = tk.Label(bar, text=title,
-                       bg=AppConfig.COLORS.get("title_bg", "#2c3e50"),
-                       fg=AppConfig.COLORS.get("title_fg", "#ecf0f1"),
-                       font=AppConfig.FONTS.get("title", ("Microsoft JhengHei", 12, "bold")))
-        lbl.pack(side="left", padx=10)
-
-        btn = tk.Button(bar, text="✕",
-                        bg=AppConfig.COLORS.get("title_bg", "#2c3e50"),
-                        fg=AppConfig.COLORS.get("title_fg", "#ecf0f1"),
-                        bd=0, width=3, command=self.close)
-        btn.pack(side="right", padx=6)
-
-        drag = {"x":0, "y":0}
-        def start_drag(e): drag.update(x=e.x, y=e.y)
-        def on_drag(e):
-            nx = self.win.winfo_x() + (e.x - drag["x"])
-            ny = self.win.winfo_y() + (e.y - drag["y"])
-            self.win.geometry(f"+{nx}+{ny}")
-        for w in (bar, lbl):
-            w.bind("<Button-1>", start_drag)
-            w.bind("<B1-Motion>", on_drag)
-
-    def _build_form(self, body: tk.Frame):
-        tk.Label(body, text="事務所名稱",
-                 font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                 bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
-                 fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=0, column=0, sticky="w", pady=(0,4))
-        self.var_name = tk.StringVar()
-        self.entry_name = tk.Entry(body, textvariable=self.var_name,
-                                   font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
-        self.entry_name.grid(row=1, column=0, sticky="we", pady=(0,8))
-
-        tk.Label(body, text="帳號（client_id）",
-                 font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                 bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
-                 fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=2, column=0, sticky="w", pady=(0,4))
-        self.var_id = tk.StringVar()
-        self.entry_id = tk.Entry(body, textvariable=self.var_id,
-                                 font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
-        self.entry_id.grid(row=3, column=0, sticky="we", pady=(0,8))
-
-        tk.Label(body, text="密碼",
-                 font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                 bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
-                 fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=4, column=0, sticky="w", pady=(0,4))
-        self.var_pwd = tk.StringVar()
-        self.entry_pwd = tk.Entry(body, textvariable=self.var_pwd,
-                                  font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
-                                  show="*", width=26)
-        self.entry_pwd.grid(row=5, column=0, sticky="we", pady=(0,8))
-
-        body.grid_columnconfigure(0, weight=1)
-
-        btns = tk.Frame(body, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
-        btns.grid(row=6, column=0, pady=(6, 0))
-        tk.Button(btns, text="送出註冊",
-                  font=AppConfig.FONTS.get('button', ('Microsoft JhengHei', 10, 'bold')),
-                  bg=AppConfig.COLORS.get('button_bg', '#3498db'),
-                  fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
-                  width=10, command=self._submit).pack(side="left", padx=10)
-        tk.Button(btns, text="取消",
-                  font=AppConfig.FONTS.get('button', ('Microsoft JhengHei', 10, 'bold')),
-                  bg=AppConfig.COLORS.get('button_bg', '#3498db'),
-                  fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
-                  width=10, command=self.close).pack(side="left", padx=10)
-
-        self.entry_name.focus_set()
-        self.entry_name.icursor("end")
-
-    # ---------- 行為 ----------
-    def _submit(self):
+    def validate(self) -> tuple[bool, str]:
         name = self.var_name.get().strip()
         cid  = self.var_id.get().strip()
-        pwd  = self.var_pwd.get().strip()
+        pwd  = self.var_pwd.get()
 
         if not name:
-            messagebox.showwarning("提示", "請輸入事務所名稱"); return
-        if len(cid) < 3:
-            messagebox.showwarning("提示", "帳號長度至少 3 個字元"); return
-        if len(pwd) < 6:
-            messagebox.showwarning("提示", "密碼長度至少 6 個字元"); return
+            return False, "請輸入事務所名稱。"
+        if not cid or not ID_PATTERN.match(cid):
+            return False, "帳號 ID 需為 3~50 字，且僅能包含英數、底線、點與減號。"
+        if not pwd or len(pwd) < 6:
+            return False, "密碼長度需至少 6。"
+        return True, ""
 
-        url = f"{self.api_base_url}/api/register"
-        print(f"[RegisterDialog] POST -> {url}")
-        try:
-            resp = requests.post(url, json={"client_name": name, "client_id": cid, "password": pwd}, timeout=12)
-        except requests.exceptions.ConnectTimeout:
-            messagebox.showerror("連線逾時", f"連不上伺服器（timeout）。\nURL: {url}"); return
-        except requests.exceptions.ConnectionError as e:
-            messagebox.showerror("連線失敗", f"無法連線：{e}\nURL: {url}"); return
-        except Exception as e:
-            messagebox.showerror("錯誤", f"請求送出前就失敗：{e}\nURL: {url}"); return
+    # ===== networking =====
+    def submit(self):
+        ok, msg = self.validate()
+        if not ok:
+            messagebox.showwarning("欄位有誤", msg, parent=self)
+            return
+        if requests is None:
+            messagebox.showerror("缺少依賴", "找不到 requests 套件，請先安裝。", parent=self)
+            return
 
-        if resp.status_code == 201:
-            data = resp.json()
-            self.result = {
-                "success": True,
-                "client_id": data.get("client_id"),
-                "secret_code": data.get("secret_code"),
-                "password": pwd
-            }
-            self.close()
-        else:
+        payload = {
+            "client_name": self.var_name.get().strip(),
+            "client_id":   self.var_id.get().strip(),
+            "password":    self.var_pwd.get(),
+        }
+        plan = self.var_plan.get().strip()
+        if plan:  # 空字串不送，後端預設 unpaid；指定其他就送出
+            payload["plan_type"] = plan
+
+        url = f"{self.api_base}/api/auth/register"
+        self.set_busy(True, "正在送出註冊…")
+
+        def _worker():
             try:
-                detail = resp.json().get("detail")
-            except Exception:
-                detail = resp.text
-            messagebox.showwarning("註冊失敗", f"HTTP {resp.status_code}\nURL: {url}\n{detail or '無訊息'}")
+                resp = requests.post(url, json=payload, timeout=20)
+                data = resp.json() if resp.content else {}
+                if resp.status_code >= 400:
+                    raise RuntimeError(data.get("detail") or f"HTTP {resp.status_code}")
 
-    def close(self):
-        try: self.win.grab_release()
-        except Exception: pass
-        self.win.destroy()
+                # success
+                secret = data.get("secret_code", "")
+                msg_ok = f"註冊成功！\n\nclient_id：{data.get('client_id')}\nsecret_code：{secret}"
+                self.after(0, lambda: self._on_success(data, msg_ok))
+            except Exception as e:
+                self.after(0, lambda: self._on_error(str(e)))
+            finally:
+                self.after(0, lambda: self.set_busy(False, ""))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_success(self, data: dict, message: str):
+        messagebox.showinfo("成功", message, parent=self)
+        if callable(self.on_success):
+            try:
+                self.on_success(data)
+            except Exception:
+                pass
+        self.safe_close()
+
+    def _on_error(self, err: str):
+        messagebox.showerror("註冊失敗", str(err), parent=self)
+
+# ===== helper to open dialog =====
+def show_register_dialog(master=None, api_base: str | None = None, on_success=None):
+    dlg = RegisterDialog(master=master, api_base=api_base, on_success=on_success)
+    dlg.wait_window()

@@ -1,24 +1,25 @@
 # -*- coding: utf-8 -*-
 """
 api/routes/api_routes.py
-— Consolidated auth routes with JWT
-— /client-login 簽發 JWT；/me 範例端點驗證 JWT
+— Auth + Register (單一來源)
+— /client-login 發 JWT；/me 驗證；/register 註冊（plan_type=unpaid 則 teanat_status=NULL，否則 TRUE）
 """
 
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import hashlib
+import random, string
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, constr
-import random, string
+
 # === DB session dependency ===
 try:
     from api.database import SessionLocal  # 專案既有
     from sqlalchemy.orm import Session
 except Exception:
-    # 後備：直接用 DATABASE_URL 建立 SessionLocal（部署環境建議使用專案內的 SessionLocal）
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker, Session
     DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -38,7 +39,6 @@ def get_db():
 try:
     from api.models_control import LoginUser, ClientLineUsers
 except Exception:
-    # 若模組路徑不同，可視情況調整
     from models_control import LoginUser, ClientLineUsers  # type: ignore
 
 # === JWT 設定 ===
@@ -64,7 +64,7 @@ def _create_access_token(subject: str, claims: Optional[Dict[str, Any]] = None) 
 bearer_scheme = HTTPBearer(auto_error=True)
 
 def verify_token(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)) -> Dict[str, Any]:
-    """FastAPI 依賴：驗證並解碼 JWT，回傳 payload（無效或過期會拋 401）。"""
+    """驗證並解碼 JWT，回傳 payload（無效或過期會拋 401）。"""
     try:
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
@@ -113,7 +113,7 @@ def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> 
     client_id = payload.client_id.strip()
     password = payload.password
 
-    # TODO: 建議之後將密碼改為雜湊；此處依現有資料表邏輯比對明碼
+    # TODO: 後續建議改為雜湊比對；現階段沿用明碼欄位
     client = db.query(LoginUser).filter(
         LoginUser.client_id == client_id,
         LoginUser.password == password,
@@ -123,11 +123,10 @@ def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> 
     if not client:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or inactive user")
 
-    # 可選：檢查 user_status
     if getattr(client, "user_status", "active") != "active":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"user_status={client.user_status}")
 
-    # 更新最後登入時間（忽略失敗）
+    # 更新最後登入時間（不影響主流程）
     try:
         client.last_login = datetime.now()
         db.commit()
@@ -144,7 +143,7 @@ def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> 
     available_slots = (max_users - current_users) if max_users else 0
     usage_percentage = round((current_users / max_users) * 100, 2) if max_users else 0.0
 
-    # 簽發 Token（把常用資訊放進 claims）
+    # 簽發 Token
     claims = {
         "name": getattr(client, "client_name", client.client_id),
         "role": "client",
@@ -178,7 +177,6 @@ def me(payload: Dict[str, Any] = Depends(verify_token)) -> MeResponse:
         exp=payload.get("exp"),
     )
 
-
 # ============================== 註冊 =====================
 
 def hash_password(raw: str) -> str:
@@ -192,6 +190,7 @@ class RegisterRequest(BaseModel):
     client_name: constr(strip_whitespace=True, min_length=1, max_length=100)
     client_id:   constr(strip_whitespace=True, min_length=3, max_length=50)
     password:    constr(min_length=6, max_length=128)
+    plan_type:   Optional[str] = "unpaid"  # ✅ 預設 unpaid
 
 class RegisterResponse(BaseModel):
     message: str
@@ -200,26 +199,36 @@ class RegisterResponse(BaseModel):
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    # 唯一性檢查
     exists = db.query(LoginUser).filter(LoginUser.client_id == req.client_id).first()
     if exists:
         raise HTTPException(status_code=400, detail="client_id 已被使用")
 
-    # 產生唯一 secret_code
+    # 產生不重複的 secret_code
     sc = gen_secret_code()
     for _ in range(5):
         if not db.query(LoginUser).filter(LoginUser.secret_code == sc).first():
             break
         sc = gen_secret_code()
 
-    # ✅ 建立帳號：預設方案 unpaid
-    user = LoginUser(
-        client_id=req.client_id.strip(),
-        client_name=req.client_name.strip(),
-        password=req.password,             # 目前沿用明碼欄位
-        secret_code=sc,
-        is_active=True,
-        **({"plan_type": "unpaid"} if hasattr(LoginUser, "plan_type") else {})  # 安全帶入
-    )
+    # ✅ 規則：unpaid → teanat_status = NULL；其他 → TRUE
+    plan = (req.plan_type or "unpaid").strip().lower()
+    teanat_value = None if plan == "unpaid" else True
+
+    # 建立使用者（欄位存在才帶入，避免不同 DB 版本報錯）
+    user_kwargs: Dict[str, Any] = {
+        "client_id": req.client_id.strip(),
+        "client_name": req.client_name.strip(),
+        "password": req.password,           # 若已改為雜湊：password_hash=hash_password(req.password)
+        "secret_code": sc,
+        "is_active": True,
+    }
+    if hasattr(LoginUser, "plan_type"):
+        user_kwargs["plan_type"] = plan
+    if hasattr(LoginUser, "teanat_status"):
+        user_kwargs["teanat_status"] = teanat_value
+
+    user = LoginUser(**user_kwargs)
     db.add(user)
     db.commit()
     db.refresh(user)

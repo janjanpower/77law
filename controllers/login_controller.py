@@ -20,7 +20,7 @@ from views.base_window import BaseWindow
 from views.login_logic import LoginLogic
 from views.dialog_base import ModalDialog, AppConfig
 from views.windowing import open_modal
-from views.register_dialog import RegisterDialog
+from views.auth.register_dialog import show_register_dialog
 # 安全導入對話框
 try:
     from views.dialogs import UnifiedMessageDialog
@@ -759,18 +759,17 @@ class LoginController(BaseWindow):
 # ==================== 整合現有系統的管理類別 ====================
 
     def _open_register_dialog(self):
-        dlg = RegisterDialog(self.window, self.api_base_url)
-        self.window.wait_window(dlg.win)
-        result = dlg.result
-        if result and result.get("success"):
-            sc = result.get("secret_code") or ""
-            if 'UnifiedMessageDialog' in globals() and DIALOGS_AVAILABLE:
+        def on_success(data):
+            sc = data.get("secret_code") or ""
+            if DIALOGS_AVAILABLE:
                 UnifiedMessageDialog.show_success(self.window, f"註冊成功！\n\n您的律師登陸號：{sc}", "註冊完成")
             else:
                 messagebox.showinfo("註冊完成", f"註冊成功！\n\n您的律師登陸號：{sc}")
-            self.username_var.set(result.get("client_id",""))
-            self.password_var.set(result.get("password",""))
+            self.username_var.set(data.get("client_id", ""))
+            self.password_var.set(data.get("password", ""))
             self.password_entry.focus_set()
+
+        show_register_dialog(master=self.window, api_base=self.api_base_url, on_success=on_success)
 class LoginManager:
     """登入管理器 - 增強版"""
 

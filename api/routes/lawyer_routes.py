@@ -194,9 +194,13 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     msg = _build_plan_message(title, payload.client_name, plan_type, max_users, usage_now)
 
     return BindUserResponse(
-        success=True, client_name=payload.client_name,
-        plan_type=plan_type, limit=max_users, usage=usage_now,
-        available=max(0, max_users - usage_now), message=msg
+        success=True,
+        client_name=payload.client_name,
+        plan_type=plan_type,
+        limit=max_users,
+        usage=usage_now,
+        available=max(0, max_users - usage_now),
+        message=msg
     )
 
 #===========驗證 secret_code ============
