@@ -757,25 +757,29 @@ class LoginController(BaseWindow):
 # ==================== 整合現有系統的管理類別 ====================
 
     def _open_register_dialog(self):
-        """開啟註冊對話框（簡化穩定版）"""
-        # 若主視窗有被設為 topmost，暫時關掉，避免壓住對話框
-        try:
-            prev_topmost = bool(self.window.attributes('-topmost'))
-            self.window.attributes('-topmost', False)
-        except Exception:
-            prev_topmost = False
+        """開啟註冊對話框（穩定置頂＋聚焦）"""
+        # 1) 暫停 BaseWindow 的自動置頂
+        if hasattr(self, "suspend_topmost"):
+            self.suspend_topmost()
+        else:
+            # 備援：沒有就手動關 topmost
+            try: self.window.attributes('-topmost', False)
+            except Exception: pass
 
+        # 2) 開啟對話框
         dlg = self.RegisterDialog(self.window, self.api_base_url)
-        # 這行會阻塞，直到對話框關閉（確保焦點與操作都在對話框）
+
+        # 3) 等待關閉
         self.window.wait_window(dlg.top)
 
-        # 還原主視窗 topmost 狀態
-        try:
-            self.window.attributes('-topmost', prev_topmost)
-        except Exception:
-            pass
+        # 4) 還原 BaseWindow 置頂
+        if hasattr(self, "resume_topmost"):
+            self.resume_topmost()
+        else:
+            try: self.window.attributes('-topmost', True)
+            except Exception: pass
 
-        # 註冊成功：提示 secret_code，並把帳密帶回登入欄位
+        # 5) 成功回填與提示
         if dlg.result and dlg.result.get("success"):
             sc = dlg.result.get("secret_code") or ""
             try:
@@ -792,14 +796,15 @@ class LoginController(BaseWindow):
                 self.password_var.set(dlg.result["password"])
                 self.password_entry.focus_set()
 
+
     class RegisterDialog:
-        """註冊用戶對話框（自訂標題列；穩定顯示＋置頂＋自動聚焦）"""
+        """註冊用戶對話框（自訂標題；穩定顯示＋聚焦）"""
         def __init__(self, parent, api_base_url: str):
             self.parent = parent
             self.api_base_url = api_base_url.rstrip('/')
             self.result = None
 
-            # 先用標準 Toplevel 建好所有 UI（避免空白）
+            # 先用標準 Toplevel 畫完整個 UI（避免空白）
             self.top = tk.Toplevel(parent)
             self.top.title("註冊用戶")
             self.top.transient(parent)
@@ -824,29 +829,21 @@ class LoginController(BaseWindow):
                 x, y = (sw - w)//2, (sh - h)//2
             self.top.geometry(f"{w}x{h}+{x}+{y}")
 
-            # ==== 自訂標題列（我們會在全部畫好後隱藏原生標題）====
+            # ===== 自訂標題列（先畫好，稍後才隱藏原生標題）=====
             title_bar = tk.Frame(self.top, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'), height=34)
-            title_bar.pack(fill='x')
-            title_bar.pack_propagate(False)
-
-            title_lbl = tk.Label(
-                title_bar, text="註冊用戶",
-                bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
-                fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
-                font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold'))
-            )
+            title_bar.pack(fill='x'); title_bar.pack_propagate(False)
+            title_lbl = tk.Label(title_bar, text="註冊用戶",
+                                bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
+                                fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
+                                font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold')))
             title_lbl.pack(side='left', padx=10)
-
-            close_btn = tk.Button(
-                title_bar, text="✕",
-                bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
-                fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
-                font=('Arial', 11, 'bold'),
-                bd=0, width=3, command=self._cancel
-            )
+            close_btn = tk.Button(title_bar, text="✕",
+                                bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
+                                fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
+                                font=('Arial', 11, 'bold'), bd=0, width=3, command=self._cancel)
             close_btn.pack(side='right', padx=6)
 
-            # 拖曳邏輯（自訂標題可拖動視窗）
+            # 拖曳（自訂標題可拖動）
             self._drag = {"x": 0, "y": 0}
             def start_drag(e): self._drag.update(x=e.x, y=e.y)
             def on_drag(e):
@@ -854,12 +851,7 @@ class LoginController(BaseWindow):
                 ny = self.top.winfo_y() + (e.y - self._drag["y"])
                 self.top.geometry(f"+{nx}+{ny}")
             for wdg in (title_bar, title_lbl):
-                wdg.bind("<Button-1>", start_drag)
-                wdg.bind("<B1-Motion>", on_drag)
-
-            # 邊框（可選，讓無邊框視窗較不「貼邊」）
-            border = tk.Frame(self.top, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'), height=1)
-            border.pack(fill='x')
+                wdg.bind("<Button-1>", start_drag); wdg.bind("<B1-Motion>", on_drag)
 
             # 內容
             body = tk.Frame(self.top, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
@@ -905,28 +897,25 @@ class LoginController(BaseWindow):
                     fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
                     width=10, command=self._cancel).pack(side='left', padx=10)
 
-            # ========= 顯示 → 切自訂標題 → 置頂聚焦 =========
+            # 顯示＋聚焦（先穩定跑起來）
             self.top.deiconify()
+            self.top.lift(parent)
             self.top.update_idletasks()
-
-            # 隱藏原生標題，使用自訂標題列（關鍵：在 UI 都畫好後再切）
-            self.top.overrideredirect(True)
-
-            # 置頂與抓焦點（穩定）
-            self.top.lift(self.parent)
-            self.top.attributes('-topmost', True)
-            try:
-                self.top.grab_set()  # 需要更強：grab_set_global()
-            except Exception:
-                pass
-
-            # 自動聚焦到第一格
+            self.top.grab_set()
             self.top.wait_visibility()
             self._focus_first()
             self.top.after_idle(self._focus_first)
 
-            # 保險：若被搶焦點，拉回來
-            self.top.bind('<FocusOut>', lambda e: self._focus_first())
+            # **這裡才移除原生標題、套自訂標題**
+            try:
+                self.top.overrideredirect(True)
+                self.top.attributes('-topmost', True)
+                # 被搶焦點就拉回
+                self.top.bind('<FocusOut>', lambda e: self._focus_first())
+            except Exception:
+                # 失敗就回退（保證不 crash）
+                self.top.overrideredirect(False)
+                self.top.attributes('-topmost', True)
 
             # 快捷鍵
             self.top.bind('<Return>', lambda e: self._submit())
@@ -942,7 +931,6 @@ class LoginController(BaseWindow):
             except Exception:
                 pass
 
-        # --- 送出/取消/提示 ---
         def _submit(self):
             import requests
             name = self.var_name.get().strip()
@@ -990,7 +978,6 @@ class LoginController(BaseWindow):
                     messagebox.showwarning("提示", msg)
             except Exception:
                 messagebox.showwarning("提示", msg)
-
 
 class LoginManager:
     """登入管理器 - 增強版"""

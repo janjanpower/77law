@@ -295,6 +295,25 @@ class BaseWindow:
         except:
             pass
 
+    # 在 class BaseWindow 裡加入
+    def suspend_topmost(self):
+        """暫停自動置頂（用在開子視窗期間）"""
+        self._prev_auto_topmost = getattr(self, "auto_topmost", False)
+        self.auto_topmost = False
+        try:
+            self.window.attributes("-topmost", False)
+        except Exception:
+            pass
+
+    def resume_topmost(self):
+        """恢復自動置頂"""
+        prev = getattr(self, "_prev_auto_topmost", False)
+        self.auto_topmost = prev
+        try:
+            self.window.attributes("-topmost", bool(prev))
+        except Exception:
+            pass
+
 
 class EnhancedBaseWindow(BaseWindow):
     """增強版BaseWindow - 提供更多置頂功能"""
