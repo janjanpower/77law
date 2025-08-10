@@ -166,19 +166,16 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
         "line_user_id": payload.user_id
     }).first()
 
-    # 3) 計算 usage
+    # 3) 即時計算 usage（該 client_id 的當前綁定數）
     count_sql = text("""
         SELECT COUNT(*)::int AS c
         FROM client_line_users
-        WHERE client_id = :client_id AND is_active = TRUE
+        WHERE client_id = :client_id
+        AND is_active = TRUE
     """)
     usage = db.execute(count_sql, {"client_id": client_id}).scalar_one()
 
-    # 4) 回寫 current_users
-    tenant.current_users = usage
-    db.add(tenant)
-    db.commit()
-    db.refresh(tenant)
+    available = max(0, max_users - usage)
 
     available = max(0, max_users - usage)
 
@@ -293,11 +290,17 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
     except Exception:
-        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "invalid_json"}
+        return {
+            "success": False, "client_name": None, "plan_type": None,
+            "limit": None, "usage": None, "available": None, "message": "invalid_json"
+        }
 
     client_name = _extract_client_name(payload)
     if not client_name:
-        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_name_required"}
+        return {
+            "success": False, "client_name": None, "plan_type": None,
+            "limit": None, "usage": None, "available": None, "message": "client_name_required"
+        }
 
     user = (
         db.query(LoginUser)
@@ -305,19 +308,25 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
         .first()
     )
     if not user:
-        return {"success": False, "client_name": client_name, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_not_found"}
+        return {
+            "success": False, "client_name": client_name, "plan_type": None,
+            "limit": None, "usage": None, "available": None, "message": "client_not_found"
+        }
 
+    # 方案與上限（沿用既有欄位）
     plan_type = getattr(user, "plan_type", None)
     limit_val = getattr(user, "user_limit", None) or getattr(user, "max_users", None)
-    usage_val = getattr(user, "current_users", 0) or getattr(user, "bound_count", 0)
-    if usage_val is None:
-        usage_val = 0
 
-    available = None
-    if isinstance(limit_val, int) and isinstance(usage_val, int):
-        available = max(limit_val - usage_val, 0)
+    # 🔁 B 方案：即時計數，不讀 current_users
+    usage_val = db.query(func.count(ClientLineUsers.id)).filter(
+        ClientLineUsers.client_id == user.client_id,
+        ClientLineUsers.is_active == True
+    ).scalar() or 0
+    usage_val = int(usage_val)
 
-    # 文案：若已滿則提示升級，否則顯示目前使用
+    available = max(limit_val - usage_val, 0) if isinstance(limit_val, int) else None
+
+    # 文案
     if isinstance(limit_val, int) and usage_val >= limit_val:
         msg = _build_plan_message("⚠️ 已額滿，需要升級方案", user.client_name, plan_type, limit_val, usage_val)
         ok = False
