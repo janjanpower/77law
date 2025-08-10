@@ -71,11 +71,11 @@ async def upload_case(
     SELECT_ID = text("""SELECT id FROM case_records WHERE client_id=:client_id AND case_id=:case_id LIMIT 1""")
     INSERT_SQL = text("""
         INSERT INTO case_records (
-            client_id, case_id,
-            case_type, client, lawyer, legal_affairs,
-            progress, case_reason, case_number, opposing_party, court, division,
-            progress_date, progress_stages, progress_notes, progress_times,
-            created_date, updated_date
+        client_id, case_id,
+        case_type, client, lawyer, legal_affairs,
+        progress, case_reason, case_number, opposing_party, court, division,
+        progress_date, CAST(:progress_stages AS JSONB), CAST(:progress_notes AS JSONB), CAST(:progress_times AS JSONB),
+        created_date, updated_date
         ) VALUES (
             :client_id, :case_id,
             :case_type, :client, :lawyer, :legal_affairs,

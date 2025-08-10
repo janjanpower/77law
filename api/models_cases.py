@@ -51,14 +51,6 @@ class CaseRecord(Base):
     # 時間戳記 - 匹配 case_model.py
     created_date = Column(DateTime, nullable=True, comment="原始建立日期")
     updated_date = Column(DateTime, nullable=True, comment="原始更新日期")
-    # 資料庫管理欄位
-    uploaded_by = Column(String(100), nullable=True, comment="上傳者")
-    created_at = Column(DateTime, server_default=func.now(), nullable=False, comment="資料庫建立時間")
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False, comment="資料庫更新時間")
-
-    # 狀態欄位
-    is_active = Column(Boolean, default=True, nullable=False, comment="是否啟用")
-    is_deleted = Column(Boolean, default=False, nullable=False, comment="是否已刪除")
 
     # 建立索引以提升查詢效能
     __table_args__ = (

@@ -63,6 +63,7 @@ class ClientLoginRequest(BaseModel):
 
 class ClientLoginResponse(BaseModel):
     client_id: str
+    client_name: str
     is_active: bool
     tenant_status: bool
     message: str = "ok"
@@ -120,6 +121,7 @@ def client_login(req: ClientLoginRequest, db: Session = Depends(get_db)):
 
     return ClientLoginResponse(
         client_id=user.client_id,
+        client_name=user.client_name,
         is_active=bool(getattr(user, "is_active", False)),
         tenant_status=bool(getattr(user, "tenant_status", False)),
         message="ok",
