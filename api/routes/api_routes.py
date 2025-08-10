@@ -200,23 +200,25 @@ class RegisterResponse(BaseModel):
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
 def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    # 檢查 client_id 是否已存在
     exists = db.query(LoginUser).filter(LoginUser.client_id == req.client_id).first()
     if exists:
         raise HTTPException(status_code=400, detail="client_id 已被使用")
 
-    # 產生唯一 secret_code（簡易重試避免撞碼）
+    # 產生唯一 secret_code
     sc = gen_secret_code()
     for _ in range(5):
         if not db.query(LoginUser).filter(LoginUser.secret_code == sc).first():
             break
         sc = gen_secret_code()
 
+    # ✅ 建立帳號：預設方案 unpaid
     user = LoginUser(
-        client_id=req.client_id,
-        client_name=req.client_name,
-        password=req.password,
-        secret_code=sc
+        client_id=req.client_id.strip(),
+        client_name=req.client_name.strip(),
+        password=req.password,             # 目前沿用明碼欄位
+        secret_code=sc,
+        is_active=True,
+        **({"plan_type": "unpaid"} if hasattr(LoginUser, "plan_type") else {})  # 安全帶入
     )
     db.add(user)
     db.commit()

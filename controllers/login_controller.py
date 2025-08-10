@@ -782,73 +782,95 @@ class LoginController(BaseWindow):
                 self.password_entry.focus_set()
 
     class RegisterDialog:
-        """註冊用戶自訂對話框（統一 AppConfig 風格）"""
+        """註冊用戶自訂對話框（統一 AppConfig 風格 + 自訂標題列）"""
         def __init__(self, parent, api_base_url: str):
             self.parent = parent
             self.api_base_url = api_base_url.rstrip('/')
             self.result = None
 
+            # 建立 Toplevel
             self.top = tk.Toplevel(parent)
+            self.top.overrideredirect(True)  # ✅ 自訂標題列
             self.top.transient(parent)
             self.top.grab_set()
-            self.top.title("註冊用戶")
             self.top.configure(bg=AppConfig.COLORS['window_bg'])
 
-            # 置中顯示
-            w, h = 320, 260
-            self.top.geometry(f"{w}x{h}+{parent.winfo_x()+40}+{parent.winfo_y()+60}")
+            # 尺寸與置中
+            w, h = 340, 280
+            x = parent.winfo_x() + (parent.winfo_width() - w) // 2
+            y = parent.winfo_y() + (parent.winfo_height() - h) // 2
+            self.top.geometry(f"{w}x{h}+{x}+{y}")
             self.top.resizable(False, False)
 
-            # 標題
-            title = tk.Label(
-                self.top,
-                text="註冊用戶",
-                font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold')),
-                bg=AppConfig.COLORS['window_bg'],
-                fg=AppConfig.COLORS['text_color']
-            )
-            title.pack(pady=(10, 8))
+            # ==== 自訂標題列 ====
+            title_bar = tk.Frame(self.top, bg=AppConfig.COLORS['title_bg'], height=34)
+            title_bar.pack(fill='x')
+            title_bar.pack_propagate(False)
 
-            # 表單區
-            frm = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
-            frm.pack(fill='both', expand=True, padx=16)
+            title_lbl = tk.Label(
+                title_bar,
+                text="註冊用戶",
+                bg=AppConfig.COLORS['title_bg'],
+                fg=AppConfig.COLORS['title_fg'],
+                font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold'))
+            )
+            title_lbl.pack(side='left', padx=10)
+
+            close_btn = tk.Button(
+                title_bar, text="✕",
+                bg=AppConfig.COLORS['title_bg'],
+                fg=AppConfig.COLORS['title_fg'],
+                font=('Arial', 11, 'bold'),
+                bd=0, width=3,
+                command=self._cancel
+            )
+            close_btn.pack(side='right', padx=6)
+
+            # 拖曳事件
+            self._drag = {"x": 0, "y": 0}
+            def start_drag(e): self._drag.update(x=e.x, y=e.y)
+            def on_drag(e):
+                nx = self.top.winfo_x() + (e.x - self._drag["x"])
+                ny = self.top.winfo_y() + (e.y - self._drag["y"])
+                self.top.geometry(f"+{nx}+{ny}")
+            for wdg in (title_bar, title_lbl):
+                wdg.bind("<Button-1>", start_drag)
+                wdg.bind("<B1-Motion>", on_drag)
+
+            # ==== 內容區 ====
+            body = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
+            body.pack(fill='both', expand=True, padx=16, pady=12)
 
             # 事務所名稱
-            tk.Label(frm, text="事務所名稱", font=AppConfig.FONTS['text'],
+            tk.Label(body, text="事務所名稱", font=AppConfig.FONTS['text'],
                     bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=0, column=0, sticky='w', pady=(0,4))
             self.var_name = tk.StringVar()
-            tk.Entry(frm, textvariable=self.var_name, font=AppConfig.FONTS['text'], width=24).grid(row=1, column=0, sticky='we', pady=(0,8))
+            tk.Entry(body, textvariable=self.var_name, font=AppConfig.FONTS['text'], width=26).grid(row=1, column=0, sticky='we', pady=(0,8))
 
             # 帳號
-            tk.Label(frm, text="帳號（client_id）", font=AppConfig.FONTS['text'],
+            tk.Label(body, text="帳號（client_id）", font=AppConfig.FONTS['text'],
                     bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=2, column=0, sticky='w', pady=(0,4))
             self.var_id = tk.StringVar()
-            tk.Entry(frm, textvariable=self.var_id, font=AppConfig.FONTS['text'], width=24).grid(row=3, column=0, sticky='we', pady=(0,8))
+            tk.Entry(body, textvariable=self.var_id, font=AppConfig.FONTS['text'], width=26).grid(row=3, column=0, sticky='we', pady=(0,8))
 
             # 密碼
-            tk.Label(frm, text="密碼", font=AppConfig.FONTS['text'],
+            tk.Label(body, text="密碼", font=AppConfig.FONTS['text'],
                     bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=4, column=0, sticky='w', pady=(0,4))
             self.var_pwd = tk.StringVar()
-            tk.Entry(frm, textvariable=self.var_pwd, font=AppConfig.FONTS['text'], show='*', width=24).grid(row=5, column=0, sticky='we', pady=(0,8))
-
-            frm.grid_columnconfigure(0, weight=1)
+            tk.Entry(body, textvariable=self.var_pwd, font=AppConfig.FONTS['text'], show='*', width=26).grid(row=5, column=0, sticky='we', pady=(0,8))
+            body.grid_columnconfigure(0, weight=1)
 
             # 按鈕列
             btns = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
-            btns.pack(pady=(4, 12))
-
-            confirm = tk.Button(btns, text="送出註冊",
-                                font=AppConfig.FONTS['button'],
-                                bg=AppConfig.COLORS['button_bg'],
-                                fg=AppConfig.COLORS['button_fg'],
-                                width=10, command=self._submit)
-            cancel = tk.Button(btns, text="取消",
-                            font=AppConfig.FONTS['button'],
-                            bg=AppConfig.COLORS['button_bg'],
-                            fg=AppConfig.COLORS['button_fg'],
-                            width=10, command=self._cancel)
-            confirm.pack(side='left', padx=10)
-            cancel.pack(side='left', padx=10)
+            btns.pack(pady=(0, 12))
+            tk.Button(btns, text="送出註冊",
+                    font=AppConfig.FONTS['button'],
+                    bg=AppConfig.COLORS['button_bg'], fg=AppConfig.COLORS['button_fg'],
+                    width=10, command=self._submit).pack(side='left', padx=10)
+            tk.Button(btns, text="取消",
+                    font=AppConfig.FONTS['button'],
+                    bg=AppConfig.COLORS['button_bg'], fg=AppConfig.COLORS['button_fg'],
+                    width=10, command=self._cancel).pack(side='left', padx=10)
 
             # 快捷鍵
             self.top.bind('<Return>', lambda e: self._submit())
