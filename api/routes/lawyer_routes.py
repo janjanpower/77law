@@ -142,15 +142,15 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
 
     # 2) 先寫入 client_line_users（避免重覆，使用 upsert）
     upsert_sql = text("""
-        INSERT INTO client_line_users (client_id, client_name, user_id)
-        VALUES (:client_id, :client_name, :user_id)
-        ON CONFLICT (client_id, user_id) DO NOTHING
-        RETURNING id;
+    INSERT INTO client_line_users (client_id, client_name, line_user_id)
+    VALUES (:client_id, :client_name, :line_user_id)
+    ON CONFLICT (client_id, line_user_id) DO NOTHING
+    RETURNING id;
     """)
     inserted = db.execute(upsert_sql, {
         "client_id": client_id,
         "client_name": payload.client_name,
-        "user_id": payload.user_id
+        "line_user_id": payload.user_id
     }).first()
 
     # 3) 重新計算 usage（該 client_id 的當前綁定數）
