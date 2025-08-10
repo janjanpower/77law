@@ -147,7 +147,7 @@ class ClientLineUsers(Base):
 
     # 基本欄位
     id = Column(Integer, primary_key=True, index=True)
-    client_id = Column(String(50), ForeignKey('login_users.client_id'), nullable=False, index=True, comment="所屬事務所ID")
+    client_name = Column(String(100), nullable=True, comment="事務所名稱")
     line_user_id = Column(String(100), nullable=False, unique=True, index=True, comment="LINE 用戶ID")
     user_name = Column(String(50), nullable=True, comment="用戶名稱")
 
@@ -158,7 +158,6 @@ class ClientLineUsers(Base):
 
     # 額外資訊
     user_role = Column(String(20), default="member", comment="用戶角色: admin, member, viewer")
-    notes = Column(Text, nullable=True, comment="備註")
 
     # 建立關聯
     client = relationship("LoginUser", back_populates="line_users")
@@ -272,29 +271,4 @@ class DatabaseManager:
     def get_total_line_users_count(db: Session) -> int:
         """取得總LINE用戶數量"""
         return db.query(ClientLineUsers).filter(ClientLineUsers.is_active == True).count()
-
-
-# ==================== 資料驗證和常數 ====================
-
-class PlanTypes:
-    """方案類型常數"""
-    BASIC_5 = "basic_5"
-    STANDARD_10 = "standard_10"
-    PREMIUM_20 = "premium_20"
-    ENTERPRISE_50 = "enterprise_50"
-    UNLIMITED = "unlimited"
-
-    @classmethod
-    def get_all_plans(cls) -> List[str]:
-        return [cls.BASIC_5, cls.STANDARD_10, cls.PREMIUM_20, cls.ENTERPRISE_50, cls.UNLIMITED]
-
-    @classmethod
-    def get_plan_limits(cls) -> Dict[str, int]:
-        return {
-            cls.BASIC_5: 5,
-            cls.STANDARD_10: 10,
-            cls.PREMIUM_20: 20,
-            cls.ENTERPRISE_50: 50,
-            cls.UNLIMITED: 999999
-        }
 
