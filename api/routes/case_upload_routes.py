@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""api/routes/case_upload_routes.py — use get_db_cm(client_id) for tenant writes"""
-from typing import Dict, Any
+"""api/routes/case_upload_routes.py — flexible client_id intake (query/body/header) and tenant-aware DB"""
+from typing import Dict, Any, Optional
 import json
 from datetime import datetime
 
@@ -20,19 +20,31 @@ def ensure_dict(v: Any) -> Dict[str, Any]:
     return {}
 
 @router.post("/upload")
-async def upload_case(request: Request, client_id: str = Query(...)):
+async def upload_case(
+    request: Request,
+    client_id_q: Optional[str] = Query(None, description="事務所/租戶的 client_id (query)"),
+):
+    # 1) 讀取 JSON
     try:
         payload = await request.json()
         if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Body must be JSON object")
+            raise ValueError("payload must be object")
     except Exception:
-        raise HTTPException(status_code=400, detail="Body must be JSON object")
+        payload = {}
 
+    # 2) 多來源取得 client_id / case_id：query > body > header
+    client_id = client_id_q or payload.get("client_id") or request.headers.get("X-Client-Id")
     case_id = (payload.get("case_id") or "").strip()
-    if not client_id or not case_id:
-        raise HTTPException(status_code=400, detail="client_id 與 case_id 必填")
+
+    if not client_id:
+        raise HTTPException(status_code=422, detail=[{
+            "type": "missing", "loc": ["query", "client_id"], "msg": "Field required", "input": None
+        }])
+    if not case_id:
+        raise HTTPException(status_code=400, detail="case_id 必填 (in JSON body)")
 
     data = ensure_dict(payload.get("data"))
+
     def get_s(k, d=""): return str(data.get(k, d) or d)
 
     params = {
@@ -87,6 +99,7 @@ async def upload_case(request: Request, client_id: str = Query(...)):
     """)
 
     try:
+        # 3) 切到該租戶的 DB（依據 login_users.tenant_db_url）
         with get_db_cm(client_id) as db:
             row = db.execute(SELECT_ID, {"client_id": client_id, "case_id": case_id}).fetchone()
             if row:

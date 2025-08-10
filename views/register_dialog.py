@@ -179,10 +179,8 @@ class RegisterDialog:
                 "password": pwd
             }
             # 可選：提示成功再關閉
-            try:
-                messagebox.showinfo("註冊成功", f"client_id：{data.get('client_id')}\nsecret_code：{data.get('secret_code')}", parent=self.win)
-            finally:
-                self.close()
+
+            self.close()
         else:
             try:
                 detail = resp.json().get("detail")
