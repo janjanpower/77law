@@ -6,7 +6,7 @@ import psycopg2
 from psycopg2 import sql
 from sqlalchemy import create_engine, text
 from api.database import Base
-from models.case_records import CaseRecord  # 依你實際位置調整匯入
+from api.models_cases import CaseRecord  # 依你實際位置調整匯入
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
