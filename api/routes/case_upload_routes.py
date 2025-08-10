@@ -169,6 +169,10 @@ def upload_cases(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     results = {"total": len(items), "success": 0, "failed": 0, "details": []}
 
     with tenant_eng.begin() as cx:
+        # ⬇️ 新增這行，確保本交易都在 client_{client_id} 底下
+        cx.execute(text(f"SET search_path TO client_{client_id}"))
+        cur_schema = cx.execute(text("SELECT current_schema()")).scalar()
+        print("[upload] current_schema =", cur_schema)
         # 逐筆寫入
         for it in items:
             try:
