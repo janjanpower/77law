@@ -15,6 +15,7 @@ import random, string
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, constr
+from api.services.storage import s3_put_bytes
 
 # === DB session dependency ===
 try:
@@ -117,8 +118,13 @@ def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> 
     client_id = payload.client_id.strip()
     password = payload.password
 
-    # 先以 client_id 找人，再比對密碼
-    client = db.query(LoginUser).filter(LoginUser.client_id == client_id).first()
+    # 改成 AND（兩者都要 True）
+    client = db.query(LoginUser).filter(
+        LoginUser.client_id == client_id,
+        LoginUser.password == password,
+        LoginUser.is_active == True,
+        LoginUser.tenant_status == True,
+    ).first()
     if not client or getattr(client, "password", None) != password:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
@@ -251,6 +257,24 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # === 立刻建立 tenant schema，並把 URL/READY 寫回 login_users ===
+    try:
+        tenant_url = ensure_tenant_schema(user.client_id)
+        if hasattr(LoginUser, "tenant_db_url"):
+            setattr(user, "tenant_db_url", tenant_url)
+        if hasattr(LoginUser, "tenant_db_ready"):
+            setattr(user, "tenant_db_ready", True)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        # 若建失敗，你可以選擇：保持帳號存在，但 tenant_db_ready=False
+        try:
+            if hasattr(LoginUser, "tenant_db_ready"):
+                setattr(user, "tenant_db_ready", False)
+            db.commit()
+        except Exception:
+            db.rollback()
 
     return RegisterResponse(
         message="註冊成功，請妥善保存您的登錄資訊。",
