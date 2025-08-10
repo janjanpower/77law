@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 api/models_cases.py
-案件資料庫模型 - 完整的 CaseRecord 定義
+案件資料庫模型 - 完整的 CaseRecord 定義（修正版，只保留你原本的欄位 + 必要補欄位）
 """
 
 from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean, Index, func
@@ -28,13 +28,13 @@ class CaseRecord(Base):
     client_id = Column(String(50), nullable=False, index=True, comment="事務所ID")
     case_id = Column(String(100), nullable=False, index=True, comment="案件編號")
 
-    # 基本案件資訊 - 完全匹配 case_model.py
+    # 基本案件資訊
     case_type = Column(String(50), nullable=False, comment="案件類型")  # 刑事/民事
     client = Column(String(100), nullable=False, comment="當事人")
     lawyer = Column(String(100), nullable=True, comment="委任律師")
     legal_affairs = Column(String(100), nullable=True, comment="法務人員")
 
-    # 案件狀態 - 完全匹配 case_model.py
+    # 案件狀態
     progress = Column(String(50), nullable=False, default="待處理", comment="進度追蹤")
     case_reason = Column(Text, nullable=True, comment="案由")
     case_number = Column(String(100), nullable=True, comment="案號")
@@ -43,16 +43,22 @@ class CaseRecord(Base):
     division = Column(String(50), nullable=True, comment="負責股別")
     progress_date = Column(String(20), nullable=True, comment="當前進度的日期")
 
-    # JSON 欄位 - 完全匹配 case_model.py 的字典結構
+    # JSON 欄位
     progress_stages = Column(JSON, nullable=True, comment="進度階段記錄 {階段: 日期}")
     progress_notes = Column(JSON, nullable=True, comment="進度階段備註 {階段: 備註}")
     progress_times = Column(JSON, nullable=True, comment="進度階段時間 {階段: 時間}")
 
-    # 時間戳記 - 匹配 case_model.py
+    # 舊系統時間戳
     created_date = Column(DateTime, nullable=True, comment="原始建立日期")
     updated_date = Column(DateTime, nullable=True, comment="原始更新日期")
 
-    # 建立索引以提升查詢效能
+    # 必要補欄位（你原本的 to_dict 和索引會用到）
+    uploaded_by = Column(String(100), nullable=True, comment="上傳人")
+    created_at = Column(DateTime, nullable=False, server_default=func.now(), comment="建立時間")
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新時間")
+    is_active = Column(Boolean, nullable=False, server_default='true', comment="是否啟用")
+
+    # 建立索引
     __table_args__ = (
         Index('idx_client_case', 'client_id', 'case_id'),
         Index('idx_client_type', 'client_id', 'case_type'),
@@ -66,7 +72,7 @@ class CaseRecord(Base):
         return f"<CaseRecord(id={self.id}, client_id='{self.client_id}', case_id='{self.case_id}', client='{self.client}')>"
 
     def to_dict(self):
-        """轉換為字典格式 - 匹配 case_model.py 的 to_dict 結構"""
+        """轉換為字典格式"""
         return {
             'case_id': self.case_id,
             'case_type': self.case_type,
@@ -85,7 +91,6 @@ class CaseRecord(Base):
             'progress_times': self.progress_times or {},
             'created_date': self.created_date.isoformat() if self.created_date else None,
             'updated_date': self.updated_date.isoformat() if self.updated_date else None,
-            # 額外的資料庫欄位
             'id': self.id,
             'client_id': self.client_id,
             'uploaded_by': self.uploaded_by,

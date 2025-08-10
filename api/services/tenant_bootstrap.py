@@ -1,163 +1,136 @@
-# -*- coding: utf-8 -*-
 # api/services/tenant_bootstrap.py
-# 建立每個租戶專屬的 Postgres schema；確保建立 case_records；並把 schema 連線字串寫回 login_users.tenant_db_url
+# 建議：整份覆蓋你現有檔案
 
 import os
-import re
-import urllib.parse
-import psycopg2
-from psycopg2 import sql
 from sqlalchemy import create_engine, text
+from api.database import Base, DATABASE_URL
+from api.models_cases import CaseRecord  # 需要載入，讓 ORM 知道要建哪些索引/約束
 
-from api.database import Base
-from api.models_cases import CaseRecord
-
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-
-# 正規化 DSN（Heroku 舊格式）
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-elif DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
-
-_slug_re = re.compile(r"[^a-z0-9_]+")
-
-def _schema_name_from_client_id(client_id: str) -> str:
-    s = client_id.strip().lower().replace("-", "_")
-    s = _slug_re.sub("_", s).strip("_") or "x"
-    return f"tenant_{s}"
 
 def _compose_schema_url(base_url: str, schema: str) -> str:
+    """
+    將 Heroku PG 的 DATABASE_URL 加上 search_path，指向指定 schema。
+    """
+    if not base_url:
+        raise RuntimeError("DATABASE_URL not configured")
+    if "options=" in base_url and "search_path" in base_url:
+        return base_url  # 已有設定就不動
     sep = "&" if "?" in base_url else "?"
-    return f"{base_url}{sep}options={urllib.parse.quote('-c search_path=' + schema)}"
+    return f"{base_url}{sep}options=-csearch_path%3D{schema}"
 
-# api/services/tenant_bootstrap.py 片段
-def _ensure_case_records_sql_fallback(engine):
-    ddl = text("""
-        CREATE TABLE IF NOT EXISTS case_records (
-            id BIGSERIAL PRIMARY KEY,
-            client_id TEXT NOT NULL,
-            case_id   TEXT NOT NULL,
 
-            -- 基本資訊（與 models_cases 對齊）
-            case_type TEXT NOT NULL,
-            client    TEXT NOT NULL,
-            lawyer    TEXT,
-            legal_affairs TEXT,
-
-            progress  TEXT NOT NULL DEFAULT '待處理',
-            case_reason TEXT,
-            case_number TEXT,
-            opposing_party TEXT,
-            court     TEXT,
-            division  TEXT,
-            progress_date TEXT,
-
-            -- JSON 欄位
-            progress_stages JSONB NOT NULL DEFAULT '{}'::jsonb,
-            progress_notes  JSONB NOT NULL DEFAULT '{}'::jsonb,
-            progress_times  JSONB NOT NULL DEFAULT '{}'::jsonb,
-
-            -- 舊系統的時間戳（可為 NULL）
-            created_date TIMESTAMPTZ NULL,
-            updated_date TIMESTAMPTZ NULL,
-
-            -- 新增的資料庫管理欄位（與 models_cases 對齊）
-            uploaded_by TEXT,
-            created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-            is_active   BOOLEAN NOT NULL DEFAULT TRUE,
-            is_deleted  BOOLEAN NOT NULL DEFAULT FALSE,
-
-            CONSTRAINT uq_case_records_client_case UNIQUE (client_id, case_id)
-        );
-
-        -- 索引（與 models_cases.__table_args__ 對齊或接近）
-        CREATE INDEX IF NOT EXISTS idx_case_records_client ON case_records (client_id);
-        CREATE INDEX IF NOT EXISTS idx_case_records_case   ON case_records (case_id);
-        CREATE INDEX IF NOT EXISTS idx_case_records_client_type ON case_records (client_id, case_type);
-        CREATE INDEX IF NOT EXISTS idx_case_records_client_lawyer ON case_records (client_id, lawyer);
-        CREATE INDEX IF NOT EXISTS idx_case_records_created_at ON case_records (created_at);
-        CREATE INDEX IF NOT EXISTS idx_case_records_progress ON case_records (progress);
-        CREATE INDEX IF NOT EXISTS idx_case_records_case_number ON case_records (case_number);
-    """)
+def _ensure_case_records_sql_fallback(engine, schema: str):
+    # 確保動作都在目標 schema
     with engine.begin() as cx:
-        cx.execute(ddl)
+        cx.execute(text(f"SET search_path TO {schema}"))
+        cx.execute(text("""
+            CREATE TABLE IF NOT EXISTS case_records (
+                id BIGSERIAL PRIMARY KEY,
+                client_id TEXT NOT NULL,
+                case_id   TEXT NOT NULL,
 
-def _migrate_case_records_columns(engine):
-    # 逐欄位補齊（IF NOT EXISTS + DEFAULT + NOT NULL）
+                -- 與 models_cases.py 對齊的欄位
+                case_type TEXT NOT NULL,
+                client    TEXT NOT NULL,
+                lawyer    TEXT,
+                legal_affairs TEXT,
+
+                progress  TEXT NOT NULL DEFAULT '待處理',
+                case_reason TEXT,
+                case_number TEXT,
+                opposing_party TEXT,
+                court     TEXT,
+                division  TEXT,
+                progress_date TEXT,
+
+                -- JSON 欄位（允許 NULL，與 model 對齊）
+                progress_stages JSONB NULL,
+                progress_notes  JSONB NULL,
+                progress_times  JSONB NULL,
+
+                -- 舊系統時間戳（允許 NULL）
+                created_date TIMESTAMPTZ NULL,
+                updated_date TIMESTAMPTZ NULL,
+
+                -- 必要補欄位（與 model 對齊）
+                uploaded_by TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+
+                CONSTRAINT uq_case_records_client_case UNIQUE (client_id, case_id)
+            );
+
+            -- 基本索引（其餘交給 ORM 建立）
+            CREATE INDEX IF NOT EXISTS idx_case_records_client ON case_records (client_id);
+            CREATE INDEX IF NOT EXISTS idx_case_records_case   ON case_records (case_id);
+        """))
+
+def _migrate_case_records_columns(engine, schema: str):
+    # 安全可重複執行的遷移，確保舊表欄位補齊且不多
     alters = [
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS uploaded_by TEXT",
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()",
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS is_active  BOOLEAN NOT NULL DEFAULT TRUE",
-        "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE",
-        "ALTER TABLE case_records ALTER COLUMN progress_stages SET DEFAULT '{}'::jsonb",
-        "ALTER TABLE case_records ALTER COLUMN progress_notes  SET DEFAULT '{}'::jsonb",
-        "ALTER TABLE case_records ALTER COLUMN progress_times  SET DEFAULT '{}'::jsonb",
+
+        # JSON 欄位允許 NULL，就不強制 DEFAULT；但如果你想預設空物件可解除註解：
+        # \"ALTER TABLE case_records ALTER COLUMN progress_stages SET DEFAULT '{}'::jsonb\",
+        # \"ALTER TABLE case_records ALTER COLUMN progress_notes  SET DEFAULT '{}'::jsonb\",
+        # \"ALTER TABLE case_records ALTER COLUMN progress_times  SET DEFAULT '{}'::jsonb\",
+
         "ALTER TABLE case_records ALTER COLUMN case_type SET NOT NULL",
         "ALTER TABLE case_records ALTER COLUMN client    SET NOT NULL",
         "ALTER TABLE case_records ALTER COLUMN progress  SET NOT NULL",
     ]
     with engine.begin() as cx:
+        cx.execute(text(f"SET search_path TO {schema}"))
         for sql in alters:
             cx.execute(text(sql))
 
+    # 驗證 created_at 存在
+    with engine.connect() as cx:
+        cx.execute(text(f"SET search_path TO {schema}"))
+        cols = cx.execute(text("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'case_records'
+        """)).scalars().all()
+    if "created_at" not in cols:
+        raise RuntimeError(f"[migrate] created_at still missing in {schema}. Actual columns: {cols}")
+
 def ensure_tenant_schema(client_id: str) -> str:
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL not set")
+    """
+    建立/修復租戶 schema 的正確流程（只影響新註冊）：
+      1) 建立 schema（若不存在）
+      2) 以 SQL fallback 先建表（若不存在）
+      3) 立刻做欄位遷移補齊
+      4) 最後交給 ORM 建索引/約束（此時欄位已存在，不會再報 created_at 缺失）
 
-    schema = _schema_name_from_client_id(client_id)
+    回傳該租戶可用的 DB 連線字串（含 search_path）。
+    """
+    schema = f"client_{client_id}".strip()
+    base_url = os.getenv("DATABASE_URL", DATABASE_URL)
+    if not base_url:
+        raise RuntimeError("DATABASE_URL not configured")
 
-    # 1) create schema
-    raw_pg_url = str(DATABASE_URL).replace("+psycopg2", "")
-    conn = psycopg2.connect(raw_pg_url)
-    conn.autocommit = True
-    cur = conn.cursor()
-    cur.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}" ).format(sql.Identifier(schema)))
-    cur.close()
-    conn.close()
+    # 1) 先確保 schema 存在
+    root_engine = create_engine(base_url, pool_pre_ping=True)
+    with root_engine.begin() as cx:
+        cx.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
 
-    # 2) create tables in that schema (ORM + SQL fallback)
-    schema_url = _compose_schema_url(DATABASE_URL, schema)
+    # 2) 切到該 schema 的 engine
+    schema_url = _compose_schema_url(base_url, schema)
     tenant_engine = create_engine(schema_url, pool_pre_ping=True)
 
-    # ORM attempt
-    Base.metadata.create_all(bind=tenant_engine, tables=[CaseRecord.__table__])
+    # 3) 先用 SQL 建最小正確表
+    _ensure_case_records_sql_fallback(tenant_engine)
 
-    # Verify; if missing, fallback DDL
-    with tenant_engine.connect() as cx:
-        ok = cx.execute(text("SELECT to_regclass('case_records')")).scalar()
-    if not ok:
-        _ensure_case_records_sql_fallback(tenant_engine)
-        with tenant_engine.connect() as cx:
-            ok2 = cx.execute(text("SELECT to_regclass('case_records')")).scalar()
-        if not ok2:
-            raise RuntimeError("Failed to create case_records (ORM + SQL fallback failed)")
-
-    # >>> 新增：對既有/剛建的表做補欄位遷移
+    # 4) 立刻做欄位/預設遷移（舊表補齊，新表無害）
     _migrate_case_records_columns(tenant_engine)
 
-
-    # 3) write back tenant_db_url
-    main_engine = create_engine(DATABASE_URL, pool_pre_ping=True)
-    with main_engine.begin() as cx:
-        res = cx.execute(
-            text(
-                """
-                UPDATE login_users
-                   SET tenant_db_url = :url,
-                       tenant_db_ready = TRUE
-                 WHERE client_id = :cid
-                """
-            ),
-            {"url": schema_url, "cid": client_id},
-        )
-        try:
-            rc = res.rowcount
-        except Exception:
-            rc = None
-        if not rc:
-            print(f"[ensure_tenant_schema] WARN: UPDATE login_users affected 0 rows for client_id={client_id}")
+    # 5) 最後才讓 ORM 建索引/約束（此時欄位齊全，不會噴錯）
+    Base.metadata.create_all(bind=tenant_engine, tables=[CaseRecord.__table__])
 
     return schema_url
