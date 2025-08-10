@@ -757,13 +757,27 @@ class LoginController(BaseWindow):
 # ==================== 整合現有系統的管理類別 ====================
 
     def _open_register_dialog(self):
-        """開啟註冊用戶自訂對話框"""
-        dialog = self.RegisterDialog(self.window, self.api_base_url)
-        self.window.wait_window(dialog.top)
+        """開啟註冊對話框（簡化穩定版）"""
+        # 若主視窗有被設為 topmost，暫時關掉，避免壓住對話框
+        try:
+            prev_topmost = bool(self.window.attributes('-topmost'))
+            self.window.attributes('-topmost', False)
+        except Exception:
+            prev_topmost = False
 
-        if dialog.result and dialog.result.get("success"):
-            sc = dialog.result.get("secret_code") or ""
-            # 成功提示律師登陸號
+        dlg = self.RegisterDialog(self.window, self.api_base_url)
+        # 這行會阻塞，直到對話框關閉（確保焦點與操作都在對話框）
+        self.window.wait_window(dlg.top)
+
+        # 還原主視窗 topmost 狀態
+        try:
+            self.window.attributes('-topmost', prev_topmost)
+        except Exception:
+            pass
+
+        # 註冊成功：提示 secret_code，並把帳密帶回登入欄位
+        if dlg.result and dlg.result.get("success"):
+            sc = dlg.result.get("secret_code") or ""
             try:
                 if DIALOGS_AVAILABLE:
                     UnifiedMessageDialog.show_success(self.window, f"註冊成功！\n\n您的律師登陸號：{sc}", "註冊完成")
@@ -772,133 +786,139 @@ class LoginController(BaseWindow):
             except Exception:
                 messagebox.showinfo("註冊完成", f"註冊成功！\n\n您的律師登陸號：{sc}")
 
-            # 自動填入帳密以方便登入
-            cid = dialog.result.get("client_id") or ""
-            pwd = dialog.result.get("password") or ""
-            if cid:
-                self.username_var.set(cid)
-            if pwd:
-                self.password_var.set(pwd)
+            if dlg.result.get("client_id"):
+                self.username_var.set(dlg.result["client_id"])
+            if dlg.result.get("password"):
+                self.password_var.set(dlg.result["password"])
                 self.password_entry.focus_set()
 
     class RegisterDialog:
-        """註冊用戶自訂對話框（統一 AppConfig 風格 + 自訂標題列）"""
+        """註冊用戶對話框（標準標題列；穩定顯示＋自動聚焦）"""
         def __init__(self, parent, api_base_url: str):
             self.parent = parent
             self.api_base_url = api_base_url.rstrip('/')
             self.result = None
 
-            # 建立 Toplevel
+            # --- 用標準 Toplevel（不要 overrideredirect）最穩 ---
             self.top = tk.Toplevel(parent)
-            self.top.overrideredirect(True)  # ✅ 自訂標題列
-            self.top.transient(parent)
-            self.top.grab_set()
-            self.top.configure(bg=AppConfig.COLORS['window_bg'])
-
-            # 尺寸與置中
-            w, h = 340, 280
-            x = parent.winfo_x() + (parent.winfo_width() - w) // 2
-            y = parent.winfo_y() + (parent.winfo_height() - h) // 2
-            self.top.geometry(f"{w}x{h}+{x}+{y}")
+            self.top.title("註冊用戶")
+            self.top.transient(parent)       # 讓它附屬於 parent（會在前面）
             self.top.resizable(False, False)
+            self.top.configure(bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
+            self.top.protocol("WM_DELETE_WINDOW", self._cancel)
 
-            # ==== 自訂標題列 ====
-            title_bar = tk.Frame(self.top, bg=AppConfig.COLORS['title_bg'], height=34)
+            # 置中
+            w, h = 340, 280
+            try:
+                self.parent.update_idletasks()
+                px, py = parent.winfo_x(), parent.winfo_y()
+                pw, ph = parent.winfo_width(), parent.winfo_height()
+                if pw <= 1 or ph <= 1:
+                    sw, sh = self.top.winfo_screenwidth(), self.top.winfo_screenheight()
+                    x, y = (sw - w)//2, (sh - h)//2
+                else:
+                    x = px + max((pw - w)//2, 0)
+                    y = py + max((ph - h)//2, 0)
+            except Exception:
+                sw, sh = self.top.winfo_screenwidth(), self.top.winfo_screenheight()
+                x, y = (sw - w)//2, (sh - h)//2
+            self.top.geometry(f"{w}x{h}+{x}+{y}")
+
+            # ---- 內容 ----
+            title_bar = tk.Frame(self.top, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'))
             title_bar.pack(fill='x')
-            title_bar.pack_propagate(False)
-
-            title_lbl = tk.Label(
-                title_bar,
-                text="註冊用戶",
-                bg=AppConfig.COLORS['title_bg'],
-                fg=AppConfig.COLORS['title_fg'],
+            tk.Label(
+                title_bar, text="註冊用戶",
+                bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
+                fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
                 font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold'))
-            )
-            title_lbl.pack(side='left', padx=10)
+            ).pack(padx=10, pady=8, anchor='w')
 
-            close_btn = tk.Button(
-                title_bar, text="✕",
-                bg=AppConfig.COLORS['title_bg'],
-                fg=AppConfig.COLORS['title_fg'],
-                font=('Arial', 11, 'bold'),
-                bd=0, width=3,
-                command=self._cancel
-            )
-            close_btn.pack(side='right', padx=6)
-
-            # 拖曳事件
-            self._drag = {"x": 0, "y": 0}
-            def start_drag(e): self._drag.update(x=e.x, y=e.y)
-            def on_drag(e):
-                nx = self.top.winfo_x() + (e.x - self._drag["x"])
-                ny = self.top.winfo_y() + (e.y - self._drag["y"])
-                self.top.geometry(f"+{nx}+{ny}")
-            for wdg in (title_bar, title_lbl):
-                wdg.bind("<Button-1>", start_drag)
-                wdg.bind("<B1-Motion>", on_drag)
-
-            # ==== 內容區 ====
-            body = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
-            body.pack(fill='both', expand=True, padx=16, pady=12)
+            body = tk.Frame(self.top, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
+            body.pack(fill='both', expand=True, padx=16, pady=10)
 
             # 事務所名稱
-            tk.Label(body, text="事務所名稱", font=AppConfig.FONTS['text'],
-                    bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=0, column=0, sticky='w', pady=(0,4))
+            tk.Label(body, text="事務所名稱", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
+                    bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
+                    fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=0, column=0, sticky='w', pady=(0,4))
             self.var_name = tk.StringVar()
-            tk.Entry(body, textvariable=self.var_name, font=AppConfig.FONTS['text'], width=26).grid(row=1, column=0, sticky='we', pady=(0,8))
+            self.entry_name = tk.Entry(body, textvariable=self.var_name,
+                                    font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
+            self.entry_name.grid(row=1, column=0, sticky='we', pady=(0,8))
 
-            # 帳號
-            tk.Label(body, text="帳號（client_id）", font=AppConfig.FONTS['text'],
-                    bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=2, column=0, sticky='w', pady=(0,4))
+            # 帳號（client_id）
+            tk.Label(body, text="帳號（client_id）", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
+                    bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
+                    fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=2, column=0, sticky='w', pady=(0,4))
             self.var_id = tk.StringVar()
-            tk.Entry(body, textvariable=self.var_id, font=AppConfig.FONTS['text'], width=26).grid(row=3, column=0, sticky='we', pady=(0,8))
+            self.entry_id = tk.Entry(body, textvariable=self.var_id,
+                                    font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
+            self.entry_id.grid(row=3, column=0, sticky='we', pady=(0,8))
 
             # 密碼
-            tk.Label(body, text="密碼", font=AppConfig.FONTS['text'],
-                    bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=4, column=0, sticky='w', pady=(0,4))
+            tk.Label(body, text="密碼", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
+                    bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
+                    fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=4, column=0, sticky='w', pady=(0,4))
             self.var_pwd = tk.StringVar()
-            tk.Entry(body, textvariable=self.var_pwd, font=AppConfig.FONTS['text'], show='*', width=26).grid(row=5, column=0, sticky='we', pady=(0,8))
+            self.entry_pwd = tk.Entry(body, textvariable=self.var_pwd,
+                                    font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
+                                    show='*', width=26)
+            self.entry_pwd.grid(row=5, column=0, sticky='we', pady=(0,8))
+
             body.grid_columnconfigure(0, weight=1)
 
             # 按鈕列
-            btns = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
-            btns.pack(pady=(0, 12))
+            btns = tk.Frame(self.top, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
+            btns.pack(pady=(2, 12))
             tk.Button(btns, text="送出註冊",
-                    font=AppConfig.FONTS['button'],
-                    bg=AppConfig.COLORS['button_bg'], fg=AppConfig.COLORS['button_fg'],
+                    font=AppConfig.FONTS.get('button', ('Microsoft JhengHei', 10, 'bold')),
+                    bg=AppConfig.COLORS.get('button_bg', '#3498db'),
+                    fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
                     width=10, command=self._submit).pack(side='left', padx=10)
             tk.Button(btns, text="取消",
-                    font=AppConfig.FONTS['button'],
-                    bg=AppConfig.COLORS['button_bg'], fg=AppConfig.COLORS['button_fg'],
+                    font=AppConfig.FONTS.get('button', ('Microsoft JhengHei', 10, 'bold')),
+                    bg=AppConfig.COLORS.get('button_bg', '#3498db'),
+                    fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
                     width=10, command=self._cancel).pack(side='left', padx=10)
+
+            # ---- 顯示＋聚焦（關鍵）----
+            self.top.deiconify()
+            self.top.lift(parent)          # 在 parent 前面
+            self.top.update_idletasks()
+            self.top.grab_set()            # 抓輸入焦點（對話框行為）
+
+            # 等視窗可見後把游標放到第一格
+            self.top.wait_visibility()
+            self._focus_first()
+            self.top.after_idle(self._focus_first)
 
             # 快捷鍵
             self.top.bind('<Return>', lambda e: self._submit())
             self.top.bind('<Escape>', lambda e: self._cancel())
 
-        def _submit(self):
-            name = self.var_name.get().strip()
-            cid = self.var_id.get().strip()
-            pwd = self.var_pwd.get().strip()
+        def _focus_first(self, *_):
+            try:
+                self.entry_name.focus_set()
+                self.entry_name.icursor(tk.END)
+            except Exception:
+                pass
 
-            # 基本驗證（與後端相符）
-            if len(name) < 1:
-                self._toast("請輸入事務所名稱")
-                return
+        # --- 送出/取消 ---
+        def _submit(self):
+            import requests
+            name = self.var_name.get().strip()
+            cid  = self.var_id.get().strip()
+            pwd  = self.var_pwd.get().strip()
+            if not name:
+                self._toast("請輸入事務所名稱"); return
             if len(cid) < 3:
-                self._toast("帳號長度至少 3 個字元")
-                return
+                self._toast("帳號長度至少 3 個字元"); return
             if len(pwd) < 6:
-                self._toast("密碼長度至少 6 個字元")
-                return
+                self._toast("密碼長度至少 6 個字元"); return
 
             url = f"{self.api_base_url}/register"
             try:
-                resp = requests.post(url, json={
-                    "client_name": name,
-                    "client_id": cid,
-                    "password": pwd
-                }, timeout=15)
+                resp = requests.post(url, json={"client_name": name, "client_id": cid, "password": pwd}, timeout=15)
                 if resp.status_code == 201:
                     data = resp.json()
                     self.result = {
@@ -907,18 +927,20 @@ class LoginController(BaseWindow):
                         "secret_code": data.get("secret_code"),
                         "password": pwd
                     }
+                    try: self.top.grab_release()
+                    except Exception: pass
                     self.top.destroy()
                 else:
-                    try:
-                        msg = resp.json().get("detail") or resp.text
-                    except Exception:
-                        msg = resp.text
+                    try: msg = resp.json().get("detail") or resp.text
+                    except Exception: msg = resp.text
                     self._toast(f"註冊失敗：{msg}")
             except Exception as e:
                 self._toast(f"連線失敗：{e}")
 
         def _cancel(self):
             self.result = None
+            try: self.top.grab_release()
+            except Exception: pass
             self.top.destroy()
 
         def _toast(self, msg: str):
@@ -929,7 +951,6 @@ class LoginController(BaseWindow):
                     messagebox.showwarning("提示", msg)
             except Exception:
                 messagebox.showwarning("提示", msg)
-
 
 class LoginManager:
     """登入管理器 - 增強版"""

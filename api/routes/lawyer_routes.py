@@ -179,38 +179,29 @@ TENANTS = {
 
 
 class VerifySecretRequest(BaseModel):
-    # 使用者傳來的原始訊息（可能含空白或其他字）
-    message: constr(strip_whitespace=True, min_length=1)
-    # 建議帶上 line_user_id 方便後續綁定
-    line_user_id: constr(strip_whitespace=True, min_length=5) | None = None
+    text: Optional[str] = None          # n8n 用這個
+    message: Optional[str] = None       # 你的舊版本用這個
+    user_id: Optional[str] = None
+    reply_token: Optional[str] = None
 
 class VerifySecretResponse(BaseModel):
     success: bool
-    client_id: str | None = None
-    client_name: str | None = None
-    secret_code: str | None = None
-    message: str
+    client_name: Optional[str] = None
+    client_id: Optional[str] = None
 
 @router.post("/verify-secret", response_model=VerifySecretResponse)
 def verify_secret(req: VerifySecretRequest, db: Session = Depends(get_db)):
-    raw = req.message.upper().strip()
+    raw = (req.text or req.message or "").strip()
+    if not raw or len(raw) != 8:
+        return VerifySecretResponse(success=False)
 
-    # 只取英數大寫，找出第一組 8 碼候選碼
-    import re
-    m = re.search(r"[A-Z0-9]{8}", re.sub(r"[^A-Z0-9]", "", raw))
-    if not m:
-        return VerifySecretResponse(success=False, message="未找到8碼暗號")
-
-    code = m.group(0)
-
-    user = db.query(LoginUser).filter(LoginUser.secret_code == code).first()
-    if not user:
-        return VerifySecretResponse(success=False, message="暗號無效")
+    # 完全比對（不動大小寫；若要大小寫不敏感就改成 .upper() 比對）
+    hit = db.query(LoginUser).filter(LoginUser.secret_code == raw).first()
+    if not hit:
+        return VerifySecretResponse(success=False)
 
     return VerifySecretResponse(
         success=True,
-        client_id=user.client_id,
-        client_name=user.client_name,
-        secret_code=user.secret_code,
-        message="暗號驗證通過"
+        client_name=hit.client_name,
+        client_id=hit.client_id,
     )
