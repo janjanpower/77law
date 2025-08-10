@@ -147,11 +147,11 @@ class RegisterDialog:
         pwd  = self.var_pwd.get().strip()
 
         if not name:
-            messagebox.showwarning("提示", "請輸入事務所名稱", parent=self); return
+            messagebox.showwarning("提示", "請輸入事務所名稱", parent=self.win); return
         if len(cid) < 3:
-            messagebox.showwarning("提示", "帳號長度至少 3 個字元", parent=self); return
+            messagebox.showwarning("提示", "帳號長度至少 3 個字元", parent=self.win); return
         if len(pwd) < 6:
-            messagebox.showwarning("提示", "密碼長度至少 6 個字元", parent=self); return
+            messagebox.showwarning("提示", "密碼長度至少 6 個字元", parent=self.win); return
 
         # ✅ 改這裡：打 /api/auth/register（後端會預設 plan_type=unpaid → tenant_status=NULL）
         url = f"{self.api_base_url}/api/auth/register"
@@ -163,11 +163,11 @@ class RegisterDialog:
                 timeout=12
             )
         except requests.exceptions.ConnectTimeout:
-            messagebox.showerror("連線逾時", f"連不上伺服器（timeout）。\nURL: {url}", parent=self); return
+            messagebox.showerror("連線逾時", f"連不上伺服器（timeout）。\nURL: {url}", parent=self.win); return
         except requests.exceptions.ConnectionError as e:
-            messagebox.showerror("連線失敗", f"無法連線：{e}\nURL: {url}", parent=self); return
+            messagebox.showerror("連線失敗", f"無法連線：{e}\nURL: {url}", parent=self.win); return
         except Exception as e:
-            messagebox.showerror("錯誤", f"請求送出前就失敗：{e}\nURL: {url}", parent=self); return
+            messagebox.showerror("錯誤", f"請求送出前就失敗：{e}\nURL: {url}", parent=self.win); return
 
         if resp.status_code == 201:
             data = resp.json()
@@ -180,7 +180,7 @@ class RegisterDialog:
             }
             # 可選：提示成功再關閉
             try:
-                messagebox.showinfo("註冊成功", f"client_id：{data.get('client_id')}\nsecret_code：{data.get('secret_code')}", parent=self)
+                messagebox.showinfo("註冊成功", f"client_id：{data.get('client_id')}\nsecret_code：{data.get('secret_code')}", parent=self.win)
             finally:
                 self.close()
         else:
@@ -188,7 +188,7 @@ class RegisterDialog:
                 detail = resp.json().get("detail")
             except Exception:
                 detail = resp.text
-            messagebox.showwarning("註冊失敗", f"HTTP {resp.status_code}\nURL: {url}\n{detail or '無訊息'}", parent=self)
+            messagebox.showwarning("註冊失敗", f"HTTP {resp.status_code}\nURL: {url}\n{detail or '無訊息'}", parent=self.win)
 
     def close(self):
         try: self.win.grab_release()
