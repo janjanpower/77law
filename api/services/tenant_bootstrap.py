@@ -1,26 +1,37 @@
 # api/services/tenant_bootstrap.py
-# 建議：整份覆蓋你現有檔案
+# 覆蓋整檔
 
 import os
 from sqlalchemy import create_engine, text
 from api.database import Base, DATABASE_URL
-from api.models_cases import CaseRecord  # 需要載入，讓 ORM 知道要建哪些索引/約束
+from api.models_cases import CaseRecord  # 讓 ORM 知道要建哪些索引/表
 
+# ------------------ 工具 ------------------
+
+def _schema_name(client_id: str) -> str:
+    return f"client_{client_id}".strip()
 
 def _compose_schema_url(base_url: str, schema: str) -> str:
     """
-    將 Heroku PG 的 DATABASE_URL 加上 search_path，指向指定 schema。
+    強制附上 search_path=schema。若原本有 ?options= 直接去掉重加，避免搞混。
     """
     if not base_url:
         raise RuntimeError("DATABASE_URL not configured")
-    if "options=" in base_url and "search_path" in base_url:
-        return base_url  # 已有設定就不動
-    sep = "&" if "?" in base_url else "?"
-    return f"{base_url}{sep}options=-csearch_path%3D{schema}"
+    base_no_opts = base_url.split("?", 1)[0]
+    sep = "&" if "?" in base_no_opts else "?"
+    return f"{base_no_opts}{sep}options=-csearch_path%3D{schema}"
 
+def _set_search_path(engine, schema: str):
+    with engine.begin() as cx:
+        cx.execute(text(f"SET search_path TO {schema}"))
+
+# ------------------ 建表 / 遷移 ------------------
 
 def _ensure_case_records_sql_fallback(engine, schema: str):
-    # 確保動作都在目標 schema
+    """
+    先用 SQL 建出「你要的欄位」版本（若不存在）。
+    欄位與 models_cases.py 對齊（僅包含你要的那幾個補欄位）。
+    """
     with engine.begin() as cx:
         cx.execute(text(f"SET search_path TO {schema}"))
         cx.execute(text("""
@@ -29,7 +40,6 @@ def _ensure_case_records_sql_fallback(engine, schema: str):
                 client_id TEXT NOT NULL,
                 case_id   TEXT NOT NULL,
 
-                -- 與 models_cases.py 對齊的欄位
                 case_type TEXT NOT NULL,
                 client    TEXT NOT NULL,
                 lawyer    TEXT,
@@ -43,16 +53,13 @@ def _ensure_case_records_sql_fallback(engine, schema: str):
                 division  TEXT,
                 progress_date TEXT,
 
-                -- JSON 欄位（允許 NULL，與 model 對齊）
                 progress_stages JSONB NULL,
                 progress_notes  JSONB NULL,
                 progress_times  JSONB NULL,
 
-                -- 舊系統時間戳（允許 NULL）
                 created_date TIMESTAMPTZ NULL,
                 updated_date TIMESTAMPTZ NULL,
 
-                -- 必要補欄位（與 model 對齊）
                 uploaded_by TEXT,
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -61,24 +68,20 @@ def _ensure_case_records_sql_fallback(engine, schema: str):
                 CONSTRAINT uq_case_records_client_case UNIQUE (client_id, case_id)
             );
 
-            -- 基本索引（其餘交給 ORM 建立）
+            -- 基本索引，其他交給 ORM 完成
             CREATE INDEX IF NOT EXISTS idx_case_records_client ON case_records (client_id);
             CREATE INDEX IF NOT EXISTS idx_case_records_case   ON case_records (case_id);
         """))
 
 def _migrate_case_records_columns(engine, schema: str):
-    # 安全可重複執行的遷移，確保舊表欄位補齊且不多
+    """
+    安全可重複執行的遷移，補齊舊表欄位；不新增你沒有要的欄位。
+    """
     alters = [
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS uploaded_by TEXT",
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT now()",
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
         "ALTER TABLE case_records ADD COLUMN IF NOT EXISTS is_active  BOOLEAN NOT NULL DEFAULT TRUE",
-
-        # JSON 欄位允許 NULL，就不強制 DEFAULT；但如果你想預設空物件可解除註解：
-        # \"ALTER TABLE case_records ALTER COLUMN progress_stages SET DEFAULT '{}'::jsonb\",
-        # \"ALTER TABLE case_records ALTER COLUMN progress_notes  SET DEFAULT '{}'::jsonb\",
-        # \"ALTER TABLE case_records ALTER COLUMN progress_times  SET DEFAULT '{}'::jsonb\",
-
         "ALTER TABLE case_records ALTER COLUMN case_type SET NOT NULL",
         "ALTER TABLE case_records ALTER COLUMN client    SET NOT NULL",
         "ALTER TABLE case_records ALTER COLUMN progress  SET NOT NULL",
@@ -88,7 +91,7 @@ def _migrate_case_records_columns(engine, schema: str):
         for sql in alters:
             cx.execute(text(sql))
 
-    # 驗證 created_at 存在
+    # 驗證確實存在
     with engine.connect() as cx:
         cx.execute(text(f"SET search_path TO {schema}"))
         cols = cx.execute(text("""
@@ -100,37 +103,59 @@ def _migrate_case_records_columns(engine, schema: str):
     if "created_at" not in cols:
         raise RuntimeError(f"[migrate] created_at still missing in {schema}. Actual columns: {cols}")
 
+# ------------------ 對外主流程 ------------------
+
 def ensure_tenant_schema(client_id: str) -> str:
     """
-    建立/修復租戶 schema 的正確流程（只影響新註冊）：
-      1) 建立 schema（若不存在）
-      2) 以 SQL fallback 先建表（若不存在）
-      3) 立刻做欄位遷移補齊
-      4) 最後交給 ORM 建索引/約束（此時欄位已存在，不會再報 created_at 缺失）
-
-    回傳該租戶可用的 DB 連線字串（含 search_path）。
+    建立/修復租戶 schema，並把 schema URL 寫回 login_users.tenant_db_url。
+    流程：
+      1) CREATE SCHEMA IF NOT EXISTS
+      2) fallback 建表（若不存在）
+      3) migrate 補欄位
+      4) ORM 建索引/約束
+      5) 回寫 login_users.tenant_db_url
+    回傳：schema_url
     """
-    schema = f"client_{client_id}".strip()
+    schema = _schema_name(client_id)
     base_url = os.getenv("DATABASE_URL", DATABASE_URL)
     if not base_url:
         raise RuntimeError("DATABASE_URL not configured")
 
-    # 1) 先確保 schema 存在
+    # 先確保 schema 存在（在 root 連線）
     root_engine = create_engine(base_url, pool_pre_ping=True)
     with root_engine.begin() as cx:
         cx.execute(text(f"CREATE SCHEMA IF NOT EXISTS {schema}"))
 
-    # 2) 切到該 schema 的 engine
+    # 建出指向該 schema 的連線
     schema_url = _compose_schema_url(base_url, schema)
     tenant_engine = create_engine(schema_url, pool_pre_ping=True)
 
-    # 3) 先用 SQL 建最小正確表
-    _ensure_case_records_sql_fallback(tenant_engine)
+    # 全程鎖定 search_path
+    _set_search_path(tenant_engine, schema)
 
-    # 4) 立刻做欄位/預設遷移（舊表補齊，新表無害）
-    _migrate_case_records_columns(tenant_engine)
+    # 1) 先建「你要的欄位」版本表
+    _ensure_case_records_sql_fallback(tenant_engine, schema)
 
-    # 5) 最後才讓 ORM 建索引/約束（此時欄位齊全，不會噴錯）
+    # 2) 立即補欄位（舊表補齊，新表無害）
+    _migrate_case_records_columns(tenant_engine, schema)
+
+    # 3) ORM 建索引/約束（此時欄位已存在）
+    _set_search_path(tenant_engine, schema)
     Base.metadata.create_all(bind=tenant_engine, tables=[CaseRecord.__table__])
+
+    # 4) 回寫 URL 到 login_users（用 client_id 當 key）
+    with root_engine.begin() as cx:
+        cx.execute(
+            text("""
+                UPDATE login_users
+                SET tenant_db_url = :u
+                WHERE client_id = :cid
+            """),
+            {"u": schema_url, "cid": client_id}
+        )
+
+    # 讓你在 log 看得見（可留可拿掉）
+    print(f"[tenant] schema={schema}")
+    print(f"[tenant] schema_url={schema_url}")
 
     return schema_url
