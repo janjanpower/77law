@@ -8,11 +8,11 @@ api/routes/api_routes.py
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
-
+import hashlib
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel, Field, constr
+import random, string
 # === DB session dependency ===
 try:
     from api.database import SessionLocal  # 專案既有
@@ -176,4 +176,54 @@ def me(payload: Dict[str, Any] = Depends(verify_token)) -> MeResponse:
         role=payload.get("role"),
         plan=payload.get("plan"),
         exp=payload.get("exp"),
+    )
+
+
+# ============================== 註冊 =====================
+
+def hash_password(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+def gen_secret_code(n: int = 8) -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    return "".join(random.choices(alphabet, k=n))
+
+class RegisterRequest(BaseModel):
+    client_name: constr(strip_whitespace=True, min_length=1, max_length=100)
+    client_id:   constr(strip_whitespace=True, min_length=3, max_length=50)
+    password:    constr(min_length=6, max_length=128)
+
+class RegisterResponse(BaseModel):
+    message: str
+    client_id: str
+    secret_code: str
+
+@router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    # 檢查 client_id 是否已存在
+    exists = db.query(LoginUser).filter(LoginUser.client_id == req.client_id).first()
+    if exists:
+        raise HTTPException(status_code=400, detail="client_id 已被使用")
+
+    # 產生唯一 secret_code（簡易重試避免撞碼）
+    sc = gen_secret_code()
+    for _ in range(5):
+        if not db.query(LoginUser).filter(LoginUser.secret_code == sc).first():
+            break
+        sc = gen_secret_code()
+
+    user = LoginUser(
+        client_id=req.client_id,
+        client_name=req.client_name,
+        password=req.password,
+        secret_code=sc
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return RegisterResponse(
+        message="註冊成功，請妥善保存您的律師登陸號。",
+        client_id=user.client_id,
+        secret_code=user.secret_code,
     )

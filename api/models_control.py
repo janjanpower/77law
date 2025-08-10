@@ -33,6 +33,7 @@ class LoginUser(Base):
     client_id = Column(String(50), unique=True, nullable=False, index=True, comment="事務所專屬帳號")
     password = Column(String(255), nullable=False, comment="密碼 (實際應用中應加密)")
 
+    secret_code = Column(String(8), unique=True, index=True, nullable=True, comment="律師登陸號")
     # 狀態欄位
     is_active = Column(Boolean, default=True, comment="是否啟用")
     user_status = Column(String(20), default="active", comment="用戶狀態: active, suspended, expired")
@@ -42,7 +43,7 @@ class LoginUser(Base):
     last_login = Column(DateTime(timezone=True), nullable=True, comment="最後登入時間")
 
     # 方案相關欄位
-    plan_type = Column(String(30), default="basic_5", comment="方案類型")
+    plan_type = Column(String(30), default="Unpaid", comment="方案類型")
     max_users = Column(Integer, default=5, comment="方案人數上限")
     current_users = Column(Integer, default=0, comment="目前 LINE 用戶數")
 
@@ -72,6 +73,7 @@ class LoginUser(Base):
     def plan_display_name(self) -> str:
         """方案顯示名稱"""
         plan_names = {
+            "Unpaid"
             "basic_5": "基礎方案 (5人)",
             "standard_10": "標準方案 (10人)",
             "premium_20": "進階方案 (20人)",
@@ -211,55 +213,6 @@ class ClientLineUsers(Base):
         return f"<ClientLineUsers(line_user_id='{self.line_user_id}', client_id='{self.client_id}', name='{self.user_name}')>"
 
 
-class SystemSettings(Base):
-    """系統設定表 (可選)"""
-    __tablename__ = "system_settings"
-
-    id = Column(Integer, primary_key=True, index=True)
-    setting_key = Column(String(50), unique=True, nullable=False, comment="設定鍵")
-    setting_value = Column(Text, nullable=True, comment="設定值")
-    setting_type = Column(String(20), default="string", comment="設定類型: string, integer, boolean, json")
-    description = Column(Text, nullable=True, comment="設定說明")
-    is_active = Column(Boolean, default=True, comment="是否啟用")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "setting_key": self.setting_key,
-            "setting_value": self.setting_value,
-            "setting_type": self.setting_type,
-            "description": self.description,
-            "is_active": self.is_active,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
-        }
-
-
-class LoginHistory(Base):
-    """登入歷史記錄表 (可選)"""
-    __tablename__ = "login_history"
-
-    id = Column(Integer, primary_key=True, index=True)
-    client_id = Column(String(50), ForeignKey('login_users.client_id'), nullable=False, index=True)
-    login_time = Column(DateTime(timezone=True), server_default=func.now(), comment="登入時間")
-    ip_address = Column(String(45), nullable=True, comment="IP 位址")
-    user_agent = Column(Text, nullable=True, comment="瀏覽器資訊")
-    login_status = Column(String(20), default="success", comment="登入狀態: success, failed")
-    failure_reason = Column(String(100), nullable=True, comment="失敗原因")
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "id": self.id,
-            "client_id": self.client_id,
-            "login_time": self.login_time.isoformat() if self.login_time else None,
-            "ip_address": self.ip_address,
-            "user_agent": self.user_agent,
-            "login_status": self.login_status,
-            "failure_reason": self.failure_reason
-        }
-
 
 # ==================== 輔助功能和工具類別 ====================
 
@@ -344,85 +297,4 @@ class PlanTypes:
             cls.ENTERPRISE_50: 50,
             cls.UNLIMITED: 999999
         }
-
-
-class UserStatus:
-    """用戶狀態常數"""
-    ACTIVE = "active"
-    SUSPENDED = "suspended"
-    EXPIRED = "expired"
-    TRIAL = "trial"
-
-    @classmethod
-    def get_all_statuses(cls) -> List[str]:
-        return [cls.ACTIVE, cls.SUSPENDED, cls.EXPIRED, cls.TRIAL]
-
-
-class UserRoles:
-    """用戶角色常數"""
-    ADMIN = "admin"
-    MEMBER = "member"
-    VIEWER = "viewer"
-
-    @classmethod
-    def get_all_roles(cls) -> List[str]:
-        return [cls.ADMIN, cls.MEMBER, cls.VIEWER]
-
-
-# ==================== 使用範例 ====================
-
-if __name__ == "__main__":
-    """測試模型定義"""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-
-    # 建立測試資料庫
-    DATABASE_URL = "sqlite:///./test_models.db"
-    engine = create_engine(DATABASE_URL, echo=True)
-
-    # 建立所有表格
-    Base.metadata.create_all(bind=engine)
-
-    # 建立會話
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    db = SessionLocal()
-
-    try:
-        # 建立測試資料
-        test_client = LoginUser(
-            client_name="測試事務所",
-            client_id="test_001",
-            password="test123",
-            plan_type=PlanTypes.BASIC_5,
-            max_users=5
-        )
-
-        db.add(test_client)
-        db.commit()
-
-        # 測試方法
-        print("✅ 模型測試成功")
-        print(f"客戶端資料: {test_client.to_dict()}")
-        print(f"可用名額: {test_client.available_slots}")
-        print(f"方案顯示: {test_client.plan_display_name}")
-
-    except Exception as e:
-        print(f"❌ 模型測試失敗: {e}")
-        db.rollback()
-    finally:
-        db.close()
-
-
-class TenantUser(Base):
-    """子帳號（事務所成員）登入表"""
-    __tablename__ = "tenant_users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(String(50), ForeignKey('login_users.client_id'), nullable=False, index=True, comment="所屬事務所ID")
-    line_user_id = Column(String(100), unique=True, nullable=True, comment="LINE 使用者 ID")  # ← 加這行！
-    username = Column(String(50), unique=True, nullable=False, comment="帳號名稱")
-    password = Column(String(255), nullable=False, comment="密碼")
-    is_active = Column(Boolean, default=True, comment="是否啟用")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_login = Column(DateTime(timezone=True), nullable=True)
 

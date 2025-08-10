@@ -12,6 +12,7 @@ from tkinter import ttk, messagebox
 import threading
 from typing import Optional, Dict, Any, Callable
 from datetime import datetime
+import requests
 
 # 導入現有配置和基礎視窗邏輯
 from config.settings import AppConfig
@@ -311,6 +312,27 @@ class LoginController(BaseWindow):
         )
         self.exit_btn.pack(side='left',padx=(20,0))
 
+        # 整個內容區設為填滿，避免高度不足蓋掉按鈕
+        self.content_frame.pack_propagate(False)
+
+        footer = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        # 關鍵：固定在底部
+        footer.pack(side='bottom', fill='x', pady=(12, 8))
+
+        register_btn = tk.Button(
+            footer,
+            text="註冊用戶",
+            font=('Microsoft JhengHei', 9),
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS.get('link_color', '#3498db'),
+            bd=0,
+            cursor='hand2',
+            command=self._open_register_dialog,
+            width=12
+        )
+        # 關鍵：置中
+        register_btn.pack(anchor='center')
+
         # 狀態顯示區域
         self.status_label = tk.Label(
             self.content_frame,
@@ -328,6 +350,7 @@ class LoginController(BaseWindow):
 
         # 🔥 新增：快捷資訊區域
         self._create_info_area()
+
 
         # 設定事件綁定
         self._setup_key_bindings()
@@ -347,6 +370,23 @@ class LoginController(BaseWindow):
         )
         self.last_login_label.pack(anchor='w')
 
+    def _create_register_footer(self):
+        """建立底部置中的『註冊用戶』連結，樣式與『忘記密碼？』一致"""
+        footer = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
+        footer.pack(fill='x', pady=(12, 6))
+
+        register_btn = tk.Button(
+            footer,
+            text="註冊用戶",
+            font=('Microsoft JhengHei', 9),
+            bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS.get('link_color', '#3498db'),
+            bd=0,
+            cursor='hand2',
+            command=self._open_register_dialog,
+            width=12
+        )
+        register_btn.pack(anchor='center')
 
     def _setup_key_bindings(self):
         """設定鍵盤事件綁定"""
@@ -715,6 +755,159 @@ class LoginController(BaseWindow):
 
 
 # ==================== 整合現有系統的管理類別 ====================
+
+    def _open_register_dialog(self):
+        """開啟註冊用戶自訂對話框"""
+        dialog = self.RegisterDialog(self.window, self.api_base_url)
+        self.window.wait_window(dialog.top)
+
+        if dialog.result and dialog.result.get("success"):
+            sc = dialog.result.get("secret_code") or ""
+            # 成功提示律師登陸號
+            try:
+                if DIALOGS_AVAILABLE:
+                    UnifiedMessageDialog.show_success(self.window, f"註冊成功！\n\n您的律師登陸號：{sc}", "註冊完成")
+                else:
+                    messagebox.showinfo("註冊完成", f"註冊成功！\n\n您的律師登陸號：{sc}")
+            except Exception:
+                messagebox.showinfo("註冊完成", f"註冊成功！\n\n您的律師登陸號：{sc}")
+
+            # 自動填入帳密以方便登入
+            cid = dialog.result.get("client_id") or ""
+            pwd = dialog.result.get("password") or ""
+            if cid:
+                self.username_var.set(cid)
+            if pwd:
+                self.password_var.set(pwd)
+                self.password_entry.focus_set()
+
+    class RegisterDialog:
+        """註冊用戶自訂對話框（統一 AppConfig 風格）"""
+        def __init__(self, parent, api_base_url: str):
+            self.parent = parent
+            self.api_base_url = api_base_url.rstrip('/')
+            self.result = None
+
+            self.top = tk.Toplevel(parent)
+            self.top.transient(parent)
+            self.top.grab_set()
+            self.top.title("註冊用戶")
+            self.top.configure(bg=AppConfig.COLORS['window_bg'])
+
+            # 置中顯示
+            w, h = 320, 260
+            self.top.geometry(f"{w}x{h}+{parent.winfo_x()+40}+{parent.winfo_y()+60}")
+            self.top.resizable(False, False)
+
+            # 標題
+            title = tk.Label(
+                self.top,
+                text="註冊用戶",
+                font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold')),
+                bg=AppConfig.COLORS['window_bg'],
+                fg=AppConfig.COLORS['text_color']
+            )
+            title.pack(pady=(10, 8))
+
+            # 表單區
+            frm = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
+            frm.pack(fill='both', expand=True, padx=16)
+
+            # 事務所名稱
+            tk.Label(frm, text="事務所名稱", font=AppConfig.FONTS['text'],
+                    bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=0, column=0, sticky='w', pady=(0,4))
+            self.var_name = tk.StringVar()
+            tk.Entry(frm, textvariable=self.var_name, font=AppConfig.FONTS['text'], width=24).grid(row=1, column=0, sticky='we', pady=(0,8))
+
+            # 帳號
+            tk.Label(frm, text="帳號（client_id）", font=AppConfig.FONTS['text'],
+                    bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=2, column=0, sticky='w', pady=(0,4))
+            self.var_id = tk.StringVar()
+            tk.Entry(frm, textvariable=self.var_id, font=AppConfig.FONTS['text'], width=24).grid(row=3, column=0, sticky='we', pady=(0,8))
+
+            # 密碼
+            tk.Label(frm, text="密碼", font=AppConfig.FONTS['text'],
+                    bg=AppConfig.COLORS['window_bg'], fg=AppConfig.COLORS['text_color']).grid(row=4, column=0, sticky='w', pady=(0,4))
+            self.var_pwd = tk.StringVar()
+            tk.Entry(frm, textvariable=self.var_pwd, font=AppConfig.FONTS['text'], show='*', width=24).grid(row=5, column=0, sticky='we', pady=(0,8))
+
+            frm.grid_columnconfigure(0, weight=1)
+
+            # 按鈕列
+            btns = tk.Frame(self.top, bg=AppConfig.COLORS['window_bg'])
+            btns.pack(pady=(4, 12))
+
+            confirm = tk.Button(btns, text="送出註冊",
+                                font=AppConfig.FONTS['button'],
+                                bg=AppConfig.COLORS['button_bg'],
+                                fg=AppConfig.COLORS['button_fg'],
+                                width=10, command=self._submit)
+            cancel = tk.Button(btns, text="取消",
+                            font=AppConfig.FONTS['button'],
+                            bg=AppConfig.COLORS['button_bg'],
+                            fg=AppConfig.COLORS['button_fg'],
+                            width=10, command=self._cancel)
+            confirm.pack(side='left', padx=10)
+            cancel.pack(side='left', padx=10)
+
+            # 快捷鍵
+            self.top.bind('<Return>', lambda e: self._submit())
+            self.top.bind('<Escape>', lambda e: self._cancel())
+
+        def _submit(self):
+            name = self.var_name.get().strip()
+            cid = self.var_id.get().strip()
+            pwd = self.var_pwd.get().strip()
+
+            # 基本驗證（與後端相符）
+            if len(name) < 1:
+                self._toast("請輸入事務所名稱")
+                return
+            if len(cid) < 3:
+                self._toast("帳號長度至少 3 個字元")
+                return
+            if len(pwd) < 6:
+                self._toast("密碼長度至少 6 個字元")
+                return
+
+            url = f"{self.api_base_url}/register"
+            try:
+                resp = requests.post(url, json={
+                    "client_name": name,
+                    "client_id": cid,
+                    "password": pwd
+                }, timeout=15)
+                if resp.status_code == 201:
+                    data = resp.json()
+                    self.result = {
+                        "success": True,
+                        "client_id": data.get("client_id"),
+                        "secret_code": data.get("secret_code"),
+                        "password": pwd
+                    }
+                    self.top.destroy()
+                else:
+                    try:
+                        msg = resp.json().get("detail") or resp.text
+                    except Exception:
+                        msg = resp.text
+                    self._toast(f"註冊失敗：{msg}")
+            except Exception as e:
+                self._toast(f"連線失敗：{e}")
+
+        def _cancel(self):
+            self.result = None
+            self.top.destroy()
+
+        def _toast(self, msg: str):
+            try:
+                if DIALOGS_AVAILABLE:
+                    UnifiedMessageDialog.show_warning(self.top, msg, "提示")
+                else:
+                    messagebox.showwarning("提示", msg)
+            except Exception:
+                messagebox.showwarning("提示", msg)
+
 
 class LoginManager:
     """登入管理器 - 增強版"""

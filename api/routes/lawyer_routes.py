@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, constr
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
 
@@ -59,7 +59,6 @@ def resolve_client_by_code(db: Session, tenant_code: str) -> Optional[LoginUser]
 class TenantCheckRequest(BaseModel):
     tenant_code: str
     line_user_id: str
-    allow_bind: bool
 
 
 def count_current_usage(db: Session, client_id: str) -> int:
@@ -127,40 +126,46 @@ def check_limit(payload: CheckLimitIn, db: Session = Depends(get_db)):
 
 
 @router.post("/bind-user", response_model=BindLawyerOut)
-def bind_user(payload: BindLawyerIn):
-    """
-    綁定用戶 API
-    - 如果 allow_bind = False，直接拒絕
-    - 如果 allow_bind = True，直接回傳假資料（不連資料庫）
-    """
+def bind_user(payload: BindLawyerIn, db: Session = Depends(get_db)):
+    client = resolve_client_by_code(db, payload.tenant_code)
+    if not client:
+        return BindLawyerOut(success=False, reason="invalid_tenant_code")
 
-    # 如果不是 True，直接拒絕
-    if not payload.allow_bind:
+    # （可選）保守起見再檢查一次上限
+    limit = int(getattr(client, "max_users", 0) or 0)
+    usage = count_current_usage(db, client.client_id)
+    if limit and usage >= limit:
+        return BindLawyerOut(success=False, reason="limit_reached")
+
+    ok = upsert_lawyer_binding(db, client.client_id, payload.line_user_id)
+    if ok:
         return BindLawyerOut(
-            success=False,
-            reason="bind_not_allowed"
+            success=True,
+            tenant={"id": client.client_id, "name": client.client_name},
+            role="lawyer",
         )
+    return BindLawyerOut(success=False, reason="already_bound")
 
-    # 假資料（不連資料庫）
-    fake_tenant = {
-        "id": "C001",
-        "name": "喜憨兒事務所",
-        "plan": "basic",
-        "limit": 3,
-        "usage": 1
+@router.post("/check_tenant_plan")
+def check_tenant_plan(data: TenantCheckRequest):
+    # 如果是律師身份，就直接回 TENANTS
+    if getattr(data, "is_lawyer", False) is True:
+        return {
+            "success": True,
+            "tenants": TENANTS  # 回整包假資料
+        }
+
+    # 一般情況：只回指定 tenant
+    tenant_info = TENANTS.get(data.tenant_code)
+    if not tenant_info:
+        return {"success": False, "reason": "invalid_tenant_code"}
+    return {
+        "success": True,
+        "tenant": tenant_info["name"],
+        "limit": tenant_info["limit"],
+        "usage": tenant_info["usage"]
     }
 
-    # 直接回傳綁定成功
-    return BindLawyerOut(
-        success=True,
-        tenant={
-            "id": fake_tenant["id"],
-            "name": fake_tenant["name"]
-        },
-        role="lawyer"
-    )
-
-# 假資料 - 暗號 -> 事務所資料
 TENANTS = {
     "55688": {
         "id": "C001",
@@ -169,18 +174,43 @@ TENANTS = {
         "limit": 3,
         "usage": 1
     }
-}
-@router.post("/check_tenant_plan")
-def check_tenant_plan(data: TenantCheckRequest):
-    if data.is_lawyer:  # True 才回整包假資料
-        return {"success": True, "tenants": TENANTS}
 
-    tenant_info = TENANTS.get(data.tenant_code)
-    if not tenant_info:
-        return {"success": False, "reason": "invalid_tenant_code"}
-    return {
-        "success": True,
-        "tenant": tenant_info["name"],
-        "limit": tenant_info["limit"],
-        "usage": tenant_info["usage"],
-    }
+}
+
+
+class VerifySecretRequest(BaseModel):
+    # 使用者傳來的原始訊息（可能含空白或其他字）
+    message: constr(strip_whitespace=True, min_length=1)
+    # 建議帶上 line_user_id 方便後續綁定
+    line_user_id: constr(strip_whitespace=True, min_length=5) | None = None
+
+class VerifySecretResponse(BaseModel):
+    success: bool
+    client_id: str | None = None
+    client_name: str | None = None
+    secret_code: str | None = None
+    message: str
+
+@router.post("/verify-secret", response_model=VerifySecretResponse)
+def verify_secret(req: VerifySecretRequest, db: Session = Depends(get_db)):
+    raw = req.message.upper().strip()
+
+    # 只取英數大寫，找出第一組 8 碼候選碼
+    import re
+    m = re.search(r"[A-Z0-9]{8}", re.sub(r"[^A-Z0-9]", "", raw))
+    if not m:
+        return VerifySecretResponse(success=False, message="未找到8碼暗號")
+
+    code = m.group(0)
+
+    user = db.query(LoginUser).filter(LoginUser.secret_code == code).first()
+    if not user:
+        return VerifySecretResponse(success=False, message="暗號無效")
+
+    return VerifySecretResponse(
+        success=True,
+        client_id=user.client_id,
+        client_name=user.client_name,
+        secret_code=user.secret_code,
+        message="暗號驗證通過"
+    )
