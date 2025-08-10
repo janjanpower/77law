@@ -12,6 +12,8 @@ from api.models_control import (
     TenantUser, PendingUser, Tenant, PlanChangeHistory,
     PlanType, UserStatus
 )
+from api.constants.plans import canonical_plan, plan_limit
+
 
 class SubscriptionService:
     """方案管理服務類別"""
@@ -208,7 +210,7 @@ class SubscriptionService:
             )
 
             # 更新租戶方案
-            tenant.plan_type = new_plan_type
+            tenant.plan_type = canonical_plan(new_plan_type)
             tenant.plan_limit = new_limit
 
             # 如果是升級（人數增加），自動遷移未付費用戶

@@ -19,8 +19,8 @@ from config.settings import AppConfig
 from views.base_window import BaseWindow
 from views.login_logic import LoginLogic
 from views.dialog_base import ModalDialog, AppConfig
-from views.windowing import open_modal
-from views.auth.register_dialog import show_register_dialog
+
+from views.register_dialog import RegisterDialog as _LegacyRegisterDialog
 # 安全導入對話框
 try:
     from views.dialogs import UnifiedMessageDialog
@@ -770,6 +770,7 @@ class LoginController(BaseWindow):
             self.password_entry.focus_set()
 
         show_register_dialog(master=self.window, api_base=self.api_base_url, on_success=on_success)
+
 class LoginManager:
     """登入管理器 - 增強版"""
 
@@ -827,3 +828,13 @@ class LoginManager:
     def get_client_name(self) -> Optional[str]:
         """取得客戶名稱"""
         return self.current_user.get("client_name") if self.current_user else None
+
+def show_register_dialog(master=None, api_base=None, on_success=None):
+            dlg = _LegacyRegisterDialog(master, api_base or "http://127.0.0.1:8000")
+            if master is not None and hasattr(master, "wait_window"):
+                master.wait_window(dlg.win)
+            else:
+                dlg.win.wait_window()
+            result = getattr(dlg, "result", None)
+            if on_success and result and result.get("success"):
+                on_success(result)

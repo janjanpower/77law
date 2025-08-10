@@ -17,7 +17,7 @@ class LoginUser(Base):
     # 統一：DB 端也保底預設 unpaid
     plan_type = Column(Text, nullable=False, server_default="unpaid")
     # 依現行命名沿用：unpaid -> NULL；付費 -> TRUE
-    teanat_status = Column(Boolean, nullable=True)
+    tenant_status = Column(Boolean, nullable=True)
     user_status = Column(String, default="active")
     max_users = Column(Integer, default=0)
     current_users = Column(Integer, default=0)

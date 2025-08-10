@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-api/routes/api_routes.py
-— Auth + Register (單一來源)
-— /client-login 發 JWT；/me 驗證；/register 註冊（plan_type=unpaid 則 teanat_status=NULL，否則 TRUE）
+api/routes/api_routes.py (patched: use is_active + tenant_status for login)
+- Login rule: is_active==True -> allow; else require tenant_status==True
+- Registration: is_active defaults to False; tenant_status per plan (unpaid=False else True)
+- Backward compatible with tenant_status existing columns
 """
 
 import os
@@ -43,6 +44,7 @@ except Exception:
 
 # === JWT 設定 ===
 import jwt  # PyJWT
+from api.constants.plans import canonical_plan, plan_limit
 
 JWT_SECRET = os.getenv("JWT_SECRET", "CHANGE_ME_TO_A_RANDOM_SECRET")
 JWT_ALG = os.getenv("JWT_ALGORITHM", "HS256")
@@ -86,13 +88,14 @@ class ClientLoginResponse(BaseModel):
     expires_at: datetime
     client_id: str
     client_name: str
-    user_status: str
     plan_type: Optional[str] = None
     max_users: Optional[int] = None
     current_users: Optional[int] = None
     available_slots: Optional[int] = None
     usage_percentage: Optional[float] = None
     last_login: Optional[datetime] = None
+    is_active: Optional[bool] = None
+    tenant_status: Optional[bool] = None
 
 class MeResponse(BaseModel):
     client_id: str
@@ -108,36 +111,48 @@ router = APIRouter()
 def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> ClientLoginResponse:
     """
     驗證 client_id/password 後簽發 JWT。
-    成功回傳：token、到期時間與當前使用量統計。
+    新規則：is_active==True 無條件登入；否則需 tenant_status==True。
+    不再使用 user_status 作為登入門檻。
     """
     client_id = payload.client_id.strip()
     password = payload.password
 
-    # TODO: 後續建議改為雜湊比對；現階段沿用明碼欄位
-    client = db.query(LoginUser).filter(
-        LoginUser.client_id == client_id,
-        LoginUser.password == password,
-        LoginUser.is_active == True
-    ).first()
+    # 先以 client_id 找人，再比對密碼
+    client = db.query(LoginUser).filter(LoginUser.client_id == client_id).first()
+    if not client or getattr(client, "password", None) != password:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    if not client:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials or inactive user")
+    # 讀取 is_active（若沒有欄位，預設 False）
+    is_active_flag = bool(getattr(client, "is_active", False))
 
-    if getattr(client, "user_status", "active") != "active":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"user_status={client.user_status}")
+    # 讀取 tenant_status（若沒有則退回 tenant_status；再退回 plan_type 推論）
+    if hasattr(client, "tenant_status"):
+        tenant_ok = bool(getattr(client, "tenant_status", False))
+    elif hasattr(client, "tenant_status"):
+        tenant_ok = bool(getattr(client, "tenant_status", False))
+    else:
+        tenant_ok = str(getattr(client, "plan_type", "unpaid") or "unpaid").lower() != "unpaid"
+
+    # 登入規則
+    allowed = bool(is_active_flag) or bool(tenant_ok)
+    if not allowed:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account inactive or plan not enabled")
 
     # 更新最後登入時間（不影響主流程）
     try:
-        client.last_login = datetime.now()
+        setattr(client, "last_login", datetime.now())
         db.commit()
     except Exception:
         db.rollback()
 
-    # 使用量統計
-    current_users = db.query(ClientLineUsers).filter(
-        ClientLineUsers.client_id == client.client_id,
-        ClientLineUsers.is_active == True
-    ).count()
+    # 使用量統計（若沒有此表或欄位則以 0 處理）
+    try:
+        current_users = db.query(ClientLineUsers).filter(
+            ClientLineUsers.client_id == client.client_id,
+            getattr(ClientLineUsers, "is_active", True) == True
+        ).count()
+    except Exception:
+        current_users = 0
 
     max_users = int(getattr(client, "max_users", 0) or 0)
     available_slots = (max_users - current_users) if max_users else 0
@@ -157,13 +172,14 @@ def client_login(payload: ClientLoginRequest, db: Session = Depends(get_db)) -> 
         expires_at=token_pack["expires_at"],
         client_id=client.client_id,
         client_name=getattr(client, "client_name", client.client_id),
-        user_status=getattr(client, "user_status", "active"),
         plan_type=getattr(client, "plan_type", None),
         max_users=max_users or None,
         current_users=current_users,
         available_slots=available_slots or None,
         usage_percentage=usage_percentage,
         last_login=getattr(client, "last_login", None),
+        is_active=bool(is_active_flag),
+        tenant_status=bool(tenant_ok),
     )
 
 @router.get("/me", response_model=MeResponse, summary="Decode token and return client info")
@@ -211,9 +227,9 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
             break
         sc = gen_secret_code()
 
-    # ✅ 規則：unpaid → teanat_status = NULL；其他 → TRUE
-    plan = (req.plan_type or "unpaid").strip().lower()
-    teanat_value = None if plan == "unpaid" else True
+    # ✅ 規則：unpaid → tenant_status = False；其他 → True
+    plan_key = canonical_plan((req.plan_type or "unpaid").strip())
+    tenant_value = False if plan_key == "unpaid" else True
 
     # 建立使用者（欄位存在才帶入，避免不同 DB 版本報錯）
     user_kwargs: Dict[str, Any] = {
@@ -221,12 +237,15 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         "client_name": req.client_name.strip(),
         "password": req.password,           # 若已改為雜湊：password_hash=hash_password(req.password)
         "secret_code": sc,
-        "is_active": True,
+        # ✅ 新規則：註冊預設 is_active=False
+        "is_active": False,
     }
     if hasattr(LoginUser, "plan_type"):
-        user_kwargs["plan_type"] = plan
-    if hasattr(LoginUser, "teanat_status"):
-        user_kwargs["teanat_status"] = teanat_value
+        user_kwargs["plan_type"] = plan_key
+    if hasattr(LoginUser, "tenant_status"):
+        user_kwargs["tenant_status"] = tenant_value
+    elif hasattr(LoginUser, "tenant_status"):
+        user_kwargs["tenant_status"] = tenant_value
 
     user = LoginUser(**user_kwargs)
     db.add(user)
@@ -234,7 +253,7 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.refresh(user)
 
     return RegisterResponse(
-        message="註冊成功，請妥善保存您的律師登陸號。",
+        message="註冊成功，請妥善保存您的登錄資訊。",
         client_id=user.client_id,
         secret_code=user.secret_code,
     )
