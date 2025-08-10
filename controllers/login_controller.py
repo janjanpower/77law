@@ -793,16 +793,16 @@ class LoginController(BaseWindow):
                 self.password_entry.focus_set()
 
     class RegisterDialog:
-        """註冊用戶對話框（標準標題列；穩定顯示＋自動聚焦）"""
+        """註冊用戶對話框（自訂標題列；穩定顯示＋置頂＋自動聚焦）"""
         def __init__(self, parent, api_base_url: str):
             self.parent = parent
             self.api_base_url = api_base_url.rstrip('/')
             self.result = None
 
-            # --- 用標準 Toplevel（不要 overrideredirect）最穩 ---
+            # 先用標準 Toplevel 建好所有 UI（避免空白）
             self.top = tk.Toplevel(parent)
             self.top.title("註冊用戶")
-            self.top.transient(parent)       # 讓它附屬於 parent（會在前面）
+            self.top.transient(parent)
             self.top.resizable(False, False)
             self.top.configure(bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
             self.top.protocol("WM_DELETE_WINDOW", self._cancel)
@@ -824,20 +824,47 @@ class LoginController(BaseWindow):
                 x, y = (sw - w)//2, (sh - h)//2
             self.top.geometry(f"{w}x{h}+{x}+{y}")
 
-            # ---- 內容 ----
-            title_bar = tk.Frame(self.top, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'))
+            # ==== 自訂標題列（我們會在全部畫好後隱藏原生標題）====
+            title_bar = tk.Frame(self.top, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'), height=34)
             title_bar.pack(fill='x')
-            tk.Label(
+            title_bar.pack_propagate(False)
+
+            title_lbl = tk.Label(
                 title_bar, text="註冊用戶",
                 bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
                 fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
                 font=AppConfig.FONTS.get('title', ('Microsoft JhengHei', 12, 'bold'))
-            ).pack(padx=10, pady=8, anchor='w')
+            )
+            title_lbl.pack(side='left', padx=10)
 
+            close_btn = tk.Button(
+                title_bar, text="✕",
+                bg=AppConfig.COLORS.get('title_bg', '#2c3e50'),
+                fg=AppConfig.COLORS.get('title_fg', '#ecf0f1'),
+                font=('Arial', 11, 'bold'),
+                bd=0, width=3, command=self._cancel
+            )
+            close_btn.pack(side='right', padx=6)
+
+            # 拖曳邏輯（自訂標題可拖動視窗）
+            self._drag = {"x": 0, "y": 0}
+            def start_drag(e): self._drag.update(x=e.x, y=e.y)
+            def on_drag(e):
+                nx = self.top.winfo_x() + (e.x - self._drag["x"])
+                ny = self.top.winfo_y() + (e.y - self._drag["y"])
+                self.top.geometry(f"+{nx}+{ny}")
+            for wdg in (title_bar, title_lbl):
+                wdg.bind("<Button-1>", start_drag)
+                wdg.bind("<B1-Motion>", on_drag)
+
+            # 邊框（可選，讓無邊框視窗較不「貼邊」）
+            border = tk.Frame(self.top, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'), height=1)
+            border.pack(fill='x')
+
+            # 內容
             body = tk.Frame(self.top, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
             body.pack(fill='both', expand=True, padx=16, pady=10)
 
-            # 事務所名稱
             tk.Label(body, text="事務所名稱", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
                     bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
                     fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=0, column=0, sticky='w', pady=(0,4))
@@ -846,7 +873,6 @@ class LoginController(BaseWindow):
                                     font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
             self.entry_name.grid(row=1, column=0, sticky='we', pady=(0,8))
 
-            # 帳號（client_id）
             tk.Label(body, text="帳號（client_id）", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
                     bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
                     fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=2, column=0, sticky='w', pady=(0,4))
@@ -855,7 +881,6 @@ class LoginController(BaseWindow):
                                     font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)), width=26)
             self.entry_id.grid(row=3, column=0, sticky='we', pady=(0,8))
 
-            # 密碼
             tk.Label(body, text="密碼", font=AppConfig.FONTS.get('text', ('Microsoft JhengHei', 10)),
                     bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'),
                     fg=AppConfig.COLORS.get('text_color', '#2c3e50')).grid(row=4, column=0, sticky='w', pady=(0,4))
@@ -867,7 +892,6 @@ class LoginController(BaseWindow):
 
             body.grid_columnconfigure(0, weight=1)
 
-            # 按鈕列
             btns = tk.Frame(self.top, bg=AppConfig.COLORS.get('window_bg', '#FFFFFF'))
             btns.pack(pady=(2, 12))
             tk.Button(btns, text="送出註冊",
@@ -881,16 +905,28 @@ class LoginController(BaseWindow):
                     fg=AppConfig.COLORS.get('button_fg', '#ffffff'),
                     width=10, command=self._cancel).pack(side='left', padx=10)
 
-            # ---- 顯示＋聚焦（關鍵）----
+            # ========= 顯示 → 切自訂標題 → 置頂聚焦 =========
             self.top.deiconify()
-            self.top.lift(parent)          # 在 parent 前面
             self.top.update_idletasks()
-            self.top.grab_set()            # 抓輸入焦點（對話框行為）
 
-            # 等視窗可見後把游標放到第一格
+            # 隱藏原生標題，使用自訂標題列（關鍵：在 UI 都畫好後再切）
+            self.top.overrideredirect(True)
+
+            # 置頂與抓焦點（穩定）
+            self.top.lift(self.parent)
+            self.top.attributes('-topmost', True)
+            try:
+                self.top.grab_set()  # 需要更強：grab_set_global()
+            except Exception:
+                pass
+
+            # 自動聚焦到第一格
             self.top.wait_visibility()
             self._focus_first()
             self.top.after_idle(self._focus_first)
+
+            # 保險：若被搶焦點，拉回來
+            self.top.bind('<FocusOut>', lambda e: self._focus_first())
 
             # 快捷鍵
             self.top.bind('<Return>', lambda e: self._submit())
@@ -898,12 +934,15 @@ class LoginController(BaseWindow):
 
         def _focus_first(self, *_):
             try:
+                self.top.attributes('-topmost', True)
+                self.top.lift()
+                self.top.focus_force()
                 self.entry_name.focus_set()
                 self.entry_name.icursor(tk.END)
             except Exception:
                 pass
 
-        # --- 送出/取消 ---
+        # --- 送出/取消/提示 ---
         def _submit(self):
             import requests
             name = self.var_name.get().strip()
@@ -951,6 +990,7 @@ class LoginController(BaseWindow):
                     messagebox.showwarning("提示", msg)
             except Exception:
                 messagebox.showwarning("提示", msg)
+
 
 class LoginManager:
     """登入管理器 - 增強版"""

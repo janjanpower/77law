@@ -179,29 +179,29 @@ TENANTS = {
 
 
 class VerifySecretRequest(BaseModel):
-    text: Optional[str] = None          # n8n 用這個
-    message: Optional[str] = None       # 你的舊版本用這個
-    user_id: Optional[str] = None
-    reply_token: Optional[str] = None
+    # n8n 建議傳 text；若你之前用 message 也自動相容
+    text: Optional[str] = None
+    message: Optional[str] = None
+    user_id: Optional[str] = None       # 可留著給後續綁定用，不影響驗證
+    reply_token: Optional[str] = None   # 可留著給回覆用
 
 class VerifySecretResponse(BaseModel):
     success: bool
-    client_name: Optional[str] = None
-    client_id: Optional[str] = None
+    client_name: Optional[str] = None   # 命中時回傳事務所名稱
 
 @router.post("/verify-secret", response_model=VerifySecretResponse)
 def verify_secret(req: VerifySecretRequest, db: Session = Depends(get_db)):
+    # 取出訊息文字（完全比對；僅去除首尾空白）
     raw = (req.text or req.message or "").strip()
-    if not raw or len(raw) != 8:
+    if not raw:
         return VerifySecretResponse(success=False)
 
-    # 完全比對（不動大小寫；若要大小寫不敏感就改成 .upper() 比對）
+    # 可選：若 secret_code 一律 8 碼，想先擋掉非 8 碼可開啟
+    # if len(raw) != 8:
+    #     return VerifySecretResponse(success=False)
+
     hit = db.query(LoginUser).filter(LoginUser.secret_code == raw).first()
     if not hit:
         return VerifySecretResponse(success=False)
 
-    return VerifySecretResponse(
-        success=True,
-        client_name=hit.client_name,
-        client_id=hit.client_id,
-    )
+    return VerifySecretResponse(success=True, client_name=hit.client_name)
