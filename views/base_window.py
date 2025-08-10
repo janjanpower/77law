@@ -297,8 +297,8 @@ class BaseWindow:
 
     # 在 class BaseWindow 裡加入
     def suspend_topmost(self):
-        """暫停自動置頂（用在開子視窗期間）"""
-        self._prev_auto_topmost = getattr(self, "auto_topmost", False)
+        """在開子視窗期間暫停主視窗的自動置頂"""
+        setattr(self, "_prev_auto_topmost", getattr(self, "auto_topmost", True))
         self.auto_topmost = False
         try:
             self.window.attributes("-topmost", False)
@@ -306,11 +306,13 @@ class BaseWindow:
             pass
 
     def resume_topmost(self):
-        """恢復自動置頂"""
-        prev = getattr(self, "_prev_auto_topmost", False)
+        """子視窗關閉後恢復主視窗置頂"""
+        prev = getattr(self, "_prev_auto_topmost", True)
         self.auto_topmost = prev
         try:
             self.window.attributes("-topmost", bool(prev))
+            if prev:
+                self.window.lift()
         except Exception:
             pass
 
