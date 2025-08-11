@@ -1,152 +1,232 @@
-# api/routes/user_routes.py
-# -*- coding: utf-8 -*-
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from typing import Optional, Tuple
-
-from api.database import get_db
-
-user_router = APIRouter(prefix="/api/user", tags=["user"])
-
-# ---------- I/O ----------
-class UserRegisterIn(BaseModel):
-    line_user_id: str = Field(..., min_length=5)
-    text: str = Field(..., description="原訊息：可能是『登陸 XXX』或『是/否』")
-
-class UserRegisterOut(BaseModel):
-    success: bool
-    message: str
-    code: Optional[str] = None        # need_confirm / already_lawyer / invalid_format / no_pending
-    expected_name: Optional[str] = None
-
-class MyCasesIn(BaseModel):
-    line_user_id: str = Field(..., min_length=5)
-
-class MyCasesOut(BaseModel):
-    success: bool
-    message: str
-    count: Optional[int] = None
-    name: Optional[str] = None
-
-# ---------- Helpers ----------
-def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
-    """
-    解析意圖：
-      - ('prepare', name) : '登陸 XXX'
-      - ('confirm_yes', None) : '是'
-      - ('confirm_no',  None) : '否'
-      - ('none', None)  : 其它
-    """
-    msg = (text_msg or "").strip()
-    if not msg:
-        return "none", None
-    if msg.startswith("登陸"):
-        name = msg.replace("登陸", "", 1).strip()
-        return ("prepare", name) if name else ("none", None)
-    if msg in ("是", "yes", "Yes", "YES"):
-        return "confirm_yes", None
-    if msg in ("否", "no", "No", "NO"):
-        return "confirm_no", None
-    return "none", None
-
-def _is_lawyer(db: Session, line_user_id: str) -> bool:
-    row = db.execute(text("""
-        SELECT 1 FROM client_line_users
-        WHERE line_user_id = :lid AND is_active = TRUE
-        LIMIT 1
-    """), {"lid": line_user_id}).first()
-    return bool(row)
-
-# ---------- 兩段式登記 ----------
-@user_router.post("/register", response_model=UserRegisterOut)
-def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
-    intent, name = _parse_intent(p.text)
-
-    # A) 準備階段：使用者輸入「登陸 XXX」
-    if intent == "prepare":
-        # 律師一律擋
-        if _is_lawyer(db, p.line_user_id):
-            return JSONResponse(
-                status_code=409,
-                content={
-                    "success": False,
-                    "code": "already_lawyer",
-                    "message": "您已是律師，無需登記一般用戶"
-                }
-            )
-        # 暫存成「確認中」
-        db.execute(text("""
-            INSERT INTO pending_line_users (line_user_id, expected_name, status)
-            VALUES (:lid, :name, 'confirming')
-            ON CONFLICT (line_user_id) DO UPDATE
-              SET expected_name = EXCLUDED.expected_name,
-                  status = 'confirming',
-                  updated_at = NOW()
-        """), {"lid": p.line_user_id, "name": name})
-        db.commit()
-        return UserRegisterOut(
-            success=False,
-            code="need_confirm",
-            expected_name=name,
-            message=f"您確認大名是 {name} 嗎？請回覆「是」或「否」"
-        )
-
-    # B) 使用者回覆「是」：才正式登記
-    if intent == "confirm_yes":
-        row = db.execute(text("""
-            SELECT expected_name FROM pending_line_users
-            WHERE line_user_id = :lid AND status = 'confirming'
-        """), {"lid": p.line_user_id}).first()
-        if not row:
-            return UserRegisterOut(success=False, code="no_pending", message="找不到待確認的姓名，請輸入「登陸 您的大名」")
-        name = row[0]
-        db.execute(text("""
-            UPDATE pending_line_users
-            SET status = 'pending', updated_at = NOW()
-            WHERE line_user_id = :lid
-        """), {"lid": p.line_user_id})
-        db.commit()
-        return UserRegisterOut(success=True, expected_name=name, message=f"已登記：{name}")
-
-    # C) 使用者回覆「否」：取消
-    if intent == "confirm_no":
-        db.execute(text("""
-            DELETE FROM pending_line_users
-            WHERE line_user_id = :lid AND status = 'confirming'
-        """), {"lid": p.line_user_id})
-        db.commit()
-        return UserRegisterOut(success=False, message="已取消，請重新輸入「登陸 您的大名」")
-
-    # 其它文字一律不寫入
-    return UserRegisterOut(success=False, code="invalid_format", message="請輸入「登陸 您的大名」")
-
-# ---------- 查個人案件（給「?」用） ----------
-@user_router.post("/my-cases", response_model=MyCasesOut)
-def my_cases(p: MyCasesIn, db: Session = Depends(get_db)):
-    row = db.execute(text("""
-        SELECT expected_name
-        FROM pending_line_users
-        WHERE line_user_id = :lid AND status IN ('pending','registered')
-    """), {"lid": p.line_user_id}).first()
-    if not row or not row[0]:
-        return MyCasesOut(success=False, message="請輸入「登陸 您的大名」才能查詢自己的案件")
-
-    expected_name = row[0]
-    from api.models_cases import CaseRecord
-    q = (db.query(CaseRecord)
-           .filter(CaseRecord.client == expected_name)
-           .order_by(CaseRecord.updated_at.desc())
-           .limit(5))
-    rows = q.all()
-
-    if not rows:
-        return MyCasesOut(success=True, name=expected_name, count=0, message=f"{expected_name} 尚無案件資料")
-
-    def fmt(r):
-        return f"{r.client} / {r.case_type or ''} / {r.case_number or r.case_id} / 進度:{r.progress or '-'}"
-
-    msg = "你的案件：\n" + "\n".join(fmt(r) for r in rows)
-    return MyCasesOut(success=True, name=expected_name, count=len(rows), message=msg)
+{
+  "nodes": [
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $node['Pick fields'].json.text }}",
+              "operation": "regex",
+              "value2": "^登陸\\s+.+"
+            },
+            {
+              "value1": "={{ $node['Pick fields'].json.text }}",
+              "operation": "equal",
+              "value2": "是"
+            },
+            {
+              "value1": "={{ $node['Pick fields'].json.text }}",
+              "operation": "equal",
+              "value2": "否"
+            }
+          ]
+        },
+        "combineOperation": "any"
+      },
+      "id": "c5b9b7a1-7b6e-4d1b-8d4d-usr-if-1",
+      "name": "IF 登陸 / 是 / 否",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        800,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APP_BASE_URL }}/api/user/register",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"line_user_id\": \"{{$node['Pick fields'].json.userId}}\",\n  \"text\": \"{{$node['Pick fields'].json.text}}\"\n}",
+        "options": {}
+      },
+      "id": "4c0f0a7b-1e3d-4c0a-9d1f-user-reg",
+      "name": "USER 註冊 / register",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.line.me/v2/bot/message/reply",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.LINE_CHANNEL_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"replyToken\": \"{{$node['Pick fields'].json.replyToken}}\",\n  \"messages\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"{{$node['USER 註冊 / register'].json.message}}\"\n    }\n  ]\n}"
+      },
+      "id": "0f2b9b2e-bc7c-4a1f-9e3c-reply-reg",
+      "name": "回覆 Register 結果",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        520
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $node['Pick fields'].json.text }}",
+              "operation": "regex",
+              "value2": "^[\\?？]$"
+            }
+          ]
+        }
+      },
+      "id": "9d7f3f4a-7f9a-4b52-9e10-qmark-if",
+      "name": "IF 問號 ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.APP_BASE_URL }}/api/user/my-cases",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"line_user_id\": \"{{$node['Pick fields'].json.userId}}\"\n}",
+        "options": {}
+      },
+      "id": "f7b5d2a1-7c0e-4a3a-8a2c-user-mycases",
+      "name": "USER 我的案件 / my-cases",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.line.me/v2/bot/message/reply",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.LINE_CHANNEL_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"replyToken\": \"{{$node['Pick fields'].json.replyToken}}\",\n  \"messages\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"{{$node['USER 我的案件 / my-cases'].json.message}}\"\n    }\n  ]\n}"
+      },
+      "id": "b8a2e0d1-3f7c-4f8f-9c11-reply-mycases",
+      "name": "回覆 MyCases 結果",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.line.me/v2/bot/message/reply",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $env.LINE_CHANNEL_ACCESS_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"replyToken\": \"{{$node['Pick fields'].json.replyToken}}\",\n  \"messages\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"請輸入「登陸 您的大名」來綁定，或輸入「?」查詢個人案件。\"\n    }\n  ]\n}"
+      },
+      "id": "a1f0d3e2-5b4c-4d7e-a3f2-reply-guide",
+      "name": "回覆 教學（其它文字）",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        880
+      ]
+    }
+  ],
+  "connections": {
+    "IF 登陸 / 是 / 否": {
+      "main": [
+        [
+          {
+            "node": "USER 註冊 / register",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF 問號 ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "USER 註冊 / register": {
+      "main": [
+        [
+          {
+            "node": "回覆 Register 結果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF 問號 ?": {
+      "main": [
+        [
+          {
+            "node": "USER 我的案件 / my-cases",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "回覆 教學（其它文字）",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
