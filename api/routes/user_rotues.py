@@ -33,13 +33,6 @@ class MyCasesOut(BaseModel):
 
 # ---------- Helpers ----------
 def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
-    """
-    解析意圖：
-      - ('prepare', name) : '登陸 XXX'
-      - ('confirm_yes', None) : '是'
-      - ('confirm_no',  None) : '否'
-      - ('none', None)  : 其它
-    """
     msg = (text_msg or "").strip()
     if not msg:
         return "none", None
@@ -50,6 +43,8 @@ def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
         return "confirm_yes", None
     if msg in ("否", "no", "No", "NO"):
         return "confirm_no", None
+    if msg in ("?", "？"):
+        return "show_cases", None
     return "none", None
 
 def _is_lawyer(db: Session, line_user_id: str) -> bool:
@@ -119,6 +114,27 @@ def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
         """), {"lid": p.line_user_id})
         db.commit()
         return UserRegisterOut(success=False, message="已取消，請重新輸入「登陸 您的大名」")
+
+    # D) 問號：查個人案件（整合原 /my-cases 的邏輯）
+    if intent == "show_cases":
+        row = db.execute(text("""
+            SELECT expected_name
+            FROM pending_line_users
+            WHERE line_user_id = :lid AND status IN ('pending','registered','confirming')
+        """), {"lid": p.line_user_id}).first()
+        if not row or not row[0]:
+            return UserRegisterOut(success=False, code="invalid_format",
+                                   message="請輸入「登陸 您的大名」才能查詢自己的案件")
+        expected_name = row[0]
+        from api.models_cases import CaseRecord
+        rows = (db.query(CaseRecord)
+                  .filter(CaseRecord.client == expected_name)
+                  .order_by(CaseRecord.updated_at.desc())
+                  .limit(5).all())
+        if not rows:
+            return UserRegisterOut(success=True, message=f"{expected_name} 尚無案件資料")
+        def fmt(r): return f"{r.client} / {r.case_type or ''} / {r.case_number or r.case_id} / 進度:{r.progress or '-'}"
+        return UserRegisterOut(success=True, message="你的案件：\n" + "\n".join(fmt(r) for r in rows))
 
     # 其它文字一律不寫入
     return UserRegisterOut(success=False, code="invalid_format", message="請輸入「登陸 您的大名」")
