@@ -232,73 +232,96 @@ def extract_from_line_body(body: dict):
 
 @router.post("/verify-secret")
 async def verify_secret(request: Request, db: Session = Depends(get_db)):
-    """同時判斷 is_secret、is_lawyer，並回傳 route: LOGIN / LAWYER / USER"""
-    payload = await request.json()
+    """
+    一次回傳：
+      - is_secret: 是否為有效暗號（以 DB 為準）
+      - is_lawyer: 此 line_user 是否已被認定為律師
+      - client_id, client_name: 能判斷時一併回傳（優先取對應情境）
+      - route: "LOGIN" | "LAWYER" | "USER"
+      - bind_url: 僅在 route=LOGIN 時給出（導去綁定）
+    傳入 payload（n8n 推薦用最簡格式）：
+      { "text": "<使用者輸入>", "line_user_id": "<LINE userId>" }
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"is_secret": False, "is_lawyer": False, "client_id": None,
+                "client_name": None, "route": "USER", "bind_url": None}
+
     text = (payload.get("text") or "").strip()
-    line_user_id = payload.get("line_user_id") or payload.get("user_id")  # 兩種鍵都支援
+    line_user_id = payload.get("line_user_id") or payload.get("user_id")
 
-    # 1) 驗證是否為有效 Secret（以 DB 為準）
-    login = (
-        db.query(LoginUser)
-        .filter(func.btrim(LoginUser.secret_code) == text)
-        .first()
-    )
-    is_secret = bool(login)
-    client_id = getattr(login, "client_id", None)
-    client_name = getattr(login, "client_name", None)
+    # --- 1) 判斷是否為有效 Secret（以 DB login_users 為準） ---
+    secret_rec = None
+    if text:
+        secret_rec = (
+            db.query(LoginUser)
+              .filter(func.btrim(LoginUser.secret_code) == text)
+              .first()
+        )
+    is_secret = bool(secret_rec)
+    client_id_from_secret = getattr(secret_rec, "client_id", None) if secret_rec else None
+    client_name_from_secret = getattr(secret_rec, "client_name", None) if secret_rec else None
 
-    # 2) 查是否為律師（看你的綁定/角色表）
+    # --- 2) 判斷是否為律師（以 client_line_users 為準） ---
     is_lawyer = False
+    client_id_from_lawyer = None
     if line_user_id:
         clu = (
-            db.query(ClientLineUsers)
-            .filter(
-                ClientLineUsers.line_user_id == line_user_id,
-                # 若你的律師是和事務所綁定，通常也會比對 client_id
-                # 若不需要就移除這行
-                ClientLineUsers.client_id == client_id if client_id else True,
-            )
-            .first()
+            db.query(ClientLineUser)
+              .filter(ClientLineUser.line_user_id == line_user_id)
+              .first()
         )
         if clu:
-            # 依你的欄位調整：is_lawyer(bool) 或 role in ('lawyer', 'attorney')
-            is_lawyer = bool(
-                getattr(clu, "is_lawyer", False) or
-                (getattr(clu, "role", "") in ("lawyer", "attorney", "律師"))
-            )
+            role_val = (getattr(clu, "role", "") or "").strip().lower()
+            is_lawyer = bool(getattr(clu, "is_lawyer", False) or role_val in ("lawyer", "attorney", "律師"))
+            if is_lawyer:
+                client_id_from_lawyer = getattr(clu, "client_id", None)
 
-    # 3) 決策 route（依你剛定義的三條）
-    # 1) 不是 secret 但他是律師 → LAWYER
-    # 2) 是 secret 但不是律師 → LOGIN
-    # 3) 不是 secret 也不是律師 → USER
-    # 4) 是 secret 且是律師 → 預設也走 LAWYER（如要改成 LOGIN，改這條判斷即可）
+    # --- 3) 依你的真值表決定 route ---
+    #  1) 不是 secret 但他是律師 -> LAWYER
+    #  2) 是 secret 但不是律師 -> LOGIN
+    #  3) 不是 secret 也不是律師 -> USER
+    #  4) 是 secret 且是律師 -> 預設走 LAWYER（若你想改成 LOGIN，改下面一行）
     if (not is_secret) and is_lawyer:
         route = "LAWYER"
+        chosen_client_id = client_id_from_lawyer
+        chosen_client_name = None  # 需要可另外查事務所名稱
     elif is_secret and (not is_lawyer):
         route = "LOGIN"
+        chosen_client_id = client_id_from_secret
+        chosen_client_name = client_name_from_secret
     elif (not is_secret) and (not is_lawyer):
         route = "USER"
+        chosen_client_id = None
+        chosen_client_name = None
     else:  # is_secret and is_lawyer
-        route = "LAWYER"
+        route = "LAWYER"  # ← 如果你希望導去登入改拿 LOGIN
+        # 優先用律師所屬 client；沒有就退回 secret 的 client
+        chosen_client_id = client_id_from_lawyer or client_id_from_secret
+        chosen_client_name = client_name_from_secret if client_id_from_secret == chosen_client_id else None
 
-    # 4) 綁定用 URL（只有 LOGIN 才給）
+    # --- 4) 需要登入的情形回傳綁定網址（bind_url） ---
     bind_url = None
-    if route == "LOGIN":
+    if route == "LOGIN" and is_secret:
         base = os.getenv("APP_BASE_URL", "https://your-app.example.com")
-        # 依你的實際綁定路徑調整，例如 /api/tenant/bind-user
         bind_url = f"{base}/api/tenant/bind-user?code={quote(text)}"
-        if client_id:
-            bind_url += f"&client_id={quote(str(client_id))}"
+        if client_id_from_secret:
+            bind_url += f"&client_id={quote(str(client_id_from_secret))}"
 
     return {
         "is_secret": is_secret,
         "is_lawyer": is_lawyer,
-        "route": route,                 # ← n8n 直接用這個分流
-        "client_id": client_id,
-        "client_name": client_name,
+        "client_id": chosen_client_id,
+        "client_name": chosen_client_name,
+        "route": route,             # ← n8n 直接用這個分流
         "bind_url": bind_url,
+        # （可選除錯欄位：若不要可刪）
+        "debug": {
+            "client_id_from_secret": client_id_from_secret,
+            "client_id_from_lawyer": client_id_from_lawyer,
+        }
     }
-
 
 
 #===========確認 plan type ============
