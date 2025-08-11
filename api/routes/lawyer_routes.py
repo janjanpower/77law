@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 
 import datetime
+import os
 from typing import Optional, Dict, Any
 
 from sqlalchemy import and_, func, select, text
-
+from urllib.parse import quote
 from api.database import get_db
 from api.models_control import LoginUser, ClientLineUsers
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -231,57 +232,72 @@ def extract_from_line_body(body: dict):
 
 @router.post("/verify-secret")
 async def verify_secret(request: Request, db: Session = Depends(get_db)):
-    """
-    驗證使用者輸入是否為有效的 Secret Code。
-    兼容兩種輸入：
-      1) 簡化 payload：{"text": "...", "user_id": "...", "reply_token": "..."}
-      2) LINE 原始 body：{"body": { "events": [ { "message": {"text": ...}, ... } ] } }
-    回傳欄位：
-      - is_secret: bool        # 提供給 n8n Switch 分支用
-      - success:   bool        # 向下相容舊流程，值與 is_secret 相同
-      - client_name: Optional[str]
-      - client_id:   Optional[str]
-    """
-    try:
-        payload = await request.json()
-    except Exception:
-        return {"is_secret": False, "success": False, "client_name": None, "client_id": None}
-
-    # 1) 先嘗試讀簡化格式
+    """同時判斷 is_secret、is_lawyer，並回傳 route: LOGIN / LAWYER / USER"""
+    payload = await request.json()
     text = (payload.get("text") or "").strip()
-    user_id = payload.get("user_id")
-    reply_token = payload.get("reply_token")
-    event_type = payload.get("eventType")
+    line_user_id = payload.get("line_user_id") or payload.get("user_id")  # 兩種鍵都支援
 
-    # 2) 若沒拿到文字，再從 LINE body 抽
-    if not text and "body" in payload:
-        text2, user_id2, reply_token2, event_type2 = extract_from_line_body(payload.get("body"))
-        text = (text2 or "").strip()
-        user_id = user_id or user_id2
-        reply_token = reply_token or reply_token2
-        event_type = event_type or event_type2
-
-    # 3) 沒文字就不是 secret
-    if not text:
-        return {"is_secret": False, "success": False, "client_name": None, "client_id": None}
-
-    # 4) 到資料庫查 LoginUser.secret_code（去除空白後完全相符）
-    match = (
+    # 1) 驗證是否為有效 Secret（以 DB 為準）
+    login = (
         db.query(LoginUser)
         .filter(func.btrim(LoginUser.secret_code) == text)
         .first()
     )
+    is_secret = bool(login)
+    client_id = getattr(login, "client_id", None)
+    client_name = getattr(login, "client_name", None)
 
-    if match:
-        return {
-            "is_secret": True,
-            "success": True,  # 相容舊欄位
-            "client_name": getattr(match, "client_name", None),
-            "client_id": getattr(match, "client_id", None),
-        }
+    # 2) 查是否為律師（看你的綁定/角色表）
+    is_lawyer = False
+    if line_user_id:
+        clu = (
+            db.query(ClientLineUsers)
+            .filter(
+                ClientLineUsers.line_user_id == line_user_id,
+                # 若你的律師是和事務所綁定，通常也會比對 client_id
+                # 若不需要就移除這行
+                ClientLineUsers.client_id == client_id if client_id else True,
+            )
+            .first()
+        )
+        if clu:
+            # 依你的欄位調整：is_lawyer(bool) 或 role in ('lawyer', 'attorney')
+            is_lawyer = bool(
+                getattr(clu, "is_lawyer", False) or
+                (getattr(clu, "role", "") in ("lawyer", "attorney", "律師"))
+            )
 
-    # 5) 查無此 secret
-    return {"is_secret": False, "success": False, "client_name": None, "client_id": None}
+    # 3) 決策 route（依你剛定義的三條）
+    # 1) 不是 secret 但他是律師 → LAWYER
+    # 2) 是 secret 但不是律師 → LOGIN
+    # 3) 不是 secret 也不是律師 → USER
+    # 4) 是 secret 且是律師 → 預設也走 LAWYER（如要改成 LOGIN，改這條判斷即可）
+    if (not is_secret) and is_lawyer:
+        route = "LAWYER"
+    elif is_secret and (not is_lawyer):
+        route = "LOGIN"
+    elif (not is_secret) and (not is_lawyer):
+        route = "USER"
+    else:  # is_secret and is_lawyer
+        route = "LAWYER"
+
+    # 4) 綁定用 URL（只有 LOGIN 才給）
+    bind_url = None
+    if route == "LOGIN":
+        base = os.getenv("APP_BASE_URL", "https://your-app.example.com")
+        # 依你的實際綁定路徑調整，例如 /api/tenant/bind-user
+        bind_url = f"{base}/api/tenant/bind-user?code={quote(text)}"
+        if client_id:
+            bind_url += f"&client_id={quote(str(client_id))}"
+
+    return {
+        "is_secret": is_secret,
+        "is_lawyer": is_lawyer,
+        "route": route,                 # ← n8n 直接用這個分流
+        "client_id": client_id,
+        "client_name": client_name,
+        "bind_url": bind_url,
+    }
 
 
 
