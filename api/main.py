@@ -46,7 +46,6 @@ app.include_router(file_router)
 app.include_router(cases_upsert_router)
 app.include_router(case_upload_routes.router)
 app.include_router(lawyer_router)
-
 app.include_router(pending_routes.router)
 app.include_router(case_routes.router)
 # 掛載 API 路由
