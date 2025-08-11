@@ -398,3 +398,11 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
         "available": available,
         "message": msg
     }
+
+# lawyer_routes.py 最後加
+@router.get("/verify-secret/ping")
+async def verify_secret_ping():
+    return {
+        "ok": True,
+        "ts": datetime.datetime.utcnow().isoformat()
+    }
