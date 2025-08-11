@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 # views/register_dialog.py — 無邊框註冊視窗（自訂標題） + 串接 /api/auth/register
+
+from random import random, choice
 import tkinter as tk
 from tkinter import simpledialog
 from tkinter import messagebox
@@ -156,7 +158,7 @@ class RegisterDialog:
         # ✅ 改這裡：打 /api/auth/register（後端會預設 plan_type=unpaid → tenant_status=NULL）
         url = f"{self.api_base_url}/api/auth/register"
         # 產生 8 碼純數字
-        secret_code = ''.join(random.choice('0123456789') for _ in range(8))
+        secret_code = ''.join(choice('0123456789') for _ in range(8))
         payload = {
             "client_name": name,
             "client_id": cid,

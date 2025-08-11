@@ -14,7 +14,7 @@ user_router = APIRouter(prefix="/api/user", tags=["user"])
 # ---------- I/O ----------
 class UserRegisterIn(BaseModel):
     line_user_id: str = Field(..., min_length=5)
-    text: str = Field(..., description="原訊息：可能是『登陸 XXX』或『是/否』")
+    text: str = Field(..., description="原訊息：可能是『登錄 XXX』或『是/否』")
 
 class UserRegisterOut(BaseModel):
     success: bool
@@ -36,8 +36,8 @@ def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
     msg = (text_msg or "").strip()
     if not msg:
         return "none", None
-    if msg.startswith("登陸"):
-        name = msg.replace("登陸", "", 1).strip()
+    if msg.startswith("登錄"):
+        name = msg.replace("登錄", "", 1).strip()
         return ("prepare", name) if name else ("none", None)
     if msg in ("是", "yes", "Yes", "YES"):
         return "confirm_yes", None
@@ -60,7 +60,7 @@ def _is_lawyer(db: Session, line_user_id: str) -> bool:
 def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
     intent, name = _parse_intent(p.text)
 
-    # A) 準備階段：使用者輸入「登陸 XXX」
+    # A) 準備階段：使用者輸入「登錄 XXX」
     if intent == "prepare":
         # 律師一律擋
         if _is_lawyer(db, p.line_user_id):
@@ -96,7 +96,7 @@ def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
             WHERE line_user_id = :lid AND status = 'confirming'
         """), {"lid": p.line_user_id}).first()
         if not row:
-            return UserRegisterOut(success=False, code="no_pending", message="找不到待確認的姓名，請輸入「登陸 您的大名」")
+            return UserRegisterOut(success=False, code="no_pending", message="找不到待確認的姓名，請輸入「登錄 您的大名」")
         name = row[0]
         db.execute(text("""
             UPDATE pending_line_users
@@ -113,7 +113,7 @@ def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
             WHERE line_user_id = :lid AND status = 'confirming'
         """), {"lid": p.line_user_id})
         db.commit()
-        return UserRegisterOut(success=False, message="已取消，請重新輸入「登陸 您的大名」")
+        return UserRegisterOut(success=False, message="已取消，請重新輸入「登錄 您的大名」")
 
     # D) 問號：查個人案件（整合原 /my-cases 的邏輯）
     if intent == "show_cases":
@@ -124,7 +124,7 @@ def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
         """), {"lid": p.line_user_id}).first()
         if not row or not row[0]:
             return UserRegisterOut(success=False, code="invalid_format",
-                                   message="請輸入「登陸 您的大名」才能查詢自己的案件")
+                                   message="請輸入「登錄 您的大名」才能查詢自己的案件")
         expected_name = row[0]
         from api.models_cases import CaseRecord
         rows = (db.query(CaseRecord)
@@ -137,7 +137,7 @@ def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
         return UserRegisterOut(success=True, message="你的案件：\n" + "\n".join(fmt(r) for r in rows))
 
     # 其它文字一律不寫入
-    return UserRegisterOut(success=False, code="invalid_format", message="請輸入「登陸 您的大名」")
+    return UserRegisterOut(success=False, code="invalid_format", message="請輸入「登錄 您的大名」")
 
 # ---------- 查個人案件（給「?」用） ----------
 @user_router.post("/my-cases", response_model=MyCasesOut)
@@ -148,7 +148,7 @@ def my_cases(p: MyCasesIn, db: Session = Depends(get_db)):
         WHERE line_user_id = :lid AND status IN ('pending','registered')
     """), {"lid": p.line_user_id}).first()
     if not row or not row[0]:
-        return MyCasesOut(success=False, message="請輸入「登陸 您的大名」才能查詢自己的案件")
+        return MyCasesOut(success=False, message="請輸入「登錄 您的大名」才能查詢自己的案件")
 
     expected_name = row[0]
     from api.models_cases import CaseRecord
