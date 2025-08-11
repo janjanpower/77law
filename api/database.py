@@ -2,11 +2,12 @@
 # -*- coding: utf-8 -*-
 
 import os
-from typing import Generator, Optional
 from contextlib import contextmanager
+from typing import Generator, Optional
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, declarative_base
+
 
 try:
     from dotenv import load_dotenv
@@ -22,6 +23,15 @@ elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL not set")
+
+# 建立共用 Engine（設定 pool 避免爆連線）
+ENGINE = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_size=5,         # 可依流量調整
+    max_overflow=5,      # 避免瞬間爆量
+    pool_recycle=1800,   # 30 分鐘回收一次
+)
 
 # ---- Engine / Session / Base ----
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300, future=True)
