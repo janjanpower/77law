@@ -60,5 +60,5 @@ def safe_pending_track(p: PendingIn, db: Session = Depends(get_db)):
         u = track_pending_central(db, line_user_id=p.line_user_id, expected_name=p.expected_name)
         scope = "control"
 
-    login_text = f"登入 {u.expected_name}" if u.expected_name else "登入"
+    login_text = f"登陸 {u.expected_name}" if u.expected_name else "登陸"
     return {"ok": True, "where": scope, "login_text": login_text}
