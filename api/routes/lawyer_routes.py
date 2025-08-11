@@ -266,17 +266,19 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
     # --- 2) 判斷是否為律師（以 client_line_users 為準） ---
     is_lawyer = False
     client_id_from_lawyer = None
+
     if line_user_id:
-        clu = (
-            db.query(ClientLineUsers)
-              .filter(ClientLineUsers.line_user_id == line_user_id)
-              .first()
-        )
+        q = (db.query(ClientLineUsers)
+            .filter(ClientLineUsers.line_user_id == line_user_id,
+                    ClientLineUsers.is_active == True))
+        # 暗號已解出 client_id 時，採精準比對，避免跨所誤判
+        if client_id_from_secret:
+            q = q.filter(ClientLineUsers.client_id == client_id_from_secret)
+
+        clu = q.first()
         if clu:
-            role_val = (getattr(clu, "role", "") or "").strip().lower()
-            is_lawyer = bool(getattr(clu, "is_lawyer", False) or role_val in ("lawyer", "attorney", "律師"))
-            if is_lawyer:
-                client_id_from_lawyer = getattr(clu, "client_id", None)
+            is_lawyer = True
+            client_id_from_lawyer = getattr(clu, "client_id", None)
 
     # --- 3) 依你的真值表決定 route ---
     #  1) 不是 secret 但他是律師 -> LAWYER
