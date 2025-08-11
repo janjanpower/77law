@@ -155,6 +155,14 @@ class RegisterDialog:
 
         # ✅ 改這裡：打 /api/auth/register（後端會預設 plan_type=unpaid → tenant_status=NULL）
         url = f"{self.api_base_url}/api/auth/register"
+        # 產生 8 碼純數字
+        secret_code = ''.join(random.choice('0123456789') for _ in range(8))
+        payload = {
+            "client_name": name,
+            "client_id": cid,
+            "password": pwd,
+            "secret_code": secret_code
+        }
         print(f"[RegisterDialog] POST -> {url}")
         try:
             resp = requests.post(
@@ -176,7 +184,8 @@ class RegisterDialog:
                 "success": True,
                 "client_id": data.get("client_id"),
                 "secret_code": data.get("secret_code"),
-                "password": pwd
+                "password": pwd,
+
             }
             # 可選：提示成功再關閉
 

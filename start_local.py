@@ -3,6 +3,18 @@
 start_local.py
 法律案件管理系統 v4.1 - 簡化版（可從環境變數/.env 讀取 API_BASE_URL）
 """
+try:
+    from utils.updater import check_and_update
+    APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+    MANIFEST_URL = "https://你的伺服器/manifest.json"  # 你發布更新的 JSON
+    if check_and_update(MANIFEST_URL, APP_ROOT):
+        # 已更新，重新啟動自己
+        import subprocess, sys
+        python = sys.executable
+        subprocess.Popen([python] + sys.argv)
+        sys.exit(0)
+except Exception as e:
+    print(f"[Updater] 更新檢查失敗：{e}")
 
 import locale
 import platform

@@ -513,23 +513,147 @@ class MessageDialog:
 
 
 class UnifiedMessageDialog:
-    """統一樣式的訊息對話框 - 完整修正版本"""
+    """統一樣式的訊息對話框（含陰影、動態尺寸）"""
 
     def __init__(self, parent, title="訊息", message="", dialog_type="info"):
-        self.message = message
-        self.dialog_type = dialog_type
+        import tkinter.font as tkfont
+
         self.parent = parent
-        self.drag_data = {"x": 0, "y": 0}
+        self.message = message or ""
+        self.dialog_type = dialog_type
+        self.result = None
 
-        # 建立視窗
+        # 預估寬度：依文字長度決定 (最小320，最大560)
+        base_font = tkfont.Font(family=AppConfig.FONTS.get('text', ('Arial', 10))[0],
+                                size=AppConfig.FONTS.get('text', ('Arial', 10))[1])
+        text_px = base_font.measure(self.message) if self.message else 320
+        width = min(560, max(320, 40 + text_px // 1))  # 預估，但後續會再 fit
+        height = 180
+
+        # 陰影層（在主窗右下 6px）
+        self.shadow = tk.Toplevel(parent)
+        try:
+            self.shadow.overrideredirect(True)
+        except Exception:
+            pass
+        self.shadow.geometry(f"{width}x{height}+0+0")
+        self.shadow.configure(bg="#000000")
+        try:
+            self.shadow.attributes("-alpha", 0.25)
+        except Exception:
+            pass
+
+        # 主對話框
         self.window = tk.Toplevel(parent)
-        self.window.withdraw()  # 先隱藏
+        self.window.withdraw()
+        try:
+            self.window.overrideredirect(True)
+        except Exception:
+            pass
+        self.window.configure(bg=AppConfig.COLORS['window_bg'])
 
-        self._setup_window(title)
-        self._create_dialog_content()
+        # 位置（置中）
+        self._place_center(width, height)
+        self._place_shadow()
 
-        # 延遲顯示確保正確設定置頂
-        self.window.after(10, self._show_dialog_safely)
+        # 標題列
+        title_bar = tk.Frame(self.window, bg=AppConfig.COLORS.get('title_bg', '#2c3e50'), height=32)
+        title_bar.pack(fill='x')
+        self._enable_drag(title_bar)
+
+        icon = {"info": "ℹ️", "success": "✅", "warning": "⚠️", "error": "❌"}.get(self.dialog_type, "ℹ️")
+        tk.Label(title_bar, text=icon, bg=title_bar['bg'],
+                 fg=AppConfig.COLORS.get('title_fg', 'white'),
+                 font=('Arial', 12, 'bold')).pack(side='left', padx=10)
+        tk.Label(title_bar, text=title, bg=title_bar['bg'],
+                 fg=AppConfig.COLORS.get('title_fg', 'white'),
+                 font=AppConfig.FONTS.get('title', ('Arial', 10, 'bold'))).pack(side='left')
+
+        # 內容
+        body = tk.Frame(self.window, bg=AppConfig.COLORS['window_bg'])
+        body.pack(fill='both', expand=True, padx=16, pady=12)
+
+        msg = tk.Label(
+            body, text=self.message, bg=AppConfig.COLORS['window_bg'],
+            fg=AppConfig.COLORS['text_color'],
+            font=AppConfig.FONTS.get('text', ('Arial', 10)), justify='left', wraplength=width - 48
+        )
+        msg.pack(fill='both', expand=True)
+
+        btn = tk.Button(
+            body, text="確定", command=self._close,
+            bg=AppConfig.COLORS.get('button_bg', '#007ACC'),
+            fg=AppConfig.COLORS.get('button_fg', 'white'),
+            font=AppConfig.FONTS.get('button', ('Arial', 9)), width=10
+        )
+        btn.pack(pady=(8, 2))
+
+        self.window.deiconify()
+        self.window.lift(parent)
+        try:
+            self.window.grab_set()
+        except Exception:
+            pass
+        self.window.after(10, self._fit_to_text, msg)
+
+        # 關閉行為
+        self.window.bind('<Escape>', lambda e: self._close())
+
+    def _place_center(self, w, h):
+        self.window.update_idletasks()
+        sw = self.window.winfo_screenwidth()
+        sh = self.window.winfo_screenheight()
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        self.window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _place_shadow(self):
+        # 陰影位置：主窗右下 6px
+        try:
+            self.window.update_idletasks()
+            x = self.window.winfo_x() + 6
+            y = self.window.winfo_y() + 6
+            w = self.window.winfo_width()
+            h = self.window.winfo_height()
+            self.shadow.geometry(f"{w}x{h}+{x}+{y}")
+            self.shadow.lift()
+            self.window.lift()
+        except Exception:
+            pass
+
+    def _fit_to_text(self, msg_label):
+        # 依內容重新計算尺寸與 wraplength
+        msg_label.update_idletasks()
+        req_w = min(560, max(320, msg_label.winfo_reqwidth() + 48))
+        req_h = max(160, msg_label.winfo_reqheight() + 120)
+        self._place_center(req_w, req_h)
+        try:
+            msg_label.config(wraplength=req_w - 48)
+        except Exception:
+            pass
+        self._place_shadow()
+
+    def _enable_drag(self, widget):
+        drag = {"x": 0, "y": 0}
+        widget.bind("<Button-1>", lambda e: drag.update(x=e.x, y=e.y))
+        def on_drag(e):
+            nx = self.window.winfo_x() + (e.x - drag["x"])
+            ny = self.window.winfo_y() + (e.y - drag["y"])
+            self.window.geometry(f"+{nx}+{ny}")
+            self._place_shadow()
+        widget.bind("<B1-Motion>", on_drag)
+
+    def _close(self):
+        try:
+            self.window.grab_release()
+        except Exception:
+            pass
+        try:
+            self.window.destroy()
+        finally:
+            try: self.shadow.destroy()
+            except Exception: pass
+
 
     def _setup_window(self, title):
         """設定視窗基本屬性"""
@@ -716,21 +840,18 @@ class UnifiedMessageDialog:
 
     @staticmethod
     def show_success(parent, message, title="成功"):
-        """顯示成功對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "success")
-        dialog.window.wait_window()
+        dlg = UnifiedMessageDialog(parent, title, message, "success")
+        dlg.window.wait_window()
 
     @staticmethod
     def show_warning(parent, message, title="警告"):
-        """顯示警告對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "warning")
-        dialog.window.wait_window()
+        dlg = UnifiedMessageDialog(parent, title, message, "warning")
+        dlg.window.wait_window()
 
     @staticmethod
     def show_error(parent, message, title="錯誤"):
-        """顯示錯誤對話框"""
-        dialog = UnifiedMessageDialog(parent, title, message, "error")
-        dialog.window.wait_window()
+        dlg = UnifiedMessageDialog(parent, title, message, "error")
+        dlg.window.wait_window()
 
 
 

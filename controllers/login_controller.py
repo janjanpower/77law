@@ -248,33 +248,31 @@ class LoginController(BaseWindow):
         options_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
         options_frame.pack(fill='x', pady=(0, 15))
 
-        self.remember_var = tk.BooleanVar()
+        self.remember_var = tk.BooleanVar(value=False)
+
         remember_check = tk.Checkbutton(
-            options_frame,
-            text="記住帳號密碼",
+            options_frame, text="記住帳號密碼",
             variable=self.remember_var,
             font=('Microsoft JhengHei', 9),
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS['text_color'],
             activebackground=AppConfig.COLORS['window_bg'],
-            selectcolor='white',
-            width=18
+            selectcolor='white'
         )
-        remember_check.pack(anchor='w')
+        remember_check.grid(row=0, column=0, sticky='w')
 
-        # 🔥 新增：忘記密碼按鈕
         forgot_btn = tk.Button(
-            options_frame,
-            text="忘記密碼？",
+            options_frame, text="忘記密碼？",
             font=('Microsoft JhengHei', 9),
             bg=AppConfig.COLORS['window_bg'],
             fg=AppConfig.COLORS.get('link_color', '#3498db'),
-            bd=0,
-            cursor='hand2',
-            command=self._handle_forgot_password,
-            width=15
+            bd=0, cursor='hand2',
+            command=self._on_forgot_password
         )
-        forgot_btn.pack(side='right')
+        forgot_btn.grid(row=0, column=1, sticky='e', padx=(12, 0))
+
+        options_frame.grid_columnconfigure(0, weight=1)
+        options_frame.grid_columnconfigure(1, weight=0)
 
         # 按鈕區域
         button_frame = tk.Frame(self.content_frame, bg=AppConfig.COLORS['window_bg'])
@@ -356,6 +354,12 @@ class LoginController(BaseWindow):
 
         # 設定事件綁定
         self._setup_key_bindings()
+
+    def _on_forgot_password(self):
+        UnifiedMessageDialog.show_info(
+            self.window,
+            "請聯繫系統管理員重設密碼，或使用註冊時取得的 secret_code 進行驗證。"
+        )
 
     def _create_info_area(self):
         """建立資訊顯示區域"""

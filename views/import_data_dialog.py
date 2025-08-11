@@ -6,11 +6,12 @@
 """
 import os
 import tkinter as tk
-from tkinter import filedialog, ttk
+from tkinter import filedialog
 from typing import Callable, Optional
 
 from config.settings import AppConfig
 from views.base_window import BaseWindow
+
 
 # 🔥 使用安全導入方式
 try:
@@ -316,15 +317,27 @@ class ImportDataDialog(BaseWindow):
                             print(f"加入案件失敗: {e}")
 
                 if total_imported > 0:
-                    success_message = f"✅ 匯入成功！\n\n共匯入 {total_imported} 筆案件"
-                    self.analysis_label.config(text=success_message, fg='#4CAF50')
+                    success_message = f"✅ 匯入成功！共匯入 {total_imported} 筆"
+                    # 先關閉自己
+                    parent_for_msg = self.parent_window or self.window
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
 
-                    # 通知完成
-                    if self.on_import_complete:
-                        self.on_import_complete()
+                    # 再跳成功訊息（放到 event loop 下一輪，確保視窗已經關閉）
+                    (parent_for_msg or self.window).after(
+                        50, lambda: UnifiedMessageDialog.show_success(parent_for_msg, success_message)
+                    )
 
-                    # 延遲關閉對話框
-                    self.window.after(2000, self.close)
+                    # 若有回調，最後再通知外部
+                    try:
+                        if callable(getattr(self, 'on_import_complete', None)):
+                            self.on_import_complete()
+                    except Exception:
+                        pass
+                    return
+
                 else:
                     UnifiedMessageDialog.show_error(self.window, "沒有成功匯入任何案件")
             else:

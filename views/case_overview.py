@@ -1074,51 +1074,68 @@ class CaseOverviewWindow:
                         log_type = "success" if "成功" in message else ("error" if "失敗" in message else "info")
                         self.current_upload_dialog.add_log(message, log_type)
 
-            def complete_callback(success, summary):
-                """上傳完成回調"""
+            def complete_callback(success: bool, summary: dict):
+                """
+                上傳完成回調：
+                1) 關閉進度視窗
+                2) 恢復「上傳雲端」按鈕
+                3) 統一樣式訊息彈窗
+                """
+                try:
+                    # 1) 讓進度窗先顯示最終狀態，再延遲關閉
+                    if getattr(self, 'current_upload_dialog', None):
+                        try:
+                            self.current_upload_dialog.on_upload_complete(success, summary)
+                            self.current_upload_dialog.window.after(600, self.current_upload_dialog.close)
+                        except Exception as e:
+                            print(f"[complete_callback] 關閉進度視窗時出錯: {e}")
 
-                if self.current_upload_dialog:
-                    self.current_upload_dialog.on_upload_complete(success, summary)
+                    # 2) 無論成功失敗都把按鈕復原
+                    if hasattr(self, 'upload_cloud_btn') and self.upload_cloud_btn:
+                        try:
+                            self.upload_cloud_btn.config(state='normal', text='上傳雲端')
+                        except Exception as e:
+                            print(f"[complete_callback] 恢復按鈕狀態失敗: {e}")
 
-            # 禁用按鈕防止重複操作
-            if hasattr(self, 'upload_cloud_btn'):
-                self.upload_cloud_btn.config(state='disabled', text='上傳中...')
+                    # 3) 組訊息（相容不同鍵名）
+                    uploaded = (
+                        summary.get('success')
+                        or summary.get('uploaded_count')
+                        or summary.get('success_count')
+                        or 0
+                    )
+                    failed = (
+                        summary.get('failed')
+                        or summary.get('failed_count')
+                        or 0
+                    )
+                    skipped = summary.get('skipped_count', 0)  # 第3點需求會用到
 
-            # 🔥 關鍵：確保傳遞正確的用戶資料
-            print(f"🔍 用戶資料: {self.user_data}")
+                    if success:
+                        msg = f"上傳完成！成功: {uploaded} 筆，失敗: {failed} 筆" + (f"，略過未變更: {skipped} 筆" if skipped else "")
+                        try:
+                            from views.dialogs import UnifiedMessageDialog
+                            UnifiedMessageDialog.show_success(self.window, msg)
+                        except Exception:
+                            import tkinter.messagebox as m
+                            m.showinfo("完成", msg, parent=self.window)
+                    else:
+                        msg = f"上傳失敗！成功: {uploaded} 筆，失敗: {failed} 筆" + (f"，略過未變更: {skipped} 筆" if skipped else "")
+                        try:
+                            from views.dialogs import UnifiedMessageDialog
+                            UnifiedMessageDialog.show_error(self.window, msg)
+                        except Exception:
+                            import tkinter.messagebox as m
+                            m.showerror("錯誤", msg, parent=self.window)
 
-            # 開始異步上傳
-            self.database_uploader.upload_cases_async(
-                self.case_data,
-                self.user_data,  # 確保這裡的 user_data 包含正確的 client_id
-                progress_callback,
-                complete_callback
-            )
+                except Exception as e:
+                    print(f"[complete_callback] 未預期錯誤: {e}")
+                    if hasattr(self, 'upload_cloud_btn'):
+                        self.upload_cloud_btn.config(state='normal', text='上傳雲端')
+        except Exception:
+            import tkinter.messagebox as m
+            m.showinfo("完成", msg, parent=self.window)
 
-        except Exception as e:
-            error_msg = f"啟動上傳功能失敗: {str(e)}"
-            print(f"❌ {error_msg}")
-            print(f"🔍 當時的 user_data: {getattr(self, 'user_data', 'NOT_FOUND')}")
-
-            # 提供更詳細的錯誤信息
-            detailed_error = f"""上傳功能啟動失敗
-
-    錯誤信息：{str(e)}
-
-    請檢查：
-    1. 網路連接是否正常
-    2. 是否已正確登入
-    3. 用戶認證資料是否完整
-
-    如果問題持續存在，請聯繫技術支援。
-
-    錯誤詳情：{error_msg}"""
-
-            UnifiedMessageDialog.show_error(self.window, detailed_error)
-
-            # 恢復按鈕狀態
-            if hasattr(self, 'upload_cloud_btn'):
-                self.upload_cloud_btn.config(state='normal', text='上傳雲端')
 
     def _on_upload_cancel(self):
         """取消上傳事件"""
