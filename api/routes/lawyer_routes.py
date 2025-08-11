@@ -268,8 +268,8 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
     client_id_from_lawyer = None
     if line_user_id:
         clu = (
-            db.query(ClientLineUser)
-              .filter(ClientLineUser.line_user_id == line_user_id)
+            db.query(ClientLineUsers)
+              .filter(ClientLineUsers.line_user_id == line_user_id)
               .first()
         )
         if clu:
