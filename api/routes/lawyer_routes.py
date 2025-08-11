@@ -406,3 +406,36 @@ async def verify_secret_ping():
         "ok": True,
         "ts": datetime.datetime.utcnow().isoformat()
     }
+
+class CaseSearchIn(BaseModel):
+    text: str
+    line_user_id: str | None = None
+
+@router.post("/case-search")
+def case_search(payload: CaseSearchIn, db: Session = Depends(get_db)):
+    # 依你實際模型調整 import 與欄位
+    from api.models_cases import CaseRecord
+
+    key = (payload.text or "").strip().split()[-1]
+    if not key:
+        return {"message": "請輸入關鍵字或案號"}
+
+    rows = (
+        db.query(CaseRecord)
+          .filter(
+              (CaseRecord.case_id == key) |
+              (CaseRecord.case_number.ilike(f"%{key}%")) |
+              (CaseRecord.client.ilike(f"%{key}%"))
+          )
+          .order_by(CaseRecord.updated_at.desc())
+          .limit(5)
+          .all()
+    )
+
+    if not rows:
+        return {"message": f"找不到符合「{key}」的案件"}
+
+    def fmt(r):
+        return f"{r.client} / {r.case_type or ''} / {r.case_number or r.case_id} / 進度:{r.progress or '-'}"
+
+    return {"message": "查到以下案件：\n" + "\n".join(fmt(r) for r in rows)}
