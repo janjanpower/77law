@@ -135,13 +135,28 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
 
     if existed:
         msg = _build_plan_message("ℹ️ 已經綁定", client_name, plan_type, max_users, usage_before)
-        return BindUserResponse(True, client_name, plan_type, max_users, usage_before,
-                                max(0, max_users - usage_before), msg)
+        return BindUserResponse(
+            success=True,
+            client_name=client_name,
+            plan_type=plan_type,
+            limit=max_users,
+            usage=usage_before,
+            available=max(0, max_users - usage_before),
+            message=msg,
+        )
 
     # 方案額滿（只限制一般用戶，律師可視需求放寬）
     if payload.role != "lawyer" and max_users and usage_before >= max_users:
         msg = _build_plan_message("⚠️ 已額滿，需要升級方案", client_name, plan_type, max_users, usage_before)
-        return BindUserResponse(False, client_name, plan_type, max_users, usage_before, 0, msg)
+        return BindUserResponse(
+            success=False,
+            client_name=client_name,
+            plan_type=plan_type,
+            limit=max_users,
+            usage=usage_before,
+            available=0,
+            message=msg,
+        )
 
     # Upsert（以權威名稱寫入）
     db.execute(text("""
@@ -163,8 +178,15 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     usage_now = int(usage_now)
 
     msg = _build_plan_message("🎉 綁定成功", client_name, plan_type, max_users, usage_now)
-    return BindUserResponse(True, client_name, plan_type, max_users, usage_now,
-                            max(0, max_users - usage_now), msg)
+    return BindUserResponse(
+        success=True,
+        client_name=client_name,
+        plan_type=plan_type,
+        limit=max_users,
+        usage=usage_now,
+        available=max(0, max_users - usage_now),
+        message=msg,
+    )
 
 def _build_plan_message(title: str, client_name: str, plan_type: Optional[str], limit_val: Optional[int], usage_val: int) -> str:
     plan = plan_type or "未設定"
