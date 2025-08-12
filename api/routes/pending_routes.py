@@ -146,3 +146,5 @@ def safe_pending_track(p: PendingIn, db: Session = Depends(get_db)):
         message=None,
         login_text=login_text,
     )
+
+pending_router = router

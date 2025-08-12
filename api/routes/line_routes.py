@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import Optional
-from .models import VerifySecretIn, VerifySecretOut, ResolveRouteIn, ResolveRouteOut
-from .database import get_db
-from .services import _is_bound_to_lawyer, _lookup_client_by_code, _bind_line_user_to_client
+from api.schemas.line import VerifySecretIn, VerifySecretOut, ResolveRouteIn, ResolveRouteOut
+from api.database import get_db
+from api.services.lawyer import _is_bound_to_lawyer, _lookup_client_by_code, _bind_line_user_to_client
 
 router = APIRouter()
+
 
 @router.post("/lawyer/verify-secret", response_model=VerifySecretOut)
 def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
@@ -18,7 +18,7 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
             success=True,
             is_secret=False,
             is_lawyer=already_bound,
-            route="USER" if already_bound else "USER",
+            route="USER",
             message='已登錄過，請輸入"?"查閱案件' if already_bound else "空白輸入"
         )
 
@@ -29,7 +29,7 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
             success=True,
             is_secret=False,
             is_lawyer=already_bound,
-            route="USER" if already_bound else "USER",
+            route="USER",
             message='已登錄過，請輸入"?"查閱案件' if already_bound else "不是合法暗號"
         )
 
@@ -95,3 +95,6 @@ def resolve_route(p: ResolveRouteIn, db: Session = Depends(get_db)):
 
     # 其他
     return ResolveRouteOut(route="USER", message="一般使用者")
+
+# export alias for main.py compatibility
+line_router = router
