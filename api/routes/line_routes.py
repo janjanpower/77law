@@ -174,15 +174,17 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
         user_name=payload.client_name
     )
 
-    return VerifySecretOut(
-        success=True,
-        is_secret=True,
-        is_lawyer=True,
-        client_name=tenant["client_name"],
-        client_id=tenant["client_id"],
-        action="BIND_OK",
-        message=f"綁定成功！已綁定至「{tenant['client_name']}」。之後輸入「?」可查看操作選項。"
-    )
+    return {
+        "success": True,
+        "is_secret": True,
+        "is_lawyer": True,
+        "client_name": tenant["client_name"],
+        "client_id": tenant["client_id"],
+        "action": "BIND_OK",
+        "route": "LOGIN",  # 這裡新增 route
+        "message": f"綁定成功！已綁定至「{tenant['client_name']}」。之後輸入「?」可查看操作選項。"
+    }
+
 
 
 @router.post("/line/resolve-route", response_model=ResolveRouteOut)
