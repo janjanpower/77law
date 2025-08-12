@@ -68,14 +68,11 @@ from sqlalchemy.engine import Engine
 from api.database import Base  # 使用你現有的 Base（中央 DB）
 
 class PendingLineUser(Base):
-    """
-    精簡版暫存：不是律師、也不是 secret code 的 LINE 使用者
-    只存最小必要欄位，方便回覆「登入 XXX」。
-    """
     __tablename__ = "pending_line_users"
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     line_user_id = Column(String(128), unique=True, nullable=False)
     expected_name = Column(String(128))
+    status = Column(String(20), nullable=False, server_default="pending")   # ← 新增
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

@@ -311,20 +311,20 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
         if client_id_from_secret:
             bind_url += f"&client_id={quote(str(client_id_from_secret))}"
 
-    return {
-        "is_secret": is_secret,
-        "is_lawyer": is_lawyer,
-        "client_id": chosen_client_id,
-        "client_name": chosen_client_name,
-        "route": route,             # ← n8n 直接用這個分流
-        "bind_url": bind_url,
-        # （可選除錯欄位：若不要可刪）
-        "debug": {
-            "client_id_from_secret": client_id_from_secret,
-            "client_id_from_lawyer": client_id_from_lawyer,
-        }
-    }
+    if chosen_client_id and not chosen_client_name:
+        rec = db.query(LoginUser).filter(LoginUser.client_id == str(chosen_client_id)).first()
+        if rec:
+            chosen_client_name = rec.client_name
 
+
+    return {
+        "success": bool(is_secret),
+        "is_lawyer": bool(is_lawyer),
+        "client_id": chosen_client_id,
+        "client_name": chosen_client_name,   # ← 任何情況都盡量給
+        "route": route,
+        "bind_url": bind_url,
+    }
 
 #===========確認 plan type ============
 
