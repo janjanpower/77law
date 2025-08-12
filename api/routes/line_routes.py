@@ -1,139 +1,11 @@
-# api/routes/line_routes.py
-# FastAPI routes for LINE/n8n integration
-#
-# - Replaces dependency on a non-existent "lawyers" table.
-# - Uses existing tables: login_users (tenant), client_line_users (lawyer binding).
-# - Removes any dependency on 'user_role' column.
-# - Shapes responses to match your n8n "My workflow (6).json".
-#
-# Endpoints:
-#   POST /api/lawyer/verify-secret
-#   POST /api/line/resolve-route
-#
-# Assumptions:
-#   - api.database.get_db returns a SQLAlchemy Session
-#   - Tables exist:
-#       public.login_users(client_id text, client_name text, secret_code text, is_active boolean, ...)
-#       public.client_line_users(client_id text, line_user_id text unique, user_name text, is_active boolean, bound_at timestamptz, ...)
-#   - If you allow one LINE user to bind multiple clients, change UNIQUE(line_user_id) to UNIQUE(client_id, line_user_id)
-#     and update the ON CONFLICT clause accordingly (see comment below).
-
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
-from typing import Optional
-
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from typing import Optional
+from .models import VerifySecretIn, VerifySecretOut, ResolveRouteIn, ResolveRouteOut
+from .database import get_db
+from .services import _is_bound_to_lawyer, _lookup_client_by_code, _bind_line_user_to_client
 
-from api.database import get_db  # adjust import if your path differs
-
-router = APIRouter(prefix="/api", tags=["line"])
-
-
-# =========================
-# Helpers
-# =========================
-
-def _lookup_client_by_code(db: Session, code: str) -> Optional[dict]:
-    """
-    Interpret 'code' as one of (client_id | client_name | secret_code) in login_users.
-    Returns dict(client_id, client_name) if matched.
-    """
-    code = (code or "").strip()
-    if not code:
-        return None
-
-    sql = text("""
-        SELECT client_id, client_name
-        FROM public.login_users
-        WHERE is_active = TRUE
-          AND (
-                client_id = :code
-             OR client_name = :code
-             OR COALESCE(secret_code, '') = :code
-          )
-        LIMIT 1
-    """)
-    row = db.execute(sql, {"code": code}).first()
-    if row:
-        return {"client_id": row[0], "client_name": row[1]}
-    return None
-
-
-def _bind_line_user_to_client(db: Session, line_user_id: str, client_id: str, user_name: Optional[str] = None) -> None:
-    """
-    Upsert binding into client_line_users by line_user_id.
-    If you support multi-tenant bindings per LINE user, change UNIQUE to (client_id, line_user_id)
-    and also change ON CONFLICT target below accordingly.
-    """
-    sql = text("""
-        INSERT INTO public.client_line_users (client_id, line_user_id, user_name, is_active, bound_at)
-        VALUES (:client_id, :lid, :user_name, TRUE, NOW())
-        ON CONFLICT (line_user_id)
-        DO UPDATE SET
-            client_id = EXCLUDED.client_id,
-            user_name = COALESCE(EXCLUDED.user_name, public.client_line_users.user_name),
-            is_active = TRUE,
-            bound_at = NOW()
-    """)
-    db.execute(sql, {"client_id": client_id, "lid": line_user_id, "user_name": user_name})
-    db.commit()
-
-
-def _is_bound_to_lawyer(db: Session, line_user_id: str) -> bool:
-    """
-    Determine whether this LINE user is already bound to a lawyer (client) via client_line_users.
-    No user_role column involved.
-    """
-    sql = text("""
-        SELECT 1
-        FROM public.client_line_users
-        WHERE line_user_id = :lid
-          AND is_active = TRUE
-        LIMIT 1
-    """)
-    return bool(db.execute(sql, {"lid": line_user_id}).first())
-
-
-# =========================
-# Schemas
-# =========================
-
-class VerifySecretIn(BaseModel):
-    text: str
-    line_user_id: str
-    client_name: Optional[str] = None  # Optional, e.g. the display name user typed
-
-
-class VerifySecretOut(BaseModel):
-    success: bool
-    is_secret: bool
-    is_lawyer: bool
-    client_name: Optional[str] = None
-    client_id: Optional[str] = None
-    action: Optional[str] = None   # e.g., "BIND_OK"
-    route: Optional[str] = None    # 新增：LOGIN / LAWYER / USER / REGISTERED_USER
-    message: Optional[str] = None
-
-
-
-class ResolveRouteIn(BaseModel):
-    is_secret: Optional[bool] = None
-    is_lawyer: Optional[bool] = None
-    client_name: Optional[str] = None
-    line_user_id: str
-    text: Optional[str] = None
-
-
-class ResolveRouteOut(BaseModel):
-    route: str                  # "AUTH" | "GUEST"
-    action: Optional[str] = None  # "BIND_OK" | "LAWYER_QUERY" | "QUERY"
-    message: Optional[str] = None
-
-
-# =========================
-# Routes
-# =========================
+router = APIRouter()
 
 @router.post("/lawyer/verify-secret", response_model=VerifySecretOut)
 def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
@@ -146,8 +18,8 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
             success=True,
             is_secret=False,
             is_lawyer=already_bound,
-            route="REGISTERED_USER" if already_bound else "USER",
-            message="空白輸入"
+            route="USER" if already_bound else "USER",
+            message='已登錄過，請輸入"?"查閱案件' if already_bound else "空白輸入"
         )
 
     # 查詢 tenant
@@ -157,8 +29,20 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
             success=True,
             is_secret=False,
             is_lawyer=already_bound,
-            route="REGISTERED_USER" if already_bound else "USER",
-            message="不是合法暗號"
+            route="USER" if already_bound else "USER",
+            message='已登錄過，請輸入"?"查閱案件' if already_bound else "不是合法暗號"
+        )
+
+    # 已綁定情況
+    if already_bound:
+        return VerifySecretOut(
+            success=True,
+            is_secret=True,
+            is_lawyer=already_bound,
+            client_name=tenant["client_name"],
+            client_id=tenant["client_id"],
+            route="USER",
+            message='已登錄過，請輸入"?"查閱案件'
         )
 
     # 綁定
@@ -182,45 +66,32 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
     )
 
 
-
-
 @router.post("/line/resolve-route", response_model=ResolveRouteOut)
 def resolve_route(p: ResolveRouteIn, db: Session = Depends(get_db)):
     """
-    Second step in n8n:
-      - Input: {
-          "is_secret": <bool>,  // from verify-secret
-          "is_lawyer": <bool>,  // from verify-secret or unknown
-          "client_name": "...",
-          "line_user_id": "...",
-          "text": "?" | "<person name>" | "..."
-        }
-      - Behavior:
-          * If is_secret==true and is_lawyer==true -> BIND_OK
-          * If (bound as lawyer):
-                - text == "?"           -> QUERY (user's own cases)
-                - otherwise (any text)  -> LAWYER_QUERY (query by person name)
-          * Else -> GUEST
+    判斷 route：
+    - 說出暗號 (is_secret=True) 且不是律師 -> LOGIN
+    - 說出暗號 (is_secret=True) 且是律師 -> SEARCH
+    - 說出 '登錄 XXX' -> REGISTER
+    - 其他 -> USER
+    已綁定後再輸入暗號或登錄 → USER + 提示
     """
     text_in = (p.text or "").strip()
+    already_bound = _is_bound_to_lawyer(db, p.line_user_id)
 
-    # Case 1: just bound via verify-secret
-    if p.is_secret is True and p.is_lawyer is True:
-        return ResolveRouteOut(route="AUTH", action="BIND_OK", message="綁定完成")
+    # 暗號邏輯
+    if p.is_secret:
+        if already_bound:
+            return ResolveRouteOut(route="USER", message='已登錄過，請輸入"?"查閱案件')
+        if p.is_lawyer:
+            return ResolveRouteOut(route="SEARCH", message="律師暗號查詢")
+        return ResolveRouteOut(route="LOGIN", message="暗號登入")
 
-    # Case 2: lawyer bound
-    bound = p.is_lawyer if p.is_lawyer is not None else _is_bound_to_lawyer(db, p.line_user_id)
-    if bound:
-        if text_in == "?":
-            # user wants his/her own cases
-            return ResolveRouteOut(route="AUTH", action="QUERY", message="查詢個人案件")
-        else:
-            # default route for lawyers: query by a person's name
-            return ResolveRouteOut(route="AUTH", action="LAWYER_QUERY", message="律師查詢案件")
+    # 登錄 XXX
+    if text_in.startswith("登錄 "):
+        if already_bound:
+            return ResolveRouteOut(route="USER", message='已登錄過，請輸入"?"查閱案件')
+        return ResolveRouteOut(route="REGISTER", message="註冊當事人")
 
-    # Case 3: guest (not bound)
-    return ResolveRouteOut(route="GUEST", message="未綁定，請輸入\n登錄 您的大名")
-
-
-line_router = router
-__all__ = ["line_router"]
+    # 其他
+    return ResolveRouteOut(route="USER", message="一般使用者")
