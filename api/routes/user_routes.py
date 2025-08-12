@@ -64,9 +64,25 @@ def _is_lawyer(db: Session, line_user_id: str) -> bool:
 
 # ---------- 兩段式登記 ----------
 @user_router.post("/register", response_model=UserRegisterOut)
-def register_user(p: UserRegisterIn, db: Session = Depends(get_db)):
-    intent, name = _parse_intent(p.text)
+@router.post("/register")
+def register_user(payload: RegisterUserRequest, db: Session = Depends(get_db)):
+    # 先查 pending_line_users 看有沒有已登記的名字
+    existing = db.query(PendingLineUser).filter(
+        PendingLineUser.line_user_id == payload.line_user_id,
+        PendingLineUser.status == "confirmed"   # 如果你有這個狀態欄位
+    ).first()
 
+    if existing:
+        # 已經登記過 → 直接回案件查詢結果
+        cases = db.query(Case).filter(Case.user_name == existing.expected_name).all()
+        return {
+            "success": True,
+            "message": f"{existing.expected_name} 的案件如下",
+            "cases": [case.to_dict() for case in cases]
+        }
+
+    # 沒登記才走原本登錄流程
+    intent, name = _parse_intent(payload.text)
     # A) 準備階段：使用者輸入「登錄 XXX」
     if intent == "prepare":
         # 律師一律擋
