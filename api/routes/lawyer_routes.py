@@ -5,18 +5,17 @@ import datetime
 import os
 from typing import Optional, Dict, Any
 
-from sqlalchemy import and_, func, select, text
 from urllib.parse import quote
-from api.database import get_db
-from api.models_control import LoginUser, ClientLineUsers
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from api.database import get_db
+from api.models_control import LoginUser, ClientLineUsers
 
-# 你專案現有的 DB 與模型
-
-router = APIRouter(prefix="/api/lawyer", tags=["lawyer"])
+# ✅ 與 main.py 對應的名稱
+lawyer_router = APIRouter(prefix="/api/lawyer", tags=["lawyer"])
 
 # ---------- I/O Schemas ----------
 class CheckLimitIn(BaseModel):
@@ -40,18 +39,14 @@ class BindLawyerOut(BaseModel):
     role: Optional[str] = None     # "lawyer"
     reason: Optional[str] = None   # "already_bound" | "invalid_tenant_code"
 
-# ---------- Helper：用暗號找事務所 ----------
+# ---------- Helper ----------
 def resolve_client_by_code(db: Session, tenant_code: str) -> Optional[LoginUser]:
-    """
-    先把【暗號】當作 client_id 查；若你未來有獨立的暗號表，再改掉這裡的邏輯即可。
-    如需用 client_name 查，放寬為 or 條件。
-    """
+    """以 client_id（或 client_name）解析事務所。"""
     client = (
         db.query(LoginUser)
         .filter(LoginUser.client_id == tenant_code, LoginUser.is_active == True)
         .first()
     )
-    # 若要兼容用 client_name 當暗號，可加：
     if not client:
         client = (
             db.query(LoginUser)
@@ -60,15 +55,8 @@ def resolve_client_by_code(db: Session, tenant_code: str) -> Optional[LoginUser]
         )
     return client
 
-
-
-class TenantCheckRequest(BaseModel):
-    tenant_code: str
-    line_user_id: str
-
-
 def count_current_usage(db: Session, client_id: str) -> int:
-    """計算目前已啟用的 LINE 綁定數（你可依需求只算律師或全部）"""
+    """目前已啟用的 LINE 綁定數。"""
     return (
         db.query(ClientLineUsers)
         .filter(ClientLineUsers.client_id == client_id, ClientLineUsers.is_active == True)
@@ -76,19 +64,13 @@ def count_current_usage(db: Session, client_id: str) -> int:
     )
 
 def upsert_lawyer_binding(db: Session, client_id: str, line_user_id: str) -> bool:
-    """
-    綁定為律師（冪等）：
-    - 若已存在此 line_user_id → 更新 client_id / user_role='lawyer' / is_active=True
-    - 若不存在 → 新增一筆
-    回傳 True 表示狀態已是律師且綁到該 client；False 表示其他不可預期失敗
-    """
+    """將使用者綁為律師（冪等）。"""
     row = (
         db.query(ClientLineUsers)
         .filter(ClientLineUsers.line_user_id == line_user_id)
         .first()
     )
     if row:
-        # 已存在就更新到律師身分
         row.client_id = client_id
         row.user_role = "lawyer"
         row.is_active = True
@@ -104,8 +86,6 @@ def upsert_lawyer_binding(db: Session, client_id: str, line_user_id: str) -> boo
     return True
 
 # ---------- 綁定成功 ----------
-
-
 class BindUserRequest(BaseModel):
     success: bool = Field(..., description="n8n 判斷為 true 才執行綁定")
     client_name: str
@@ -114,14 +94,13 @@ class BindUserRequest(BaseModel):
 class BindUserResponse(BaseModel):
     success: bool
     client_name: str
-    plan_type: str | None = None
+    plan_type: Optional[str] = None
     limit: int = 0
     usage: int = 0
     available: int = 0
-    message: str | None = None
+    message: Optional[str] = None
 
-
-def _build_plan_message(title: str, client_name: str, plan_type: str | None, limit_val: int | None, usage_val: int) -> str:
+def _build_plan_message(title: str, client_name: str, plan_type: Optional[str], limit_val: Optional[int], usage_val: int) -> str:
     plan = plan_type or "未設定"
     lim  = str(limit_val) if isinstance(limit_val, int) else "未設定"
     return (
@@ -132,12 +111,12 @@ def _build_plan_message(title: str, client_name: str, plan_type: str | None, lim
         f"當前人數：{usage_val}"
     )
 
-@router.post("/bind-user", response_model=BindUserResponse)
+@lawyer_router.post("/bind-user", response_model=BindUserResponse)
 def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     if not payload.success:
         return BindUserResponse(success=False, client_name=payload.client_name, message="未執行綁定")
 
-    tenant: LoginUser | None = db.execute(
+    tenant: Optional[LoginUser] = db.execute(
         select(LoginUser).where(LoginUser.client_name == payload.client_name)
     ).scalars().first()
     if not tenant:
@@ -153,7 +132,7 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
         WHERE client_id = :client_id AND line_user_id = :line_user_id AND is_active = TRUE
     """), {"client_id": client_id, "line_user_id": payload.user_id}).first()
 
-    # 目前人數（即時計數）
+    # 目前人數
     usage_before = db.execute(text("""
         SELECT COUNT(*)::int FROM client_line_users
         WHERE client_id = :client_id AND is_active = TRUE
@@ -204,15 +183,13 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
         message=msg
     )
 
-#===========驗證 secret_code ============
+# =========== 驗證 secret_code ============
 class VerifySecretIn(BaseModel):
-    # n8n/簡化後的格式
     text: Optional[str] = None
     user_id: Optional[str] = None
     reply_token: Optional[str] = None
     eventType: Optional[str] = None
-    # 也允許直接丟 LINE 原始 webhook body
-    body: Optional[Dict[str, Any]] = None
+    body: Optional[Dict[str, Any]] = None  # 允許直接丟 LINE 原始 webhook body
 
 class VerifySecretOut(BaseModel):
     success: bool
@@ -230,65 +207,56 @@ def extract_from_line_body(body: dict):
     except Exception:
         return None, None, None, None
 
-@router.post("/verify-secret")
+@lawyer_router.post("/verify-secret")
 async def verify_secret(request: Request, db: Session = Depends(get_db)):
     """
-    一次回傳：
-      - is_secret: 是否為有效暗號（以 DB 為準）
-      - is_lawyer: 此 line_user 是否已被認定為律師
-      - client_id, client_name: 能判斷時一併回傳（優先取對應情境）
+    回傳：
+      - success: 是否為有效暗號（沿用你原本的 success = is_secret）
+      - is_lawyer: 此 line_user 是否已是律師
+      - client_id, client_name: 能判斷時一併回傳
       - route: "LOGIN" | "LAWYER" | "USER"
       - bind_url: 僅在 route=LOGIN 時給出（導去綁定）
-    傳入 payload（n8n 推薦用最簡格式）：
-      { "text": "<使用者輸入>", "line_user_id": "<LINE userId>" }
     """
     try:
         payload = await request.json()
     except Exception:
-        return {"is_secret": False, "is_lawyer": False, "client_id": None,
+        return {"success": False, "is_lawyer": False, "client_id": None,
                 "client_name": None, "route": "USER", "bind_url": None}
 
-    text = (payload.get("text") or "").strip()
+    text_in = (payload.get("text") or "").strip()
     line_user_id = payload.get("line_user_id") or payload.get("user_id")
 
-    # --- 1) 判斷是否為有效 Secret（以 DB login_users 為準） ---
+    # 1) 檢查暗號
     secret_rec = None
-    if text:
+    if text_in:
         secret_rec = (
             db.query(LoginUser)
-              .filter(func.btrim(LoginUser.secret_code) == text)
+              .filter(func.btrim(LoginUser.secret_code) == text_in)
               .first()
         )
     is_secret = bool(secret_rec)
     client_id_from_secret = getattr(secret_rec, "client_id", None) if secret_rec else None
     client_name_from_secret = getattr(secret_rec, "client_name", None) if secret_rec else None
 
-    # --- 2) 判斷是否為律師（以 client_line_users 為準） ---
+    # 2) 是否律師
     is_lawyer = False
     client_id_from_lawyer = None
-
     if line_user_id:
         q = (db.query(ClientLineUsers)
-            .filter(ClientLineUsers.line_user_id == line_user_id,
-                    ClientLineUsers.is_active == True))
-        # 暗號已解出 client_id 時，採精準比對，避免跨所誤判
+               .filter(ClientLineUsers.line_user_id == line_user_id,
+                       ClientLineUsers.is_active == True))
         if client_id_from_secret:
             q = q.filter(ClientLineUsers.client_id == client_id_from_secret)
-
         clu = q.first()
         if clu:
             is_lawyer = True
             client_id_from_lawyer = getattr(clu, "client_id", None)
 
-    # --- 3) 依你的真值表決定 route ---
-    #  1) 不是 secret 但他是律師 -> LAWYER
-    #  2) 是 secret 但不是律師 -> LOGIN
-    #  3) 不是 secret 也不是律師 -> USER
-    #  4) 是 secret 且是律師 -> 預設走 LAWYER（若你想改成 LOGIN，改下面一行）
+    # 3) 路由
     if (not is_secret) and is_lawyer:
         route = "LAWYER"
         chosen_client_id = client_id_from_lawyer
-        chosen_client_name = None  # 需要可另外查事務所名稱
+        chosen_client_name = None
     elif is_secret and (not is_lawyer):
         route = "LOGIN"
         chosen_client_id = client_id_from_secret
@@ -297,64 +265,50 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
         route = "USER"
         chosen_client_id = None
         chosen_client_name = None
-    else:  # is_secret and is_lawyer
-        route = "LAWYER"  # ← 如果你希望導去登入改拿 LOGIN
-        # 優先用律師所屬 client；沒有就退回 secret 的 client
+    else:
+        route = "LAWYER"
         chosen_client_id = client_id_from_lawyer or client_id_from_secret
         chosen_client_name = client_name_from_secret if client_id_from_secret == chosen_client_id else None
 
-    # --- 4) 需要登入的情形回傳綁定網址（bind_url） ---
+    # 4) 綁定網址（僅 LOGIN）
     bind_url = None
     if route == "LOGIN" and is_secret:
-        base = os.getenv("APP_BASE_URL", "https://your-app.example.com")
-        bind_url = f"{base}/api/tenant/bind-user?code={quote(text)}"
+        base = os.getenv("API_BASE_URL") or os.getenv("APP_BASE_URL") or "https://example.com"
+        bind_url = f"{base}/api/tenant/bind-user?code={quote(text_in)}"
         if client_id_from_secret:
             bind_url += f"&client_id={quote(str(client_id_from_secret))}"
 
+    # 5) 若只知道 client_id，補查 client_name
     if chosen_client_id and not chosen_client_name:
         rec = db.query(LoginUser).filter(LoginUser.client_id == str(chosen_client_id)).first()
         if rec:
             chosen_client_name = rec.client_name
 
-
     return {
         "success": bool(is_secret),
         "is_lawyer": bool(is_lawyer),
         "client_id": chosen_client_id,
-        "client_name": chosen_client_name,   # ← 任何情況都盡量給
+        "client_name": chosen_client_name,
         "route": route,
         "bind_url": bind_url,
     }
 
-#===========確認 plan type ============
-
-
-def _extract_client_name(payload: dict) -> str | None:
-    """
-    支援多種鍵名來源：
-    - client_name
-    - tenant
-    - body.client_name / body.tenant
-    - data.client_name / data.tenant
-    """
+# =========== 方案查詢 ============
+def _extract_client_name(payload: dict) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    # 直接鍵
     name = payload.get("client_name") or payload.get("tenant")
     if isinstance(name, str) and name.strip():
         return name.strip()
-
-    # 可能包在 body 或 data
     for key in ("body", "data"):
         sub = payload.get(key)
         if isinstance(sub, dict):
             name = sub.get("client_name") or sub.get("tenant")
             if isinstance(name, str) and name.strip():
                 return name.strip()
-
     return None
 
-@router.post("/check-client-plan")
+@lawyer_router.post("/check-client-plan")
 async def check_client_plan(request: Request, db: Session = Depends(get_db)):
     try:
         payload = await request.json()
@@ -376,7 +330,6 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
     plan_type = getattr(user, "plan_type", None)
     limit_val = getattr(user, "user_limit", None) or getattr(user, "max_users", None)
 
-    # 即時計數
     usage_val = db.query(func.count(ClientLineUsers.id)).filter(
         ClientLineUsers.client_id == user.client_id,
         ClientLineUsers.is_active == True
@@ -401,23 +354,18 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
         "message": msg
     }
 
-# lawyer_routes.py 最後加
-@router.get("/verify-secret/ping")
+# =========== 健康檢查/測試 ============
+@lawyer_router.get("/verify-secret/ping")
 async def verify_secret_ping():
-    return {
-        "ok": True,
-        "ts": datetime.datetime.utcnow().isoformat()
-    }
+    return {"ok": True, "ts": datetime.datetime.utcnow().isoformat()}
 
 class CaseSearchIn(BaseModel):
     text: str
-    line_user_id: str | None = None
+    line_user_id: Optional[str] = None
 
-@router.post("/case-search")
+@lawyer_router.post("/case-search")
 def case_search(payload: CaseSearchIn, db: Session = Depends(get_db)):
-    # 依你實際模型調整 import 與欄位
     from api.models_cases import CaseRecord
-
     key = (payload.text or "").strip().split()[-1]
     if not key:
         return {"message": "請輸入關鍵字或案號"}
@@ -433,7 +381,6 @@ def case_search(payload: CaseSearchIn, db: Session = Depends(get_db)):
           .limit(5)
           .all()
     )
-
     if not rows:
         return {"message": f"找不到符合「{key}」的案件"}
 
