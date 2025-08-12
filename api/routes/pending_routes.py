@@ -4,6 +4,14 @@ from pydantic import BaseModel
 from typing import Optional, Literal
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+# api/routes/pending_routes.py — ensure alias name exists
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/health")
+def health():
+    return {"ok": True}
 
 from api.database import get_db
 from api.models_control import (

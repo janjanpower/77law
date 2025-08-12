@@ -1,100 +1,76 @@
-from fastapi import APIRouter, Depends
+# api/routes/line_routes.py — minimal fixed version
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from typing import Optional
 from api.schemas.line import VerifySecretIn, VerifySecretOut, ResolveRouteIn, ResolveRouteOut
 from api.database import get_db
 from api.services.lawyer import _is_bound_to_lawyer, _lookup_client_by_code, _bind_line_user_to_client
 
 router = APIRouter()
 
-
 @router.post("/lawyer/verify-secret", response_model=VerifySecretOut)
 def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
     code = (payload.text or "").strip()
     already_bound = _is_bound_to_lawyer(db, payload.line_user_id)
 
-    # 空白輸入
+    # 空白
     if not code:
         return VerifySecretOut(
-            success=True,
+            success=False,
             is_secret=False,
-            is_lawyer=already_bound,
-            route="USER",
-            message='已登錄過，請輸入"?"查閱案件' if already_bound else "空白輸入"
+            is_lawyer=False,
+            route="USER" if already_bound else "LOGIN",
+            message='請輸入暗號，例如：「暗號 ABC123」或直接輸入暗號內容'
         )
 
-    # 查詢 tenant
     tenant = _lookup_client_by_code(db, code)
     if not tenant:
         return VerifySecretOut(
-            success=True,
+            success=False,
             is_secret=False,
-            is_lawyer=already_bound,
-            route="USER",
-            message='已登錄過，請輸入"?"查閱案件' if already_bound else "不是合法暗號"
+            is_lawyer=False,
+            route="USER" if already_bound else "LOGIN",
+            message="暗號錯誤或尚未啟用，請確認後再試"
         )
 
-    # 已綁定情況
-    if already_bound:
-        return VerifySecretOut(
-            success=True,
-            is_secret=True,
-            is_lawyer=already_bound,
-            client_name=tenant["client_name"],
-            client_id=tenant["client_id"],
-            route="USER",
-            message='已登錄過，請輸入"?"查閱案件'
-        )
+    # 綁定（若已綁過會當作成功）
+    _bind_line_user_to_client(db, payload.line_user_id, tenant)
 
-    # 綁定
-    _bind_line_user_to_client(
-        db=db,
-        line_user_id=payload.line_user_id,
-        client_id=tenant["client_id"],
-        user_name=payload.client_name
-    )
-
-    # 綁定成功
     return VerifySecretOut(
         success=True,
         is_secret=True,
         is_lawyer=True,
         client_name=tenant["client_name"],
         client_id=tenant["client_id"],
-        action="BIND_OK",
         route="LOGIN",
-        message=f"綁定成功！已綁定至「{tenant['client_name']}」。之後輸入「?」可查看操作選項。"
+        message=f'綁定成功！已綁定至「{tenant["client_name"]}」。輸入「?」可查看操作選項。'
     )
 
-
 @router.post("/line/resolve-route", response_model=ResolveRouteOut)
-def resolve_route(p: ResolveRouteIn, db: Session = Depends(get_db)):
-    """
-    判斷 route：
-    - 說出暗號 (is_secret=True) 且不是律師 -> LOGIN
-    - 說出暗號 (is_secret=True) 且是律師 -> SEARCH
-    - 說出 '登錄 XXX' -> REGISTER
-    - 其他 -> USER
-    已綁定後再輸入暗號或登錄 → USER + 提示
-    """
-    text_in = (p.text or "").strip()
-    already_bound = _is_bound_to_lawyer(db, p.line_user_id)
+def resolve_route(payload: ResolveRouteIn, db: Session = Depends(get_db)):
+    msg = (payload.text or "").strip()
+    already_bound = _is_bound_to_lawyer(db, payload.line_user_id)
 
-    # 暗號邏輯
-    if p.is_secret:
+    # 說出暗號
+    if msg.startswith("暗號") or msg.lower().startswith("code"):
         if already_bound:
             return ResolveRouteOut(route="USER", message='已登錄過，請輸入"?"查閱案件')
-        if p.is_lawyer:
-            return ResolveRouteOut(route="SEARCH", message="律師暗號查詢")
         return ResolveRouteOut(route="LOGIN", message="暗號登入")
 
-    # 登錄 XXX
-    if text_in.startswith("登錄 "):
+    # 登錄 XXX（當事人名稱）
+    if msg.startswith("登錄 ") or msg.startswith("登入 ") or msg.startswith("登录 ") or msg.startswith("登陸 "):
         if already_bound:
             return ResolveRouteOut(route="USER", message='已登錄過，請輸入"?"查閱案件')
         return ResolveRouteOut(route="REGISTER", message="註冊當事人")
 
-    # 其他
+    # 律師（已綁定）查名字 -> SEARCH
+    if already_bound:
+        # 這裡只判斷是否像是在查名字（含中文字/英數且非特殊指令），你可依需求再強化
+        if msg and msg not in ("?", "？"):
+            return ResolveRouteOut(route="SEARCH", message="律師名稱查詢")
+
+    # 其他 -> USER
     return ResolveRouteOut(route="USER", message="一般使用者")
 
-# export alias for main.py compatibility
+# export alias for backward-compat import in main.py
 line_router = router
