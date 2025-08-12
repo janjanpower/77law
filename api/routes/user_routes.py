@@ -32,13 +32,20 @@ class MyCasesOut(BaseModel):
     name: Optional[str] = None
 
 # ---------- Helpers ----------
+
 def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
     msg = (text_msg or "").strip()
     if not msg:
         return "none", None
+
+    # 🔧 同時支援"登錄"和"登陸"
     if msg.startswith("登錄"):
         name = msg.replace("登錄", "", 1).strip()
         return ("prepare", name) if name else ("none", None)
+    elif msg.startswith("登陸"):  # 相容舊格式
+        name = msg.replace("登陸", "", 1).strip()
+        return ("prepare", name) if name else ("none", None)
+
     if msg in ("是", "yes", "Yes", "YES"):
         return "confirm_yes", None
     if msg in ("否", "no", "No", "NO"):
