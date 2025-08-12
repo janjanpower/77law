@@ -53,7 +53,7 @@ class CaseRecord(Base):
     updated_date = Column(DateTime, nullable=True, comment="原始更新日期")
 
     # 必要補欄位（你原本的 to_dict 和索引會用到）
-    uploaded_by = Column(String(100), nullable=True, comment="上傳人")
+
     created_at = Column(DateTime, nullable=False, server_default=func.now(), comment="建立時間")
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新時間")
     is_active = Column(Boolean, nullable=False, server_default='true', comment="是否啟用")
