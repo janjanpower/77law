@@ -1,25 +1,31 @@
 # api/main.py — single-start, clean routing with sys.path fix
 
 import os, sys
-from pathlib import Path
 from datetime import datetime
 from importlib import util as importlib_util
+from pathlib import Path
 
-# ----------------------------
-# 修正 sys.path（確保能找到 api.*）
-# ----------------------------
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 之後才安全 import api.*
+from api.database import Base, engine
+from api.routes import api_routes, case_upload_routes, pending_routes, case_routes
+from api.routes.case_upload_routes import router as case_router
+from api.routes.case_upsert_routes import router as cases_upsert_router
+from api.routes.file_routes import router as file_router
+from api.routes.lawyer_routes import lawyer_router
+from api.routes.line_routes import line_router
+from api.routes.user_routes import user_router
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 
 # ----------------------------
 # FastAPI 初始化
 # ----------------------------
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from api.routes import api_routes
 
 app = FastAPI(
     title="法律案件管理系統 API",
@@ -27,16 +33,6 @@ app = FastAPI(
     description="Law Controller API",
 )
 # === 新增 import（檔頭區） ===
-from api.database import Base, engine
-from api.routes.case_upload_routes import router as case_router
-from api.routes.file_routes import router as file_router
-from api.routes.case_upsert_routes import router as cases_upsert_router
-from api.routes import case_upload_routes
-from api.routes.lawyer_routes import router as lawyer_router
-from api.routes.line_routes import line_router
-from api.routes.user_routes import user_router
-from api.routes import pending_routes
-from api.routes import case_routes
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
