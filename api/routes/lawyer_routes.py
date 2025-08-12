@@ -87,50 +87,39 @@ def upsert_lawyer_binding(db: Session, client_id: str, line_user_id: str) -> boo
 
 # ---------- 綁定成功（後端決定名稱） ----------
 class BindUserRequest(BaseModel):
-    success: bool = Field(..., description="true 才執行綁定")
-    user_id: str = Field(..., min_length=5)
-    client_id: Optional[str] = Field(None, description="事務所ID；優先使用")
-    client_name: Optional[str] = Field(None, description="兼容舊版；僅作備援查找")
+    success: bool
+    user_id: str
+    client_id: str                 # 從 verify-secret 回傳帶進來
+    role: str = "user"             # 'user' | 'lawyer'，預設一般用戶
 
 class BindUserResponse(BaseModel):
     success: bool
-    client_name: Optional[str] = None
-    plan_type: Optional[str] = None
+    client_name: str | None = None
+    plan_type: str | None = None
     limit: int = 0
     usage: int = 0
     available: int = 0
-    message: Optional[str] = None
+    message: str | None = None
 
 @lawyer_router.post("/bind-user", response_model=BindUserResponse)
 def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     if not payload.success:
         return BindUserResponse(success=False, message="未執行綁定")
 
-    # 1) 以 client_id 為主，其次才用 client_name 找 LoginUser（權威資料）
-    tenant: Optional[LoginUser] = None
-    if payload.client_id:
-        tenant = (
-            db.query(LoginUser)
+    # 權威：從 login_users 取 client_name / 方案
+    tenant = (db.query(LoginUser)
               .filter(LoginUser.client_id == payload.client_id,
                       LoginUser.is_active.is_(True))
-              .first()
-        )
-    if not tenant and payload.client_name:
-        tenant = (
-            db.query(LoginUser)
-              .filter(func.btrim(LoginUser.client_name) == func.btrim(payload.client_name),
-                      LoginUser.is_active.is_(True))
-              .first()
-        )
+              .first())
     if not tenant:
-        return BindUserResponse(success=False, message="找不到對應的事務所或未啟用")
+        return BindUserResponse(success=False, message="找不到事務所或未啟用")
 
-    client_id = tenant.client_id
-    client_name = tenant.client_name        # ← 用權威名稱
-    plan_type  = getattr(tenant, "plan_type", None)
-    max_users  = int(getattr(tenant, "max_users", 0) or getattr(tenant, "user_limit", 0) or 0)
+    client_id   = tenant.client_id
+    client_name = tenant.client_name
+    plan_type   = getattr(tenant, "plan_type", None)
+    max_users   = int(getattr(tenant, "max_users", 0) or getattr(tenant, "user_limit", 0) or 0)
 
-    # 2) 目前使用數
+    # 當前使用數
     usage_before = db.query(func.count(ClientLineUsers.id)).filter(
         ClientLineUsers.client_id == client_id,
         ClientLineUsers.is_active.is_(True)
@@ -145,30 +134,26 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     ).first()
 
     if existed:
-        msg = _build_plan_message("ℹ️ 已經是綁定帳戶", client_name, plan_type, max_users, usage_before)
-        return BindUserResponse(
-            success=True, client_name=client_name, plan_type=plan_type,
-            limit=max_users, usage=usage_before, available=max(0, max_users-usage_before),
-            message=msg
-        )
+        msg = _build_plan_message("ℹ️ 已經綁定", client_name, plan_type, max_users, usage_before)
+        return BindUserResponse(True, client_name, plan_type, max_users, usage_before,
+                                max(0, max_users - usage_before), msg)
 
-    # 額滿？
-    if max_users and usage_before >= max_users:
+    # 方案額滿（只限制一般用戶，律師可視需求放寬）
+    if payload.role != "lawyer" and max_users and usage_before >= max_users:
         msg = _build_plan_message("⚠️ 已額滿，需要升級方案", client_name, plan_type, max_users, usage_before)
-        return BindUserResponse(
-            success=False, client_name=client_name, plan_type=plan_type,
-            limit=max_users, usage=usage_before, available=0, message=msg
-        )
+        return BindUserResponse(False, client_name, plan_type, max_users, usage_before, 0, msg)
 
-    # 3) upsert：一律寫入權威 client_name
+    # Upsert（以權威名稱寫入）
     db.execute(text("""
-        INSERT INTO client_line_users (client_id, client_name, line_user_id, is_active, bound_at)
-        VALUES (:client_id, :client_name, :line_user_id, TRUE, NOW())
+        INSERT INTO client_line_users (client_id, client_name, line_user_id, user_role, is_active, bound_at)
+        VALUES (:client_id, :client_name, :line_user_id, :role, TRUE, NOW())
         ON CONFLICT (client_id, line_user_id)
         DO UPDATE SET client_name = EXCLUDED.client_name,
+                      user_role   = EXCLUDED.user_role,
                       is_active   = TRUE,
                       bound_at    = NOW();
-    """), {"client_id": client_id, "client_name": client_name, "line_user_id": payload.user_id})
+    """), {"client_id": client_id, "client_name": client_name,
+           "line_user_id": payload.user_id, "role": payload.role})
     db.commit()
 
     usage_now = db.query(func.count(ClientLineUsers.id)).filter(
@@ -178,11 +163,8 @@ def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
     usage_now = int(usage_now)
 
     msg = _build_plan_message("🎉 綁定成功", client_name, plan_type, max_users, usage_now)
-    return BindUserResponse(
-        success=True, client_name=client_name, plan_type=plan_type,
-        limit=max_users, usage=usage_now, available=max(0, max_users-usage_now),
-        message=msg
-    )
+    return BindUserResponse(True, client_name, plan_type, max_users, usage_now,
+                            max(0, max_users - usage_now), msg)
 
 def _build_plan_message(title: str, client_name: str, plan_type: Optional[str], limit_val: Optional[int], usage_val: int) -> str:
     plan = plan_type or "未設定"
