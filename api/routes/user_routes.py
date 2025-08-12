@@ -136,7 +136,7 @@ def _handle_n8n_registration(payload: UserRegisterIn, db: Session) -> UserRegist
             if existing[1] in ('registered', 'pending'):
                 return UserRegisterOut(
                     success=True,
-                    message=f"歡迎回來！{existing[0]}，您已經註冊過了。\n輸入「?」查看您的案件。"
+                    message=f"{existing[0]}，您已經註冊過了。\n輸入「?」查看您的案件。"
                 )
 
         # 新註冊或更新

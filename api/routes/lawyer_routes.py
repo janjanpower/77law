@@ -210,12 +210,7 @@ def extract_from_line_body(body: dict):
 @lawyer_router.post("/verify-secret")
 async def verify_secret(request: Request, db: Session = Depends(get_db)):
     """
-    回傳：
-      - success: 是否為有效暗號（沿用你原本的 success = is_secret）
-      - is_lawyer: 此 line_user 是否已是律師
-      - client_id, client_name: 能判斷時一併回傳
-      - route: "LOGIN" | "LAWYER" | "USER"
-      - bind_url: 僅在 route=LOGIN 時給出（導去綁定）
+    修正版本：檢查已註冊用戶，避免重複註冊流程
     """
     try:
         payload = await request.json()
@@ -226,6 +221,47 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
     text_in = (payload.get("text") or "").strip()
     line_user_id = payload.get("line_user_id") or payload.get("user_id")
 
+    # === 新增：檢查是否為已註冊的一般用戶 ===
+    if line_user_id:
+        from api.models_control import PendingLineUser
+        existing_user = db.query(PendingLineUser).filter(
+            PendingLineUser.line_user_id == line_user_id,
+            PendingLineUser.status.in_(["pending", "registered"])
+        ).first()
+
+        if existing_user:
+            # 已註冊用戶 - 檢查是否為暗號
+            secret_rec = None
+            if text_in:
+                secret_rec = (
+                    db.query(LoginUser)
+                      .filter(func.btrim(LoginUser.secret_code) == text_in)
+                      .first()
+                )
+
+            if secret_rec:
+                # 是有效暗號，但用戶已註冊 -> 回傳特殊狀態
+                return {
+                    "success": True,  # 暗號有效
+                    "is_lawyer": False,  # 不是律師（因為是已註冊一般用戶）
+                    "client_id": secret_rec.client_id,
+                    "client_name": existing_user.expected_name,  # 使用已註冊的姓名
+                    "route": "REGISTERED_USER",  # 特殊路由：已註冊用戶
+                    "bind_url": None,
+                    "registered_name": existing_user.expected_name  # 額外資訊
+                }
+            else:
+                # 不是暗號，走一般用戶流程
+                return {
+                    "success": False,
+                    "is_lawyer": False,
+                    "client_id": None,
+                    "client_name": existing_user.expected_name,
+                    "route": "USER",
+                    "bind_url": None
+                }
+
+    # === 原有邏輯：未註冊用戶的暗號檢查 ===
     # 1) 檢查暗號
     secret_rec = None
     if text_in:
@@ -252,7 +288,7 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
             is_lawyer = True
             client_id_from_lawyer = getattr(clu, "client_id", None)
 
-    # 3) 路由
+    # 3) 路由決定
     if (not is_secret) and is_lawyer:
         route = "LAWYER"
         chosen_client_id = client_id_from_lawyer
