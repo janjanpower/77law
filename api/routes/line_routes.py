@@ -220,7 +220,7 @@ def resolve_route(p: ResolveRouteIn, db: Session = Depends(get_db)):
             return ResolveRouteOut(route="AUTH", action="LAWYER_QUERY", message="律師查詢案件")
 
     # Case 3: guest (not bound)
-    return ResolveRouteOut(route="GUEST", message="未綁定，請輸入「登錄 您的大名」或提供事務所暗號")
+    return ResolveRouteOut(route="GUEST", message="未綁定，請輸入「登錄 您的大名 謝謝")
 
 
 line_router = router
