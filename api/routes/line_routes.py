@@ -112,7 +112,9 @@ class VerifySecretOut(BaseModel):
     client_name: Optional[str] = None
     client_id: Optional[str] = None
     action: Optional[str] = None   # e.g., "BIND_OK"
+    route: Optional[str] = None    # 新增：LOGIN / LAWYER / USER / REGISTERED_USER
     message: Optional[str] = None
+
 
 
 class ResolveRouteIn(BaseModel):
@@ -135,38 +137,31 @@ class ResolveRouteOut(BaseModel):
 
 @router.post("/lawyer/verify-secret", response_model=VerifySecretOut)
 def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
-    """
-    First step in n8n:
-      - Input: {"text": "<code>", "line_user_id": "...", "client_name": "...?"}
-      - Behavior:
-          * If 'text' matches a tenant in login_users (by client_id/client_name/secret_code):
-              - Bind line_user_id into client_line_users
-              - Return {success:true, is_secret:true, is_lawyer:true, action:"BIND_OK", ...}
-          * Else:
-              - Return {success:true, is_secret:false, is_lawyer:<current binding>, message:"不是合法暗號"}
-    """
     code = (payload.text or "").strip()
-    # current bound state (even if not secret)
     already_bound = _is_bound_to_lawyer(db, payload.line_user_id)
 
+    # 空白輸入
     if not code:
         return VerifySecretOut(
             success=True,
             is_secret=False,
             is_lawyer=already_bound,
+            route="REGISTERED_USER" if already_bound else "USER",
             message="空白輸入"
         )
 
+    # 查詢 tenant
     tenant = _lookup_client_by_code(db, code)
     if not tenant:
         return VerifySecretOut(
             success=True,
             is_secret=False,
             is_lawyer=already_bound,
+            route="REGISTERED_USER" if already_bound else "USER",
             message="不是合法暗號"
         )
 
-    # Secret matched -> bind
+    # 綁定
     _bind_line_user_to_client(
         db=db,
         line_user_id=payload.line_user_id,
@@ -174,16 +169,18 @@ def verify_secret(payload: VerifySecretIn, db: Session = Depends(get_db)):
         user_name=payload.client_name
     )
 
-    return {
-        "success": True,
-        "is_secret": True,
-        "is_lawyer": True,
-        "client_name": tenant["client_name"],
-        "client_id": tenant["client_id"],
-        "action": "BIND_OK",
-        "route": "LOGIN",  # 這裡新增 route
-        "message": f"綁定成功！已綁定至「{tenant['client_name']}」。之後輸入「?」可查看操作選項。"
-    }
+    # 綁定成功
+    return VerifySecretOut(
+        success=True,
+        is_secret=True,
+        is_lawyer=True,
+        client_name=tenant["client_name"],
+        client_id=tenant["client_id"],
+        action="BIND_OK",
+        route="LOGIN",
+        message=f"綁定成功！已綁定至「{tenant['client_name']}」。之後輸入「?」可查看操作選項。"
+    )
+
 
 
 
