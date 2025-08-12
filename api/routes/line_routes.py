@@ -31,15 +31,13 @@ class ResolveRouteOutA(BaseModel):
 
 # ========= helpers（直接用你的資料表） =========
 def _norm_query(text_raw: str) -> bool:
-    """更穩的 ? 偵測：吃全形？、前後空白、零寬字元。"""
-    if text_raw is None:
+    """吃全形？、去零寬與前後空白、把「?」外層引號去掉後再比對。"""
+    if not text_raw:
         return False
-    # 移除零寬
-    t = re.sub(r"[\u200B-\u200D\uFEFF]", "", text_raw)
-    # 全形問號換半形
-    t = t.replace("\uFF1F", "?").strip()
-    # 單一問號（允許空白）
-    return bool(re.fullmatch(r"\??", t)) and t == "?"
+    t = re.sub(r"[\u200B-\u200D\uFEFF]", "", text_raw)  # 去零寬
+    t = t.replace("？", "?").strip()                     # 全形→半形，去空白
+    t = t.strip('\'"「」')                               # 去可能的引號
+    return t == "?"
 
 
 def _is_registered(db: Session, line_user_id: str) -> bool:
@@ -160,24 +158,14 @@ def resolve_route(p: ResolveRouteIn, db: Session = Depends(get_db)) -> ResolveRo
     # 3) 已註冊者
     if _is_registered(db, uid):
         if _norm_query(text_in):
-            return ResolveRouteOutA(
-                route="AUTH",
-                action="QUERY",
-                success=bool(p.is_secret),
-                is_lawyer=False,
-                client_name=p.client_name,
-                payload={}
-            )
-        # 非問號 → 提示可用 ?
-        return ResolveRouteOutA(
-            route="AUTH",
-            action="OTHER",
-            success=bool(p.is_secret),
-            is_lawyer=False,
-            client_name=p.client_name,
-            message="您已登錄，輸入「?」即可查詢案件進度",
-            payload={}
-        )
+            return ResolveRouteOutA(route="AUTH", action="QUERY",
+                                    success=bool(p.is_secret), is_lawyer=False,
+                                    client_name=p.client_name, payload={})
+        return ResolveRouteOutA(route="AUTH", action="OTHER",
+                                success=bool(p.is_secret), is_lawyer=False,
+                                client_name=p.client_name,
+                                message="您已登錄，輸入「?」即可查看操作選項", payload={})
+
 
     # 4) 未註冊：收到「登錄 XXX」→ 進入確認
     m = re.match(r"^(?:登錄|登陸|登入|登录)\s+(.+)$", text_in, flags=re.I)
