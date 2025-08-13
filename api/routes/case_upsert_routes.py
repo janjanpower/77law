@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 from api.database import get_db
-from api.models import CaseRecord  # 對應 public.case_records
+from api.models_cases import CaseRecord  # 對應 public.case_records
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 

@@ -4,7 +4,8 @@ api/models_cases.py
 案件資料庫模型 - 完整的 CaseRecord 定義（修正版，只保留你原本的欄位 + 必要補欄位）
 """
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean, Index, func
+from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean, Index, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
 
@@ -19,53 +20,34 @@ except ImportError:
 
 
 class CaseRecord(Base):
-    """案件記錄資料表 - 完整版"""
     __tablename__ = "case_records"
 
-    # 主鍵
-    id = Column(Integer, primary_key=True, index=True, comment="主鍵")
+    id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # 必要識別欄位
-    case_id = Column(String(100), nullable=False, index=True, comment="案件編號")
+    case_type = Column(String, nullable=False)   # ✅ 不得為 NULL
+    case_id   = Column(String, nullable=False)   # ✅ 不得為 NULL
 
-    # 基本案件資訊
-    case_type = Column(String(50), nullable=False, comment="案件類型")  # 刑事/民事
-    client = Column(String(100), nullable=False, comment="當事人")
-    lawyer = Column(String(100), nullable=True, comment="委任律師")
-    legal_affairs = Column(String(100), nullable=True, comment="法務人員")
+    client         = Column(String)
+    lawyer         = Column(String)
+    legal_affairs  = Column(String)
+    progress       = Column(String)
+    case_reason    = Column(String)
+    case_number    = Column(String)
+    opposing_party = Column(String)
+    court          = Column(String)
+    division       = Column(String)
+    progress_date  = Column(String)
+    created_date   = Column(String)
+    updated_date   = Column(String)
 
-    # 案件狀態
-    progress = Column(String(50), nullable=False, default="待處理", comment="進度追蹤")
-    case_reason = Column(Text, nullable=True, comment="案由")
-    case_number = Column(String(100), nullable=True, comment="案號")
-    opposing_party = Column(String(100), nullable=True, comment="對造")
-    court = Column(String(100), nullable=True, comment="負責法院")
-    division = Column(String(50), nullable=True, comment="負責股別")
-    progress_date = Column(String(20), nullable=True, comment="當前進度的日期")
+    progress_stages = Column(JSONB)
+    progress_notes  = Column(JSONB)
+    progress_times  = Column(JSONB)
 
-    # JSON 欄位
-    progress_stages = Column(JSON, nullable=True, comment="進度階段記錄 {階段: 日期}")
-    progress_notes = Column(JSON, nullable=True, comment="進度階段備註 {階段: 備註}")
-    progress_times = Column(JSON, nullable=True, comment="進度階段時間 {階段: 時間}")
-
-    # 舊系統時間戳
-    created_date = Column(DateTime, nullable=True, comment="原始建立日期")
-    updated_date = Column(DateTime, nullable=True, comment="原始更新日期")
-
-    # 必要補欄位（你原本的 to_dict 和索引會用到）
-
-    created_at = Column(DateTime, nullable=False, server_default=func.now(), comment="建立時間")
-    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now(), comment="更新時間")
-    is_active = Column(Boolean, nullable=False, server_default='true', comment="是否啟用")
-
-    # 建立索引
     __table_args__ = (
-        Index('idx_client_case', 'client_id', 'case_id'),
-        Index('idx_client_type', 'client_id', 'case_type'),
-        Index('idx_client_lawyer', 'client_id', 'lawyer'),
-        Index('idx_upload_time', 'created_at'),
-        Index('idx_progress', 'progress'),
-        Index('idx_case_number', 'case_number'),
+        UniqueConstraint('case_type', 'case_id', name='ux_case_records_type_case'),
+        Index('ix_case_records_case_type', 'case_type'),
+        Index('ix_case_records_case_id', 'case_id'),
     )
 
     def __repr__(self):
