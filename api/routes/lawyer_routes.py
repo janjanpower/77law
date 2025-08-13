@@ -16,10 +16,10 @@ from api.database import get_db
 
 # ---- 依你的專案模型命名導入（兩段 try 以增加容錯） ----
 try:
-    from api.models_control import LoginUser, ClientLineUsers
+    from api.models_control import LoginUser, ClientLineUsers,PendingLineUser
 except Exception:
     # 若你的模型放在別處，這裡可再調整
-    from api.models_control import LoginUser, ClientLineUsers  # type: ignore
+    from api.models_control import LoginUser, ClientLineUsers,PendingLineUser # type: ignore
 
 try:
     from api.models_cases import CaseRecord
@@ -79,29 +79,32 @@ def _normalize_text(s: Optional[str]) -> str:
     return s.strip()
 
 def _has_question(s: str) -> bool:
-    # 只要包含 ? 或 全形 ？ 就算
-    return bool(re.search(r"[?？]", s))
+    return "?" in s or "？" in s
 
-def _get_role_by_line_id(db: Session, line_user_id: str) -> Optional[str]:
-    """
-    用 line_user_id 判斷是否為已綁定的一般用戶（USER）。
-    若你也有『律師的 LINE 綁定表』，可在這裡擴充 LAWYER 分支。
-    回傳：'USER' | 'LAWYER' | None
-    """
+def _get_state_by_line_id(db: Session, line_user_id: str) -> dict:
+    state = {"is_user": False, "is_lawyer": False, "in_pending": False}
     if not line_user_id:
-        return None
+        return state
 
-    # 一般用戶是否已綁定啟用
-    row = db.query(ClientLineUsers).filter(
+    clu = db.query(ClientLineUsers).filter(
         ClientLineUsers.line_user_id == line_user_id,
         func.coalesce(ClientLineUsers.is_active, true()) == true()
     ).first()
+    if clu:
+        role_val = str(getattr(clu, "user_role", "")).upper()
+        if role_val == "LAWYER":
+            state["is_lawyer"] = True
+        else:
+            state["is_user"] = True
 
-    if row:
-        return "USER"
+    try:
+        q = db.query(PendingLineUser).filter(PendingLineUser.line_user_id == line_user_id)
+        if q.first():
+            state["in_pending"] = True
+    except Exception:
+        pass
 
-    # 如需律師也走 LINE 綁定，這裡補你的律師綁定表查詢
-    return None
+    return state
 
 def _build_plan_message(title: str, client_name: str, plan_type: Optional[str], limit_val: Optional[int], usage_val: int) -> str:
     plan = plan_type or "未設定"
@@ -125,36 +128,43 @@ def verify_secret_ping():
 @router.post("/verify-secret", response_model=VerifySecretOut)
 async def verify_secret(request: Request, db: Session = Depends(get_db)):
     """
-    分流規則（提供給 n8n 的 Switch）：
-    1) 已綁定的一般用戶 + 訊息包含 ?/？ ⇒ REGISTERED_USER
-    2) 有效暗號且尚未是律師 ⇒ LOGIN（發綁定網址）
-    3) 已綁定律師（或已具律師身份） ⇒ LAWYER
-    4) 其餘 ⇒ USER
+    規則：
+    - (已綁定一般用戶 OR 在 pending_line_users 內) 且 訊息包含 ?/？ => REGISTERED_USER
+    - 已綁定律師 且 非問號 => LAWYER（律師可直接輸入當事人姓名或案號）
+    - 其餘維持原有 LOGIN / USER / LAWYER 判斷（暗號登入等）
     """
     try:
         payload = await request.json()
     except Exception:
         payload = {}
 
-    text_in = _normalize_text(
+    def norm(s: Optional[str]) -> str:
+        if not s:
+            return ""
+        import re
+        s = re.sub(r"[\u200B-\u200D\uFEFF]", "", s).replace("\u3000", " ")
+        return s.strip()
+
+    text_in = norm(
         payload.get("text")
+        or payload.get("message")
         or ((payload.get("body") or {}).get("events", [{}])[0].get("message") or {}).get("text")
         or ""
     )
-    line_user_id = (
+    line_user_id = norm(
         payload.get("line_user_id")
         or payload.get("user_id")
         or ((payload.get("body") or {}).get("events", [{}])[0].get("source") or {}).get("userId")
         or ""
     )
-    line_user_id = str(line_user_id).strip()
     debug = bool(payload.get("debug"))
 
-    # 1) 角色偵測 & 問號
-    role = _get_role_by_line_id(db, line_user_id)
+    # 先取狀態
+    st = _get_state_by_line_id(db, line_user_id)
     has_q = _has_question(text_in)
 
-    if role == "USER" and has_q:
+    # ===== A) 一般用戶 & pending 規則 =====
+    if (st["is_user"] or st["in_pending"]) and has_q:
         out = {
             "success": False,
             "route": "REGISTERED_USER",
@@ -164,10 +174,22 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
             "bind_url": None,
         }
         if debug:
-            out["debug"] = {"text_in": text_in, "role": role, "has_question": has_q, "line_user_id_len": len(line_user_id)}
+            out["debug"] = {"state": st, "text_in": text_in, "line_user_id_len": len(line_user_id)}
         return out
 
-    # 2) 驗證事務所暗號（用 LoginUser.secret_code）
+    # ===== B) 律師規則：律師直接輸入當事人姓名或案號（只要不是問號就走 LAWYER）=====
+    if st["is_lawyer"] and not has_q:
+        return {
+            "success": False,
+            "route": "LAWYER",
+            "client_id": None,       # 若你要限制同所，可在這裡補查 lawyer 對應 client_id
+            "client_name": None,
+            "is_lawyer": True,
+            "bind_url": None,
+            "debug": {"state": st, "text_in": text_in} if debug else None,
+        }
+
+    # ===== C) 其餘維持原本暗號/登入/使用者分流 =====
     secret_rec = None
     if text_in:
         secret_rec = (
@@ -179,26 +201,12 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
     client_id_from_secret = getattr(secret_rec, "client_id", None) if secret_rec else None
     client_name_from_secret = getattr(secret_rec, "client_name", None) if secret_rec else None
 
-    # 3) 是否已是律師（若你的律師身份是看別表，這裡可依需求調整）
-    is_lawyer = False
-    chosen_client_id_from_lawyer = None
-    if line_user_id:
-        # 這裡示範用 ClientLineUsers 的 user_role 判斷（若你的欄位叫 role / user_role 請自行對應）
-        q = db.query(ClientLineUsers).filter(
-            ClientLineUsers.line_user_id == line_user_id,
-            ClientLineUsers.is_active == True
-        )
-        if client_id_from_secret:
-            q = q.filter(ClientLineUsers.client_id == client_id_from_secret)
-        row = q.first()
-        if row and str(getattr(row, "user_role", "")).upper() == "LAWYER":
-            is_lawyer = True
-            chosen_client_id_from_lawyer = getattr(row, "client_id", None)
+    # 是否已是律師（再次保險，若你要限制同事務所可加上 client_id 條件）
+    is_lawyer = st["is_lawyer"]
 
-    # 4) 路由判斷
     if (not is_secret) and is_lawyer:
         route = "LAWYER"
-        chosen_client_id = chosen_client_id_from_lawyer
+        chosen_client_id = None
         chosen_client_name = None
     elif is_secret and (not is_lawyer):
         route = "LOGIN"
@@ -209,12 +217,11 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
         chosen_client_id = None
         chosen_client_name = None
     else:
-        # 同時符合 → 視為 LAWYER
         route = "LAWYER"
-        chosen_client_id = chosen_client_id_from_lawyer or client_id_from_secret
-        chosen_client_name = client_name_from_secret if client_id_from_secret == chosen_client_id else None
+        chosen_client_id = None
+        chosen_client_name = None
 
-    # 5) 綁定網址（只在 LOGIN 時提供）
+    # 綁定網址（LOGIN 才回）
     bind_url = None
     if route == "LOGIN" and is_secret:
         base = os.getenv("API_BASE_URL") or os.getenv("APP_BASE_URL") or ""
@@ -223,12 +230,6 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
             bind_url = f"{base.rstrip('/')}/api/tenant/bind-user?code={quote(text_in)}"
             if client_id_from_secret:
                 bind_url += f"&client_id={quote(str(client_id_from_secret))}"
-
-    # 若只知道 client_id，補查 client_name
-    if chosen_client_id and not chosen_client_name:
-        rec = db.query(LoginUser).filter(LoginUser.client_id == str(chosen_client_id)).first()
-        if rec:
-            chosen_client_name = rec.client_name
 
     out = {
         "success": bool(is_secret),
@@ -239,13 +240,7 @@ async def verify_secret(request: Request, db: Session = Depends(get_db)):
         "bind_url": bind_url,
     }
     if debug:
-        out["debug"] = {
-            "text_in": text_in,
-            "role_by_line_id": role,
-            "has_question": has_q,
-            "is_secret": is_secret,
-            "line_user_id_len": len(line_user_id),
-        }
+        out["debug"] = {"state": st, "text_in": text_in, "is_secret": is_secret, "line_user_id_len": len(line_user_id)}
     return out
 
 

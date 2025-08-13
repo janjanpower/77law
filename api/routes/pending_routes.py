@@ -156,3 +156,47 @@ def safe_pending_track(p: PendingIn, db: Session = Depends(get_db)):
     )
 
 pending_router = router
+
+def _has_question(s: str) -> bool:
+    # 只要包含 ? 或 全形 ？ 就算
+    return "?" in s or "？" in s
+
+def _get_state_by_line_id(db: Session, line_user_id: str) -> dict:
+    """
+    回傳使用者狀態：
+    {
+      "is_user": bool,     # 已綁定（一般用戶）
+      "is_lawyer": bool,   # 已綁定（律師）
+      "in_pending": bool,  # 是否存在於 pending_line_users（白名單/準備中）
+    }
+    """
+    state = {"is_user": False, "is_lawyer": False, "in_pending": False}
+    if not line_user_id:
+        return state
+
+    # 1) client_line_users：已綁定（用 COALESCE 避免 boolean = integer）
+    clu = db.query(ClientLineUsers).filter(
+        ClientLineUsers.line_user_id == line_user_id,
+        func.coalesce(ClientLineUsers.is_active, true()) == true()
+    ).first()
+    if clu:
+        role_val = str(getattr(clu, "user_role", "")).upper()
+        if role_val == "LAWYER":
+            state["is_lawyer"] = True
+        else:
+            state["is_user"] = True
+
+    # 2) pending_line_users：存在於名單（若你的模型/表不同，這裡對應調整）
+    try:
+        # 若 PendingLineUser 沒有 is_active 欄位，就改成只比對 line_user_id
+        q = db.query(PendingLineUser).filter(PendingLineUser.line_user_id == line_user_id)
+        # 有些專案會有 is_active/approved 等欄位，想限定可在此追加：
+        # q = q.filter(func.coalesce(PendingLineUser.is_active, true()) == true())
+        if q.first():
+            state["in_pending"] = True
+    except Exception:
+        # 沒有 PendingLineUser 模型就忽略
+        pass
+
+    return state
+
