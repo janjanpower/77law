@@ -32,9 +32,11 @@ class LookupOut(BaseModel):
 
 class RegisterIn(BaseModel):
     line_user_id: str = Field(..., min_length=5)
-    user_name: Optional[str] = None     # 「登錄 XXX」的 XXX
-    client_id: Optional[str] = None     # 由 lookup-client 推得
-    text: Optional[str] = None          # 相容舊流程（原始文字）
+    user_name:   Optional[str] = None
+    client_id:   Optional[str] = None
+    text:        Optional[str] = None
+    destination: Optional[str] = None
+      # 相容舊流程（原始文字）
 
 class RegisterOut(BaseModel):
     success: bool
@@ -113,50 +115,61 @@ def lookup_client(payload: LookupIn, db: Session = Depends(get_db)):
 def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
     try:
         lid     = (payload.line_user_id or "").strip()
-        name    = (payload.user_name   or "").strip()     # ① 先把 user_name 取出
+        name    = (payload.user_name   or "").strip()
         cid     = (payload.client_id   or "").strip()
         text_in = (payload.text        or "").strip()
+        dest    = (payload.destination or "").strip()
 
-
-        # 已註冊就不要再改 expected_name：有 client_id 走複合鍵，沒有就只看 line_user_id
-        if cid:
+        # 0) 先從 destination 反推 client_id（若沒帶 cid）
+        if not cid and dest:
             row = db.execute(text("""
-                SELECT 1
-                FROM pending_line_users
-                WHERE client_id = :cid AND line_user_id = :lid
-                AND status = 'registered'
+                SELECT client_id FROM line_channel_bindings
+                WHERE destination_id = :dest AND is_active = TRUE
                 LIMIT 1
-            """), {"cid": cid, "lid": lid}).first()
-        else:
+            """), {"dest": dest}).first()
+            if row and row[0]:
+                cid = row[0]
+
+        # 1) 再從既有綁定表反推（若仍沒 cid）
+        if not cid and lid:
             row = db.execute(text("""
-                SELECT 1
-                FROM pending_line_users
-                WHERE line_user_id = :lid
-                AND status = 'registered'
+                SELECT client_id FROM client_line_users
+                WHERE line_user_id = :lid AND is_active = TRUE
                 LIMIT 1
             """), {"lid": lid}).first()
+            if row and row[0]:
+                cid = row[0]
 
-        if row:
-            return RegisterOut(
-                success=True,
-                expected_name=name,
-                message="您已完成登錄，請輸入「?」查詢案件進度。"
-            )
-        # ② 如果沒帶 user_name、但有原始 text（例如「登錄 XXX」），用意圖解析補上 name
+        # 2) 解析「登錄 XXX」→ name，並一律清掉前綴
         if not name and text_in:
             intent, cname = _parse_intent(text_in)
             if intent == "prepare" and cname:
                 name = cname.strip()
+        name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", name).strip()
 
-        # ③ 無論如何都把「登錄/登陸/登入/登录 + 空白」前綴去掉（這一行一定要放在確定 name 存在之後）
-        name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", name)
-
-        # ④ 仍缺必要欄位就回覆（避免 500）
         if not lid or not name:
             return RegisterOut(success=False, message="缺少必要欄位(line_user_id/user_name)")
 
+        # 3) 已註冊早退（避免覆蓋 expected_name）
+        row = db.execute(text("""
+            SELECT 1 FROM pending_line_users
+            WHERE line_user_id = :lid
+              AND status = 'registered'
+            LIMIT 1
+        """), {"lid": lid}).first()
+        if row:
+            # （可選）若此時回推得到了 cid，幫忙回填 client_id 一次
+            if cid:
+                db.execute(text("""
+                    UPDATE pending_line_users
+                    SET client_id = :cid, updated_at = NOW()
+                    WHERE line_user_id = :lid AND (client_id IS NULL OR client_id = '')
+                """), {"cid": cid, "lid": lid})
+                db.commit()
+            return RegisterOut(success=True, expected_name=name,
+                               message="您已完成登錄，請輸入「?」查詢案件進度。")
 
-        # Upsert：有 client_id 用 (client_id,line_user_id)；否則退回用 line_user_id
+        # 4) 第一次註冊：有 cid 與無 cid 分支（已加 WHERE，避免覆蓋已註冊）
         if cid:
             db.execute(text("""
                 INSERT INTO pending_line_users (client_id, line_user_id, expected_name, status, created_at, updated_at)
@@ -167,8 +180,35 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                     status        = 'registered',
                     updated_at    = NOW()
                 WHERE pending_line_users.status <> 'registered';
-
             """), {"cid": cid, "lid": lid, "name": name})
+        else:
+            db.execute(text("""
+                INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
+                VALUES (:lid, :name, 'registered', NOW(), NOW())
+                ON CONFLICT (line_user_id)
+                DO UPDATE
+                SET expected_name = EXCLUDED.expected_name,
+                    status        = 'registered',
+                    updated_at    = NOW()
+                WHERE pending_line_users.status <> 'registered';
+            """), {"lid": lid, "name": name})
+        db.commit()
+
+        # 5)（可選）若剛才無 cid 但此刻能推回，幫忙回填一次
+        if not cid and dest:
+            row = db.execute(text("""
+                SELECT client_id FROM line_channel_bindings
+                WHERE destination_id = :dest AND is_active = TRUE
+                LIMIT 1
+            """), {"dest": dest}).first()
+            if row and row[0]:
+                cid = row[0]
+                db.execute(text("""
+                    UPDATE pending_line_users
+                    SET client_id = :cid, updated_at = NOW()
+                    WHERE line_user_id = :lid AND (client_id IS NULL OR client_id = '')
+                """), {"cid": cid, "lid": lid})
+                db.commit()
         else:
             db.execute(text("""
                 INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
