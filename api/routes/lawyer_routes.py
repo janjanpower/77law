@@ -1,127 +1,94 @@
-# -*- coding: utf-8 -*-
-from __future__ import annotations
-from typing import Optional, Tuple
-import re
+# api/routes/lawyer_routes.py（節錄重點，直接覆蓋 verify-secret 也可）
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-
 from api.database import get_db
+import re
 
-# ===== 依你的實際資料表名稱調整這兩個常數 =====
-TABLE_BOUND_USER = "public.client_line_users"   # 一般用戶綁定表：line_user_id / is_active
-TABLE_BOUND_LAWYER = "public.login_users"      # （可選）律師綁定表：line_user_id / is_active
+router = APIRouter(prefix="/api/lawyer", tags=["lawyer"])
 
-# ────────────────────────────────────────────────────────────────────────────
-# 請求模型
-# ────────────────────────────────────────────────────────────────────────────
+TABLE_BOUND_USER = "public.client_line_users"   # 依你的實際資料表調整
+TABLE_BOUND_LAWYER = "public.login_users"      # 若無此表可忽略 try/except
 
 class VerifyIn(BaseModel):
     text: str = ""
     line_user_id: str
+    debug: bool = False  # 新增：需要時帶 true 方便除錯
 
-class VerifyOut(BaseModel):
-    route: str
+def _normalize_text(s: str) -> str:
+    if not s:
+        return ""
+    # 去零寬空白/換行
+    s = re.sub(r"[\u200B-\u200D\uFEFF]", "", s)
+    # 全形空白 -> 半形
+    s = s.replace("\u3000", " ")
+    return s.strip()
 
-# ────────────────────────────────────────────────────────────────────────────
-# 共用查詢：由 line_user_id 判斷角色
-# ────────────────────────────────────────────────────────────────────────────
+def _has_question(s: str) -> bool:
+    return bool(re.search(r"[?？]", s))
 
-def _get_binding_role(db: Session, line_user_id: str) -> Optional[str]:
-    """
-    回傳 'USER' / 'LAWYER' / None
-    - USER：在 client_line_users 找到 line_user_id 且 is_active = TRUE
-    - LAWYER：（可選）在 login_users 找到 line_user_id 且 is_active = TRUE
-    """
-    if not line_user_id:
+def _get_role(db: Session, lid: str) -> str | None:
+    if not lid:
         return None
-
-    # 一般用戶是否已綁定
+    # 一般用戶
     row_user = db.execute(
         text(f"""
-            SELECT 1
-            FROM {TABLE_BOUND_USER}
-            WHERE line_user_id = :lid AND (is_active = TRUE OR is_active IS NULL)
-            LIMIT 1
+          SELECT 1 FROM {TABLE_BOUND_USER}
+          WHERE line_user_id = :lid
+            AND COALESCE(is_active, TRUE) = TRUE
+          LIMIT 1
         """),
-        {"lid": line_user_id},
+        {"lid": lid},
     ).first()
     if row_user:
         return "USER"
 
-    # 律師是否綁定（若你的設計是律師也會寫入某表；沒有的話可忽略）
+    # 律師（若你的律師不綁 LINE，可改為其他判斷）
     try:
         row_lawyer = db.execute(
             text(f"""
-                SELECT 1
-                FROM {TABLE_BOUND_LAWYER}
-                WHERE line_user_id = :lid AND (is_active = TRUE OR is_active IS NULL)
-                LIMIT 1
+              SELECT 1 FROM {TABLE_BOUND_LAWYER}
+              WHERE line_user_id = :lid
+                AND COALESCE(is_active, TRUE) = TRUE
+              LIMIT 1
             """),
-            {"lid": line_user_id},
+            {"lid": lid},
         ).first()
         if row_lawyer:
             return "LAWYER"
     except Exception:
-        # 若沒有這張表或欄位，直接忽略即可
         pass
 
     return None
 
-# ────────────────────────────────────────────────────────────────────────────
-# Router：/api/lawyer 既有路由（更新 verify-secret 規則）
-# ────────────────────────────────────────────────────────────────────────────
-
-router = APIRouter(prefix="/api/lawyer", tags=["lawyer"])
-
-@router.post("/verify-secret", response_model=VerifyOut)
+@router.post("/verify-secret")
 def verify_secret(payload: VerifyIn, db: Session = Depends(get_db)):
-    """
-    分流規則（供 n8n 的 Switch 使用）：
-    1) 已綁定的一般用戶 + 文字為「? / ？」 → REGISTERED_USER
-    2) 未綁定 + 文字「登錄 XXX」 → REGISTER
-    3) 已綁定律師（或你的其他律師驗證規則） → LAWYER
-    4) 其餘 → USER
-    """
-    text_in = (payload.text or "").strip()
-    lid = payload.line_user_id or ""
+    text_in = _normalize_text(payload.text or "")
+    lid = (payload.line_user_id or "").strip()
 
-    role = _get_binding_role(db, lid)
+    role = _get_role(db, lid)
+    is_q = _has_question(text_in)
 
-    # 1) 一般用戶輸入「?」→ 直接走 REGISTERED_USER
-    if role == "USER" and text_in in ("?", "？"):
-        return VerifyOut(route="REGISTERED_USER")
+    # 規則 1：已綁定的一般用戶 + 包含問號 → REGISTERED_USER
+    if role == "USER" and is_q:
+        out = {"route": "REGISTERED_USER"}
+    # 規則 2：未綁定 + 「登錄 XXX」 → REGISTER
+    elif role is None and re.match(r"^登(錄|陸)\s+.+", text_in):
+        out = {"route": "REGISTER"}
+    # 規則 3：律師 → LAWYER
+    elif role == "LAWYER":
+        out = {"route": "LAWYER"}
+    # 其餘 → USER
+    else:
+        out = {"route": "USER"}
 
-    # 2) 未綁定但輸入「登錄 XXX」→ 讓 n8n 走註冊流程
-    if role is None and re.match(r"^登(錄|陸)\s+.+", text_in):
-        return VerifyOut(route="REGISTER")
-
-    # 3) 律師（你也可以在這裡加其他律師暗號判斷）
-    if role == "LAWYER":
-        return VerifyOut(route="LAWYER")
-
-    # 4) 其餘情況 → USER（一般對話/使用說明）
-    return VerifyOut(route="USER")
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 可選：/api/user/verify（給 n8n 或除錯查看綁定狀態）
-# ────────────────────────────────────────────────────────────────────────────
-
-router_user = APIRouter(prefix="/api/user", tags=["user"])
-
-class VerifyUserIn(BaseModel):
-    line_user_id: str
-
-class VerifyUserOut(BaseModel):
-    route: str   # REGISTERED_USER or UNREGISTERED_USER
-    role: Optional[str] = None  # USER / LAWYER / None（回饋資訊）
-
-@router_user.post("/verify", response_model=VerifyUserOut)
-def verify_user(payload: VerifyUserIn, db: Session = Depends(get_db)):
-    role = _get_binding_role(db, payload.line_user_id)
-    if role == "USER":
-        return VerifyUserOut(route="REGISTERED_USER", role=role)
-    return VerifyUserOut(route="UNREGISTERED_USER", role=role)
+    if payload.debug:
+        out["debug"] = {
+            "text_in": text_in,
+            "has_question": is_q,
+            "role_detected": role,
+            "line_user_id_len": len(lid),
+        }
+    return out
