@@ -112,19 +112,24 @@ def lookup_client(payload: LookupIn, db: Session = Depends(get_db)):
 @user_router.post("/register", response_model=RegisterOut)
 def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
     try:
-        lid = (payload.line_user_id or "").strip()
-        name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", name)
-        cid  = (payload.client_id or "").strip()
-        text_in = (payload.text or "").strip()
+        lid     = (payload.line_user_id or "").strip()
+        name    = (payload.user_name   or "").strip()     # ① 先把 user_name 取出
+        cid     = (payload.client_id   or "").strip()
+        text_in = (payload.text        or "").strip()
 
-        # 相容：若沒帶 user_name 但帶了 text（「登錄 XXX」）
+        # ② 如果沒帶 user_name、但有原始 text（例如「登錄 XXX」），用意圖解析補上 name
         if not name and text_in:
             intent, cname = _parse_intent(text_in)
             if intent == "prepare" and cname:
-                name = cname
+                name = cname.strip()
 
+        # ③ 無論如何都把「登錄/登陸/登入/登录 + 空白」前綴去掉（這一行一定要放在確定 name 存在之後）
+        name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", name)
+
+        # ④ 仍缺必要欄位就回覆（避免 500）
         if not lid or not name:
             return RegisterOut(success=False, message="缺少必要欄位(line_user_id/user_name)")
+
 
         # Upsert：有 client_id 用 (client_id,line_user_id)；否則退回用 line_user_id
         if cid:
