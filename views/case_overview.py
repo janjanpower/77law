@@ -4,6 +4,7 @@
 from dataclasses import asdict, is_dataclass
 import os
 import threading
+import time
 import tkinter as tk
 from datetime import datetime
 from tkinter import ttk
@@ -927,170 +928,99 @@ class CaseOverviewWindow:
 
 
     def _on_upload_to_database(self):
-        """上傳雲端（回到舊樣式 + 內建修正與重試）"""
-
-        # ---- UI 幫手：確保在主執行緒 ----
-        def ui(fn, *args, **kwargs):
-            try:
-                if getattr(self, "window", None) and self.window.winfo_exists():
-                    self.window.after(0, lambda: fn(*args, **kwargs))
-            except Exception:
-                pass
-
-        # ---- 取得登入資訊 ----
-        user = getattr(self, "user_data", None) or getattr(getattr(self, "parent", None), "user_data", None)
-        if not user:
-            ui(UnifiedMessageDialog.show_warning, self.window, "缺少用戶認證資料，請重新登入")
-            return
-
-        client_id = user.get("client_id") or user.get("username") or user.get("user_id")
-        token     = user.get("token") or os.getenv("API_BEARER_TOKEN")
-        api_base  = os.getenv("API_BASE_URL", "https://law-controller-4a92b3cfcb5d.herokuapp.com")
-
-        if not client_id:
-            ui(UnifiedMessageDialog.show_warning, self.window, "無法取得事務所ID（client_id）")
-            return
-
-        # ---- 型別轉換：CaseData / dataclass / pydantic / dict -> dict ----
-        def _case_to_dict(x: Any) -> Dict[str, Any]:
-            if isinstance(x, dict):
-                return x
-            if hasattr(x, "model_dump") and callable(getattr(x, "model_dump")):  # pydantic v2
-                return x.model_dump()
-            if hasattr(x, "dict") and callable(getattr(x, "dict")):             # pydantic v1
-                return x.dict()
-            if is_dataclass(x):
-                return asdict(x)
-            if hasattr(x, "__dict__"):
-                return {k: v for k, v in vars(x).items() if not k.startswith("_")}
-            raise TypeError(f"Unsupported case item type: {type(x)}")
-
-        def _ensure_list(items):
-            if items is None: return []
-            if isinstance(items, (list, tuple)): return list(items)
-            return [items]
-
-        # ---- 取得案件資料 ----
-        raw_items = _ensure_list(getattr(self, "case_data", None))
-        if not raw_items:
-            ui(UnifiedMessageDialog.show_warning, self.window, "目前沒有可上傳的案件資料")
-            return
+        """上傳雲端按鈕事件（只用 self.case_data，不讀取任何 Treeview）"""
+        import os
+        from tkinter import messagebox as msgbox
 
         try:
-            items_for_upload: List[Dict[str, Any]] = [_case_to_dict(x) for x in raw_items]
-        except Exception as conv_err:
-            ui(UnifiedMessageDialog.show_error, self.window, f"資料轉換失敗：{conv_err}")
-            return
+            print("🔍 上傳雲端按鈕被點擊")
 
-        # ---- 顯示你的舊樣式進度（如果沒有這個對話框會自動略過）----
-        progress = None
-        try:
-            progress = UploadProgressDialog(self.window, title="上傳雲端")
-            progress.set_status("正在上傳案件資料…")
-            progress.set_progress(0)
-        except Exception:
-            progress = None
+            # ========== 0) 基本檢查 ==========
+            # 取 user_data（從自己或 parent）
+            if not getattr(self, "user_data", None) and getattr(self, "parent", None):
+                self.user_data = getattr(self.parent, "user_data", None)
 
-        # ---- 背景上傳：分批 + 重試（回到舊樣式的訊息窗）----
-        def worker():
-            # 建立上傳器
-            uploader = CaseDatabaseUploader(
-                api_base=api_base,
-                token=token,
-                client_id=client_id,
-                uploaded_by=user.get("client_name") or "frontend",
+            if not getattr(self, "user_data", None):
+                UnifiedMessageDialog.show_warning(self.window, "尚未登入，無法上傳。")
+                return
+
+            # 取 client_id / client_name
+            user = self.user_data or {}
+            client_id = user.get("client_id") or user.get("client") or user.get("user_id")
+            client_name = user.get("client_name") or user.get("username") or "未知事務所"
+            token = user.get("token")
+
+            if not client_id:
+                UnifiedMessageDialog.show_warning(self.window, "無法取得事務所 ID，請先登入後再試。")
+                return
+
+            # 要上傳的資料只用 self.case_data
+            if not getattr(self, "case_data", None) or len(self.case_data) == 0:
+                UnifiedMessageDialog.show_warning(self.window, "目前沒有案件資料可以上傳。")
+                return
+
+            # ========== 1) 確認視窗 ==========
+            total_cases = len(self.case_data)
+            confirm_msg = (
+                f"確定要將 {total_cases} 筆案件資料上傳到雲端嗎？\n\n"
+                f"事務所：{client_name}\n"
+                f"客戶ID：{client_id}\n\n"
+                "上傳後資料將儲存在雲端資料庫（public.case_records）。"
+            )
+            if not msgbox.askyesno("確認上傳", confirm_msg, parent=self.window):
+                return
+
+            # ========== 2) 準備進度視窗 ==========
+            self.current_upload_dialog = UploadProgressDialog.show_upload_dialog(
+                self.window, total_cases, on_cancel=self._on_upload_cancel
+            )
+            self.current_upload_dialog.update_progress(5, "準備上傳…")
+            self.current_upload_dialog.update_stats(0, 0)
+            self.current_upload_dialog.add_log(f"將上傳 {total_cases} 筆案件。")
+
+            # 禁用按鈕避免重複送
+            if hasattr(self, "upload_cloud_btn"):
+                self.upload_cloud_btn.config(state="disabled", text="上傳中…")
+
+            # ========== 3) 建立上傳器並啟動 ==========
+            api_base = os.getenv("API_BASE_URL", "https://law-controller-4a92b3cfcb5d.herokuapp.com").rstrip("/")
+            self.database_uploader = CaseDatabaseUploader(api_base=api_base, token=token)
+
+            def progress_cb(percent: int, message: str):
+                if self.current_upload_dialog:
+                    self.current_upload_dialog.update_progress(percent, message)
+                    st = self.database_uploader.get_upload_status()
+                    self.current_upload_dialog.update_stats(st["uploaded_count"], st["failed_count"])
+                    # 關鍵節點寫進 log
+                    if percent in (5, 15, 35, 50, 75, 99) or "成功" in message or "失敗" in message:
+                        level = "success" if "成功" in message else ("error" if "失敗" in message else "info")
+                        self.current_upload_dialog.add_log(message, level)
+
+            def complete_cb(success: bool, summary: dict):
+                if self.current_upload_dialog:
+                    self.current_upload_dialog.on_upload_complete(success, summary)
+                # 釋放按鈕
+                if hasattr(self, "upload_cloud_btn"):
+                    self.upload_cloud_btn.config(state="normal", text="上傳雲端")
+
+            print("🚀 開始上傳至 /api/cases/upsert")
+            self.database_uploader.upload_cases_async(
+                cases=self.case_data,
+                user_data=self.user_data,
+                progress_callback=progress_cb,
+                complete_callback=complete_cb,
+                chunk_size=100,
+                per_chunk_retry=2,
             )
 
-            # 包一層重試（針對 429/5xx 或短暫連線異常）
-            def upload_with_retry(items, max_retry=2):
-                backoff = 1.2
-                errors_collected = []
-                summary_total = {"total": 0, "success": 0, "failed": 0}
-                batches_summary = []
-
-                # 依舊走分批，但每批各自做有限次重試
-                chunks = [items[i:i+100] for i in range(0, len(items), 100)]
-                for idx, chunk in enumerate(chunks, start=1):
-                    attempt = 0
-                    while True:
-                        try:
-                            res = uploader.upload_cases(chunk, chunk_size=100, timeout=30)
-                            # 累計
-                            s = res.get("summary", {}) or {}
-                            summary_total["total"]   += int(s.get("total", len(chunk)))
-                            summary_total["success"] += int(s.get("success", 0))
-                            summary_total["failed"]  += int(s.get("failed", 0))
-                            batches_summary.append({"index": idx, **s})
-                            # 收集錯誤訊息（如果有）
-                            for b in res.get("batches", []):
-                                for e in b.get("errors", []) or []:
-                                    errors_collected.append(str(e))
-                            break
-                        except Exception as e:
-                            # 只對可暫時性錯誤重試
-                            attempt += 1
-                            if attempt > max_retry:
-                                summary_total["total"]   += len(chunk)
-                                summary_total["failed"]  += len(chunk)
-                                batches_summary.append({"index": idx, "total": len(chunk), "success": 0, "failed": len(chunk)})
-                                errors_collected.append(f"[批次{idx}] 最終失敗：{e}")
-                                break
-                            time.sleep(backoff * attempt)
-
-                    # 更新進度（舊樣式只更新進度條，不彈窗）
-                    if progress:
-                        try:
-                            percent = int((idx / max(len(chunks), 1)) * 100)
-                            progress.set_progress(percent)
-                            progress.set_status(f"正在上傳… 第 {idx}/{len(chunks)} 批")
-                        except Exception:
-                            pass
-
-                return {"summary": summary_total, "batches": batches_summary, "errors": errors_collected}
-
+        except Exception as e:
+            # UI 友善錯誤
             try:
-                res = upload_with_retry(items_for_upload, max_retry=2)
+                UnifiedMessageDialog.show_error(self.window, f"上傳雲端發生錯誤：\n{e}")
+            finally:
+                if hasattr(self, "upload_cloud_btn"):
+                    self.upload_cloud_btn.config(state="normal", text="上傳雲端")
 
-                def done_ok(r=res):
-                    # 關進度窗
-                    if progress:
-                        try:
-                            progress.set_progress(100)
-                            progress.close_safely()
-                        except Exception:
-                            pass
-
-                    s = r.get("summary", {}) or {}
-                    # —— 回到「之前的樣式」：簡潔資訊窗（不附建議行）——
-                    msg = (
-                        "上傳完成\n"
-                        f"總筆數：{s.get('total', 0)}\n"
-                        f"成功：{s.get('success', 0)}\n"
-                        f"失敗：{s.get('failed', 0)}"
-                    )
-                    UnifiedMessageDialog.show_info(self.window, msg)
-
-                    # 如需除錯，可把錯誤印到 console（不影響 UI 樣式）
-                    errs = r.get("errors") or []
-                    if s.get("failed", 0) and errs:
-                        print("【上傳雲端｜錯誤列表】")
-                        for i, e in enumerate(errs[:50], 1):  # 最多列 50 筆避免洗版
-                            print(f"{i:02d}. {e}")
-
-                ui(done_ok)
-
-            except Exception as e:
-                def done_err(err=e):
-                    if progress:
-                        try:
-                            progress.close_safely()
-                        except Exception:
-                            pass
-                    # 舊樣式：只顯示錯誤主旨
-                    UnifiedMessageDialog.show_error(self.window, f"上傳失敗：{err}")
-                ui(done_err)
-
-        threading.Thread(target=worker, daemon=True).start()
 
 
     def _on_upload_cancel(self):

@@ -7,6 +7,7 @@ api/models_cases.py
 from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, Boolean, Index, func
 from sqlalchemy.ext.declarative import declarative_base
 
+
 # 使用現有的 Base 或建立新的
 try:
     from api.database import Base
@@ -25,7 +26,6 @@ class CaseRecord(Base):
     id = Column(Integer, primary_key=True, index=True, comment="主鍵")
 
     # 必要識別欄位
-    client_id = Column(String(50), nullable=False, index=True, comment="事務所ID")
     case_id = Column(String(100), nullable=False, index=True, comment="案件編號")
 
     # 基本案件資訊

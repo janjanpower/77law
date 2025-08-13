@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 
+
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -35,7 +36,10 @@ from api.routes.case_routes import router as cases_router
 from api.routes.lawyer_routes import lawyer_router
 from api.routes.user_routes import user_router
 from api.routes.pending_routes import router as pending_router
+from api.routes import routes_upload, routes_search
 
+app.include_router(routes_upload.router, prefix="/api/cases", tags=["Cases"])
+app.include_router(routes_search.router, prefix="/api/cases", tags=["Cases"])
 app.include_router(case_upload_router, tags=["cases"])
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(line_router)
