@@ -19,8 +19,13 @@ user_router = APIRouter(prefix="/api/user", tags=["user"])
 
 # -------------------- Pydantic --------------------
 class LookupIn(BaseModel):
-    line_user_id: str
-    user_name: Optional[str] = None
+    line_user_id: Optional[str] = None
+    user_name:   Optional[str] = None
+    destination: Optional[str] = None
+    text:        Optional[str] = None  # 可有可無
+
+    class Config:
+        allow_population_by_field_name = True  # 允許用欄位本名或別名
 
 class LookupOut(BaseModel):
     client_id: Optional[str] = None
@@ -63,7 +68,11 @@ def _parse_intent(text_msg: str):
 # 1) 依 LINE 或姓名查 client_id（給 n8n 的「查 client_id」節點）
 # ==================================================
 @user_router.post("/lookup-client", response_model=LookupOut)
-def lookup_client(db, line_user_id: str | None, user_name: str | None, destination: str | None):
+def lookup_client(payload: LookupIn, db: Session = Depends(get_db)):
+    line_user_id = (payload.line_user_id or "").strip()
+    user_name    = (payload.user_name   or "").strip()
+    destination  = (payload.destination or "").strip()
+
     # 0) 先試：用 LINE Webhook 的 destination 直接映射到事務所
     if destination:
         row = db.execute(text("""
@@ -75,7 +84,7 @@ def lookup_client(db, line_user_id: str | None, user_name: str | None, destinati
         if row and row[0]:
             return {"client_id": row[0]}
 
-    # 1) 其次：line_user_id 是否已在 client_line_users 綁定
+    # 1) 其次：line_user_id 是否已綁定
     row = db.execute(text("""
         SELECT client_id
         FROM client_line_users
@@ -85,8 +94,8 @@ def lookup_client(db, line_user_id: str | None, user_name: str | None, destinati
     if row and row[0]:
         return {"client_id": row[0]}
 
-    # 2) 最後保底（人名/事務所名）：把「登錄 」前綴去掉，再比對是否剛好是事務所名稱
-    name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", (user_name or "").strip())
+    # 2) 最後保底：把「登錄 」前綴去掉再對 login_users
+    name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", user_name).strip()
     row = db.execute(text("""
         SELECT client_id
         FROM login_users
@@ -96,6 +105,7 @@ def lookup_client(db, line_user_id: str | None, user_name: str | None, destinati
     """), {"name": name}).first()
 
     return {"client_id": row[0] if row else None}
+
 # ==================================================
 # 2) 註冊（n8n 的「用戶確認註冊」會呼叫）
 # ==================================================
@@ -103,7 +113,7 @@ def lookup_client(db, line_user_id: str | None, user_name: str | None, destinati
 def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
     try:
         lid = (payload.line_user_id or "").strip()
-        name = (payload.user_name or "").strip()
+        name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", name)
         cid  = (payload.client_id or "").strip()
         text_in = (payload.text or "").strip()
 
