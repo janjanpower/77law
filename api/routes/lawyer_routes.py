@@ -394,18 +394,14 @@ async def check_client_plan(request: Request, db: Session = Depends(get_db)):
 
 @router.post("/case-search")
 def case_search(payload: CaseSearchIn, db: Session = Depends(get_db)):
-    """
-    簡易案件關鍵字查詢
-    - 若你已改成 (case_type, case_id) 唯一鍵，可自行擴充條件
-    """
-    if CaseRecord is None:
-        raise HTTPException(status_code=500, detail="CaseRecord model not available")
+    from api.models_cases import CaseRecord
 
-    key = (payload.text or "").strip().split()[-1]
+    key = (payload.text or "").strip()
     if not key:
         return {"message": "請輸入關鍵字或案號"}
 
-    rows = (
+    # 允許用案號、案號欄位、當事人名稱搜尋；不再用 client_id
+    q = (
         db.query(CaseRecord)
           .filter(
               (CaseRecord.case_id == key) |
@@ -413,22 +409,22 @@ def case_search(payload: CaseSearchIn, db: Session = Depends(get_db)):
               (CaseRecord.client.ilike(f"%{key}%"))
           )
           .order_by(text("updated_at DESC NULLS LAST"))
-          .limit(5)
-          .all()
+          .limit(10)
     )
+
+    rows = q.all()
     if not rows:
         return {"message": f"找不到符合「{key}」的案件"}
 
     def fmt(r):
-        ct = getattr(r, "case_type", None) or "-"
+        ct  = getattr(r, "case_type", None) or "-"
         cid = getattr(r, "case_id", None) or "-"
         num = getattr(r, "case_number", None) or "-"
         cli = getattr(r, "client", None) or "-"
-        prog = getattr(r, "progress", None) or "-"
+        prog= getattr(r, "progress", None) or "-"
         return f"{cli} / {ct} / {num or cid} / 進度:{prog}"
 
     return {"message": "查到以下案件：\n" + "\n".join(fmt(r) for r in rows)}
-
 
 # =============== /api/user 補充路由（供 main.py import router_user） ===============
 router_user = APIRouter(prefix="/api/user", tags=["user"])
