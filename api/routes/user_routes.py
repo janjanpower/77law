@@ -63,47 +63,39 @@ def _parse_intent(text_msg: str):
 # 1) 依 LINE 或姓名查 client_id（給 n8n 的「查 client_id」節點）
 # ==================================================
 @user_router.post("/lookup-client", response_model=LookupOut)
-def lookup_client(payload: LookupIn, db: Session = Depends(get_db)):
-    lid = (payload.line_user_id or "").strip()
-    name = (payload.user_name or "").strip()
-
-    # a) 已正式綁定（律師/用戶）
-    row = db.execute(text("""
-        SELECT client_id
-          FROM client_line_users
-         WHERE line_user_id = :lid AND is_active = TRUE
-         LIMIT 1
-    """), {"lid": lid}).first()
-    if row and row[0]:
-        return LookupOut(client_id=row[0])
-
-    # b) 已註冊/待審（一般用戶）
-    row = db.execute(text("""
-        SELECT client_id
-          FROM pending_line_users
-         WHERE line_user_id = :lid
-           AND status IN ('registered','pending')
-         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
-         LIMIT 1
-    """), {"lid": lid}).first()
-    if row and row[0]:
-        return LookupOut(client_id=row[0])
-
-    # c) 依 login_users 主檔推斷：用「事務所名稱」對應 client_id（只取啟用中的）
-    if name:
+def lookup_client(db, line_user_id: str | None, user_name: str | None, destination: str | None):
+    # 0) 先試：用 LINE Webhook 的 destination 直接映射到事務所
+    if destination:
         row = db.execute(text("""
             SELECT client_id
-            FROM login_users
-            WHERE client_name = :name
-            AND is_active = TRUE
+            FROM line_channel_bindings
+            WHERE destination_id = :dest AND is_active = TRUE
             LIMIT 1
-        """), {"name": name}).first()
+        """), {"dest": destination}).first()
         if row and row[0]:
-            return LookupOut(client_id=row[0])
+            return {"client_id": row[0]}
 
-    # d) 查不到
-    return LookupOut(client_id=None)
+    # 1) 其次：line_user_id 是否已在 client_line_users 綁定
+    row = db.execute(text("""
+        SELECT client_id
+        FROM client_line_users
+        WHERE line_user_id = :lid AND is_active = TRUE
+        LIMIT 1
+    """), {"lid": line_user_id}).first()
+    if row and row[0]:
+        return {"client_id": row[0]}
 
+    # 2) 最後保底（人名/事務所名）：把「登錄 」前綴去掉，再比對是否剛好是事務所名稱
+    name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", (user_name or "").strip())
+    row = db.execute(text("""
+        SELECT client_id
+        FROM login_users
+        WHERE client_name = :name
+          AND is_active = TRUE
+        LIMIT 1
+    """), {"name": name}).first()
+
+    return {"client_id": row[0] if row else None}
 # ==================================================
 # 2) 註冊（n8n 的「用戶確認註冊」會呼叫）
 # ==================================================
