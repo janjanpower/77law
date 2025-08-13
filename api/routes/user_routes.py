@@ -1,22 +1,20 @@
-# api/routes/user_routes.py - 修復版本
+# api/routes/user_routes.py - 最終版（支援 client_id & N8N 直送）
 # -*- coding: utf-8 -*-
 
-from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
+from datetime import datetime
 import re
-import traceback
 import logging
+import traceback
 
 from api.database import get_db
-from api.models_control import PendingLineUser  # 確保有這個 model
-from api.models_cases import CaseRecord  # 查案件用
+from api.models_control import PendingLineUser   # pending_line_users
+from api.models_cases import CaseRecord          # case_records
 
-# 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -25,15 +23,19 @@ user_router = APIRouter(prefix="/api/user", tags=["user"])
 # ---------- I/O 模型 ----------
 class UserRegisterIn(BaseModel):
     line_user_id: str = Field(..., min_length=5)
-    text: str = Field(..., description="原訊息：可能是『登錄 XXX』或『是/否』")
-    client_name: Optional[str] = Field(default=None, description="客戶名稱（從 N8N 來的）")
+    # 兼容舊流程（兩段式）
+    text: Optional[str] = Field(default=None, description="原訊息：可能是『登錄 XXX』或『是/否』")
+    # 供 N8N 直送
+    client_id: Optional[str] = Field(default=None, description="事務所 ID（租戶）")
+    client_name: Optional[str] = Field(default=None, description="事務所名稱（可選）")
+    user_name: Optional[str] = Field(default=None, description="用戶姓名（若有則優先用）")
 
 class UserRegisterOut(BaseModel):
     success: bool
     message: str
     code: Optional[str] = None
     expected_name: Optional[str] = None
-    cases: Optional[list] = None
+    cases: Optional[List[Dict[str, Any]]] = None
 
 class MyCasesIn(BaseModel):
     line_user_id: str = Field(..., min_length=5)
@@ -44,15 +46,21 @@ class MyCasesOut(BaseModel):
     count: Optional[int] = None
     name: Optional[str] = None
 
-# ---------- Helper Functions ----------
+# ---------- Helpers ----------
 def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
-    """解析用戶意圖"""
+    """
+    解析用戶意圖：
+    - 登錄 XXX  -> ("prepare", "XXX")
+    - 是 / 否   -> ("confirm_yes") / ("confirm_no")
+    - ? / ？    -> ("show_cases")
+    - 其他       -> ("none")
+    """
     try:
         msg = (text_msg or "").strip()
         if not msg:
             return "none", None
 
-        # 支援多種「登錄」字形
+        # 支援多種「登錄」字形與前綴空白
         m = re.match(r"^(?:登錄|登陸|登入|登录)\s*(.+)$", msg, flags=re.I)
         if m:
             return ("prepare", m.group(1).strip())
@@ -68,327 +76,290 @@ def _parse_intent(text_msg: str) -> Tuple[str, Optional[str]]:
         logger.error(f"解析意圖失敗: {e}")
         return "none", None
 
-def _is_lawyer(db: Session, line_user_id: str) -> bool:
-    """檢查是否為律師"""
+def _safe_exec(db: Session, op: str, sql: str, params: Dict[str, Any]):
     try:
-        row = db.execute(text("""
-            SELECT 1 FROM client_line_users
-            WHERE line_user_id = :lid AND is_active = TRUE
-            LIMIT 1
-        """), {"lid": line_user_id}).first()
-        return bool(row)
-    except Exception as e:
-        logger.error(f"檢查律師身份失敗: {e}")
-        return False
-
-def _safe_db_operation(db: Session, operation_name: str, sql_query: str, params: Dict[str, Any]):
-    """安全的資料庫操作"""
-    try:
-        result = db.execute(text(sql_query), params)
+        res = db.execute(text(sql), params)
         db.commit()
-        return result
+        return res
     except Exception as e:
-        logger.error(f"{operation_name} 失敗: {e}")
         db.rollback()
+        logger.error(f"{op} 失敗: {e}")
         raise
 
-# ---------- 兩段式登記 (原邏輯保持) ----------
-@user_router.post("/register")
-def register_user(payload: dict, db: Session = Depends(get_db)):
-    line_user_id = (payload.get("line_user_id") or "").strip()
-    user_name    = (payload.get("user_name") or "").strip()
-    client_id    = (payload.get("client_id") or "").strip()
+def _select_one(db: Session, sql: str, params: Dict[str, Any]):
+    return db.execute(text(sql), params).first()
 
-    if not line_user_id or not user_name or not client_id:
-        return {"success": False, "message": "缺少必要欄位(line_user_id/user_name/client_id)"}
+# ---------- 註冊入口 ----------
+@user_router.post("/register", response_model=UserRegisterOut)
+def register_user(payload: UserRegisterIn, db: Session = Depends(get_db)):
+    """
+    用戶註冊端點
+    A) N8N 直送（建議）：只要有 client_id + user_name 即可直接註冊/更新
+    B) 舊兩段式流程：登錄 XXX -> 是/否
+    """
+    try:
+        logger.info(f"[REGISTER] {payload.model_dump()}")
 
-    # 以 (client_id, line_user_id) 當唯一鍵，避免重複送件
-    row = (db.query(PendingLineUser)
-             .filter(PendingLineUser.client_id == client_id,
-                     PendingLineUser.line_user_id == line_user_id)
-             .first())
+        # === A) N8N 直送（優先處理）===
+        if (payload.client_id and payload.client_id.strip()) and (payload.user_name and payload.user_name.strip()):
+            return _handle_n8n_registration(payload, db)
+
+        # 若只有 client_name（舊版你曾用名稱代替）也支援
+        if (payload.client_name and payload.client_name.strip()) and (payload.line_user_id):
+            # 將 client_name 暫存入 expected_name，視同已註冊（保持向下相容）
+            p2 = UserRegisterIn(
+                line_user_id=payload.line_user_id,
+                user_name=payload.client_name.strip(),
+                client_id=payload.client_id,     # 可能為 None；後續可由 verify-secret/pending 回填
+            )
+            return _handle_n8n_registration(p2, db)
+
+        # === B) 舊兩段式流程 ===
+        return _handle_traditional_registration(payload, db)
+
+    except Exception as e:
+        logger.error(f"註冊失敗: {e}")
+        logger.error(traceback.format_exc())
+        return UserRegisterOut(success=False, message="系統錯誤，請稍後再試。代碼: REG_500")
+
+# ---------- N8N 直送處理 ----------
+def _handle_n8n_registration(payload: UserRegisterIn, db: Session) -> UserRegisterOut:
+    """
+    直接把 (client_id, line_user_id, user_name) 寫入/更新 pending_line_users
+    - 以 (client_id, line_user_id) 優先 upsert；若無此唯一約束，退而以 line_user_id upsert。
+    """
+    line_user_id = payload.line_user_id.strip()
+    user_name = (payload.user_name or "").strip()
+    client_id = (payload.client_id or "").strip()
+
+    if not line_user_id or not user_name:
+        return UserRegisterOut(success=False, message="缺少必要欄位(line_user_id/user_name)")
+
+    # 嘗試用 (client_id, line_user_id) 尋找（租戶隔離）
+    row = None
+    if client_id:
+        row = _select_one(db, """
+            SELECT client_id, line_user_id, expected_name, status
+            FROM pending_line_users
+            WHERE client_id = :cid AND line_user_id = :lid
+            LIMIT 1
+        """, {"cid": client_id, "lid": line_user_id})
 
     if row:
-        row.expected_name = user_name
-        row.status = "pending"
-        row.updated_at = datetime.utcnow()
+        # 更新既有記錄
+        _safe_exec(db, "更新 pending_line_users", """
+            UPDATE pending_line_users
+               SET expected_name = :name,
+                   status = 'registered',
+                   updated_at = NOW()
+             WHERE client_id = :cid AND line_user_id = :lid
+        """, {"cid": client_id, "lid": line_user_id, "name": user_name})
     else:
-        row = PendingLineUser(
-            client_id=client_id,              # ✅ 關鍵：寫入事務所ID
-            line_user_id=line_user_id,
-            expected_name=user_name,
-            status="pending",
-            created_at=datetime.utcnow()
-        )
-        db.add(row)
-
-    db.commit()
-    return {"success": True, "message": f"已登錄 {user_name}，請稍候審核"}
-
-def _handle_n8n_registration(payload: UserRegisterIn, db: Session) -> UserRegisterOut:
-    """處理從 N8N 來的註冊請求"""
-    try:
-        client_name = payload.client_name.strip()
-        line_user_id = payload.line_user_id
-
-        logger.info(f"處理 N8N 註冊: {client_name} ({line_user_id})")
-
-        # 檢查是否已經註冊
-        existing = db.execute(text("""
-            SELECT expected_name, status FROM pending_line_users
-            WHERE line_user_id = :lid
-        """), {"lid": line_user_id}).first()
-
-        if existing:
-            if existing[1] in ('registered', 'pending'):
-                return UserRegisterOut(
-                    success=True,
-                    message=f"{existing[0]}，您已經註冊過了。\n輸入「?」查看您的案件。"
-                )
-
-        # 新註冊或更新
-        _safe_db_operation(db, "插入或更新用戶", """
-            INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
-            VALUES (:lid, :name, 'registered', NOW(), NOW())
-            ON CONFLICT (line_user_id)
-            DO UPDATE SET
-                expected_name = :name,
-                status = 'registered',
-                updated_at = NOW()
-        """, {"lid": line_user_id, "name": client_name})
-
-        # 查詢用戶案件
-        cases = db.query(CaseRecord).filter(CaseRecord.client == client_name).limit(3).all()
-
-        if cases:
-            case_summary = f"找到 {len(cases)} 件案件：\n"
-            for case in cases:
-                case_summary += f"• {case.case_type or '案件'} - {case.progress or '處理中'}\n"
-            message = f"歡迎 {client_name}！註冊成功。\n\n{case_summary}\n輸入「?」查看完整案件列表。"
+        # 若找不到，採用 upsert 策略
+        if client_id:
+            # 推薦：你若已建立 UNIQUE (client_id, line_user_id) 就可用 ON CONFLICT
+            _safe_exec(db, "插入/更新 pending_line_users", """
+                INSERT INTO pending_line_users (client_id, line_user_id, expected_name, status, created_at, updated_at)
+                VALUES (:cid, :lid, :name, 'registered', NOW(), NOW())
+                ON CONFLICT (client_id, line_user_id)
+                DO UPDATE SET expected_name = EXCLUDED.expected_name,
+                              status = 'registered',
+                              updated_at = NOW()
+            """, {"cid": client_id, "lid": line_user_id, "name": user_name})
         else:
-            message = f"歡迎 {client_name}！註冊成功。\n\n目前沒有案件記錄。\n輸入「?」可隨時查看案件狀態。"
-
-        return UserRegisterOut(
-            success=True,
-            message=message,
-            expected_name=client_name,
-            cases=[{
-                "case_id": case.case_id,
-                "case_type": case.case_type,
-                "progress": case.progress
-            } for case in cases] if cases else []
-        )
-
-    except Exception as e:
-        logger.error(f"N8N 註冊處理失敗: {e}")
-        raise
-
-def _handle_traditional_registration(payload: UserRegisterIn, db: Session) -> UserRegisterOut:
-    """處理傳統的兩段式註冊"""
-    try:
-        # 解析用戶意圖
-        intent, candidate_name = _parse_intent(payload.text)
-        logger.info(f"解析意圖: {intent}, 候選名稱: {candidate_name}")
-
-        # A) 準備階段：「登錄 XXX」
-        if intent == "prepare":
-            if not candidate_name:
-                return UserRegisterOut(
-                    success=False,
-                    code="invalid_format",
-                    message="請輸入「登錄 您的姓名」，例如：登錄 王小明"
-                )
-
-            # 檢查是否已註冊
-            existing = db.execute(text("""
-                SELECT expected_name FROM pending_line_users
-                WHERE line_user_id = :lid AND status IN ('registered', 'pending')
-            """), {"lid": payload.line_user_id}).first()
-
-            if existing:
-                return UserRegisterOut(
-                    success=True,
-                    message=f"您已註冊為：{existing[0]}\n輸入「?」查看案件"
-                )
-
-            # 插入或更新為確認狀態
-            _safe_db_operation(db, "插入確認狀態", """
+            # 沒帶 client_id 仍允許寫入（相容舊資料），但建議儘快補上
+            _safe_exec(db, "插入/更新(無 client_id) pending_line_users", """
                 INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
-                VALUES (:lid, :name, 'confirming', NOW(), NOW())
+                VALUES (:lid, :name, 'registered', NOW(), NOW())
                 ON CONFLICT (line_user_id)
-                DO UPDATE SET
-                    expected_name = :name,
-                    status = 'confirming',
-                    updated_at = NOW()
-            """, {"lid": payload.line_user_id, "name": candidate_name})
+                DO UPDATE SET expected_name = EXCLUDED.expected_name,
+                              status = 'registered',
+                              updated_at = NOW()
+            """, {"lid": line_user_id, "name": user_name})
 
-            return UserRegisterOut(
-                success=True,
-                message=f"確認您的姓名是「{candidate_name}」嗎？\n請回覆「是」或「否」"
-            )
-
-        # B) 確認「是」
-        if intent == "confirm_yes":
-            row = db.execute(text("""
-                SELECT expected_name FROM pending_line_users
-                WHERE line_user_id = :lid AND status = 'confirming'
-            """), {"lid": payload.line_user_id}).first()
-
-            if not row:
-                return UserRegisterOut(
-                    success=False,
-                    message="請先輸入「登錄 您的姓名」"
-                )
-
-            name = row[0]
-            _safe_db_operation(db, "確認註冊", """
-                UPDATE pending_line_users
-                SET status = 'registered', updated_at = NOW()
-                WHERE line_user_id = :lid
-            """, {"lid": payload.line_user_id})
-
-            return UserRegisterOut(
-                success=True,
-                expected_name=name,
-                message=f"註冊成功！歡迎 {name}，輸入「?」查看您的案件"
-            )
-
-        # C) 確認「否」
-        if intent == "confirm_no":
-            _safe_db_operation(db, "取消註冊", """
-                DELETE FROM pending_line_users
-                WHERE line_user_id = :lid AND status = 'confirming'
-            """, {"lid": payload.line_user_id})
-
-            return UserRegisterOut(
-                success=False,
-                message="已取消，請重新輸入「登錄 您的姓名」"
-            )
-
-        # D) 查詢案件「?」
-        if intent == "show_cases":
-            return _show_user_cases(payload.line_user_id, db)
-
-        # E) 其他文字
-        return UserRegisterOut(
-            success=False,
-            code="invalid_format",
-            message="請輸入「登錄 您的姓名」開始使用"
-        )
-
-    except Exception as e:
-        logger.error(f"傳統註冊處理失敗: {e}")
-        raise
-
-def _show_user_cases(line_user_id: str, db: Session) -> UserRegisterOut:
-    """顯示用戶案件"""
-    try:
-        row = db.execute(text("""
-            SELECT expected_name
-            FROM pending_line_users
-            WHERE line_user_id = :lid AND status IN ('pending','registered','confirming')
-        """), {"lid": line_user_id}).first()
-
-        if not row or not row[0]:
-            return UserRegisterOut(
-                success=False,
-                code="not_registered",
-                message="請先輸入「登錄 您的姓名」才能查詢案件"
-            )
-
-        expected_name = row[0]
+    # 查使用者的最近 3 筆案件（以租戶 + 姓名篩）
+    cases = []
+    if client_id:
         cases = (db.query(CaseRecord)
-                  .filter(CaseRecord.client == expected_name)
-                  .order_by(CaseRecord.updated_at.desc())
-                  .limit(5).all())
+                   .filter(CaseRecord.client_id == client_id,
+                           CaseRecord.client == user_name)
+                   .order_by(CaseRecord.updated_at.desc())
+                   .limit(3).all())
+    else:
+        # 沒有 client_id 時，以姓名模糊查（相容舊資料，不建議長期使用）
+        cases = (db.query(CaseRecord)
+                   .filter(CaseRecord.client == user_name)
+                   .order_by(CaseRecord.updated_at.desc())
+                   .limit(3).all())
 
-        if not cases:
-            return UserRegisterOut(
-                success=True,
-                message=f"{expected_name} 目前沒有案件記錄"
-            )
+    if cases:
+        msg_lines = [f"歡迎 {user_name}！註冊成功。", "", f"找到 {len(cases)} 件案件："]
+        for c in cases:
+            msg_lines.append(f"• {c.case_type or '案件'} / {c.case_number or c.case_id} / 進度:{c.progress or '-'}")
+        msg_lines.append("")
+        msg_lines.append("輸入「?」查看完整案件列表。")
+        message = "\n".join(msg_lines)
+    else:
+        message = f"歡迎 {user_name}！註冊成功。\n\n目前沒有案件記錄。\n輸入「?」可隨時查看案件狀態。"
 
-        def format_case(case):
-            return f"• {case.case_type or '案件'} / {case.case_number or case.case_id} / 進度: {case.progress or '處理中'}"
+    return UserRegisterOut(
+        success=True,
+        message=message,
+        expected_name=user_name,
+        cases=[{"case_id": c.case_id, "case_type": c.case_type, "progress": c.progress} for c in cases] if cases else []
+    )
 
-        message = f"📋 {expected_name} 的案件列表：\n\n"
-        message += "\n".join(format_case(case) for case in cases)
+# ---------- 舊兩段式流程 ----------
+def _handle_traditional_registration(payload: UserRegisterIn, db: Session) -> UserRegisterOut:
+    intent, candidate_name = _parse_intent(payload.text or "")
+    logger.info(f"[REGISTER/legacy] intent={intent} candidate_name={candidate_name}")
 
-        return UserRegisterOut(
-            success=True,
-            message=message,
-            expected_name=expected_name,
-            cases=[{
-                "case_id": case.case_id,
-                "case_type": case.case_type,
-                "progress": case.progress
-            } for case in cases]
-        )
+    # A) 準備：「登錄 XXX」
+    if intent == "prepare":
+        if not candidate_name:
+            return UserRegisterOut(success=False, code="invalid_format",
+                                   message="請輸入「登錄 您的姓名」，例如：登錄 王小明")
 
-    except Exception as e:
-        logger.error(f"顯示案件失敗: {e}")
-        raise
+        # 是否已註冊
+        existed = _select_one(db, """
+            SELECT expected_name, status
+              FROM pending_line_users
+             WHERE line_user_id = :lid
+               AND status IN ('registered','pending')
+        """, {"lid": payload.line_user_id})
 
-# ---------- 查個人案件 API ----------
+        if existed:
+            return UserRegisterOut(success=True,
+                                   message=f"您已註冊為：{existed[0]}\n輸入「?」查看案件")
+
+        # 設為確認中
+        _safe_exec(db, "pending_line_users -> confirming", """
+            INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
+            VALUES (:lid, :name, 'confirming', NOW(), NOW())
+            ON CONFLICT (line_user_id)
+            DO UPDATE SET expected_name = :name, status = 'confirming', updated_at = NOW()
+        """, {"lid": payload.line_user_id, "name": candidate_name})
+
+        return UserRegisterOut(success=True,
+                               message=f"確認您的姓名是「{candidate_name}」嗎？\n請回覆「是」或「否」")
+
+    # B) 確認「是」
+    if intent == "confirm_yes":
+        row = _select_one(db, """
+            SELECT expected_name FROM pending_line_users
+             WHERE line_user_id = :lid AND status = 'confirming'
+        """, {"lid": payload.line_user_id})
+
+        if not row:
+            return UserRegisterOut(success=False, message="請先輸入「登錄 您的姓名」")
+
+        _safe_exec(db, "confirm -> registered", """
+            UPDATE pending_line_users
+               SET status = 'registered', updated_at = NOW()
+             WHERE line_user_id = :lid
+        """, {"lid": payload.line_user_id})
+
+        return UserRegisterOut(success=True,
+                               expected_name=row[0],
+                               message=f"註冊成功！歡迎 {row[0]}，輸入「?」查看您的案件")
+
+    # C) 確認「否」
+    if intent == "confirm_no":
+        _safe_exec(db, "cancel confirming", """
+            DELETE FROM pending_line_users
+             WHERE line_user_id = :lid AND status = 'confirming'
+        """, {"lid": payload.line_user_id})
+        return UserRegisterOut(success=False, message="已取消，請重新輸入「登錄 您的姓名」")
+
+    # D) 查詢案件「?」
+    if intent == "show_cases":
+        return _show_user_cases(payload.line_user_id, db)
+
+    # E) 其他
+    return UserRegisterOut(success=False, code="invalid_format",
+                           message="請輸入「登錄 您的姓名」開始使用")
+
+# ---------- 查個人案件 ----------
+def _show_user_cases(line_user_id: str, db: Session) -> UserRegisterOut:
+    """
+    以 pending_line_users 找 expected_name 與 client_id（若有）
+    然後以 (client_id, expected_name) 查 case_records
+    """
+    row = _select_one(db, """
+        SELECT client_id, expected_name
+          FROM pending_line_users
+         WHERE line_user_id = :lid
+           AND status IN ('pending','registered','confirming')
+         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+         LIMIT 1
+    """, {"lid": line_user_id})
+
+    if not row or not row[1]:
+        return UserRegisterOut(success=False, code="not_registered",
+                               message="請先輸入「登錄 您的姓名」才能查詢案件")
+
+    client_id, expected_name = row[0], row[1]
+
+    q = db.query(CaseRecord).filter(CaseRecord.client == expected_name)
+    if client_id:
+        q = q.filter(CaseRecord.client_id == client_id)
+    cases = q.order_by(CaseRecord.updated_at.desc()).limit(5).all()
+
+    if not cases:
+        return UserRegisterOut(success=True, expected_name=expected_name,
+                               message=f"{expected_name} 目前沒有案件記錄")
+
+    def fmt(c: CaseRecord) -> str:
+        return f"• {c.case_type or '案件'} / {c.case_number or c.case_id} / 進度:{c.progress or '處理中'}"
+
+    msg = "📋 {} 的案件列表：\n\n{}".format(
+        expected_name, "\n".join(fmt(c) for c in cases)
+    )
+    return UserRegisterOut(
+        success=True,
+        expected_name=expected_name,
+        message=msg,
+        cases=[{"case_id": c.case_id, "case_type": c.case_type, "progress": c.progress} for c in cases]
+    )
+
 @user_router.post("/my-cases", response_model=MyCasesOut)
 def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
-    """查詢個人案件 - 供 N8N 和其他系統呼叫"""
-    try:
-        logger.info(f"查詢案件請求: {payload.line_user_id}")
+    """供 N8N 呼叫的查個人案件（與 _show_user_cases 同邏輯，簡化回傳）"""
+    row = _select_one(db, """
+        SELECT client_id, expected_name
+          FROM pending_line_users
+         WHERE line_user_id = :lid
+           AND status IN ('pending','registered')
+         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+         LIMIT 1
+    """, {"lid": payload.line_user_id})
 
-        row = db.execute(text("""
-            SELECT expected_name
-            FROM pending_line_users
-            WHERE line_user_id = :lid AND status IN ('pending','registered')
-        """), {"lid": payload.line_user_id}).first()
+    if not row or not row[1]:
+        return MyCasesOut(success=False, message="請先輸入「登錄 您的姓名」才能查詢案件")
 
-        if not row or not row[0]:
-            return MyCasesOut(
-                success=False,
-                message="請先輸入「登錄 您的姓名」才能查詢案件"
-            )
+    client_id, expected_name = row[0], row[1]
 
-        expected_name = row[0]
-        cases = (db.query(CaseRecord)
-                  .filter(CaseRecord.client == expected_name)
-                  .order_by(CaseRecord.updated_at.desc())
-                  .limit(5).all())
+    q = db.query(CaseRecord).filter(CaseRecord.client == expected_name)
+    if client_id:
+        q = q.filter(CaseRecord.client_id == client_id)
+    cases = q.order_by(CaseRecord.updated_at.desc()).limit(5).all()
 
-        if not cases:
-            return MyCasesOut(
-                success=True,
-                name=expected_name,
-                count=0,
-                message=f"{expected_name} 目前沒有案件記錄"
-            )
+    if not cases:
+        return MyCasesOut(success=True, name=expected_name, count=0,
+                          message=f"{expected_name} 目前沒有案件記錄")
 
-        def format_case(case):
-            return f"• {case.case_type or '案件'} / {case.case_number or case.case_id} / 進度: {case.progress or '處理中'}"
+    def fmt(c: CaseRecord) -> str:
+        return f"• {c.case_type or '案件'} / {c.case_number or c.case_id} / 進度:{c.progress or '處理中'}"
 
-        message = f"📋 {expected_name} 的案件：\n\n"
-        message += "\n".join(format_case(case) for case in cases)
+    msg = "📋 {} 的案件：\n\n{}".format(
+        expected_name, "\n".join(fmt(c) for c in cases)
+    )
+    return MyCasesOut(success=True, name=expected_name, count=len(cases), message=msg)
 
-        return MyCasesOut(
-            success=True,
-            name=expected_name,
-            count=len(cases),
-            message=message
-        )
-
-    except Exception as e:
-        logger.error(f"查詢案件失敗: {e}")
-        logger.error(f"錯誤詳情: {traceback.format_exc()}")
-        return MyCasesOut(
-            success=False,
-            message="系統錯誤，請稍後再試"
-        )
-
-# ---------- 健康檢查端點 ----------
+# ---------- 健康檢查 ----------
 @user_router.get("/health")
 def health_check():
-    """用戶路由健康檢查"""
-    return {"status": "healthy", "service": "user_routes", "timestamp": "2025-08-12"}
+    return {"status": "healthy", "service": "user_routes", "timestamp": datetime.utcnow().isoformat()}
 
-# ========== 為了與原代碼相容，保留原有的路由註冊方式 ==========
-# 這樣可以確保不影響現有功能
-router = user_router  # 別名，供其他地方 import 使用
+# 兼容別名
+router = user_router
