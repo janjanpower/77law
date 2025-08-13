@@ -117,6 +117,31 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
         cid     = (payload.client_id   or "").strip()
         text_in = (payload.text        or "").strip()
 
+
+        # 已註冊就不要再改 expected_name：有 client_id 走複合鍵，沒有就只看 line_user_id
+        if cid:
+            row = db.execute(text("""
+                SELECT 1
+                FROM pending_line_users
+                WHERE client_id = :cid AND line_user_id = :lid
+                AND status = 'registered'
+                LIMIT 1
+            """), {"cid": cid, "lid": lid}).first()
+        else:
+            row = db.execute(text("""
+                SELECT 1
+                FROM pending_line_users
+                WHERE line_user_id = :lid
+                AND status = 'registered'
+                LIMIT 1
+            """), {"lid": lid}).first()
+
+        if row:
+            return RegisterOut(
+                success=True,
+                expected_name=name,
+                message="您已完成登錄，請輸入「?」查詢案件進度。"
+            )
         # ② 如果沒帶 user_name、但有原始 text（例如「登錄 XXX」），用意圖解析補上 name
         if not name and text_in:
             intent, cname = _parse_intent(text_in)
@@ -137,18 +162,24 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 INSERT INTO pending_line_users (client_id, line_user_id, expected_name, status, created_at, updated_at)
                 VALUES (:cid, :lid, :name, 'registered', NOW(), NOW())
                 ON CONFLICT (client_id, line_user_id)
-                DO UPDATE SET expected_name = EXCLUDED.expected_name,
-                              status = 'registered',
-                              updated_at = NOW()
+                DO UPDATE
+                SET expected_name = EXCLUDED.expected_name,
+                    status        = 'registered',
+                    updated_at    = NOW()
+                WHERE pending_line_users.status <> 'registered';
+
             """), {"cid": cid, "lid": lid, "name": name})
         else:
             db.execute(text("""
                 INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
                 VALUES (:lid, :name, 'registered', NOW(), NOW())
                 ON CONFLICT (line_user_id)
-                DO UPDATE SET expected_name = EXCLUDED.expected_name,
-                              status = 'registered',
-                              updated_at = NOW()
+                DO UPDATE
+                SET expected_name = EXCLUDED.expected_name,
+                    status        = 'registered',
+                    updated_at    = NOW()
+                WHERE pending_line_users.status <> 'registered';
+
             """), {"lid": lid, "name": name})
         db.commit()
 
