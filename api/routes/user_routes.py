@@ -89,13 +89,14 @@ def lookup_client(payload: LookupIn, db: Session = Depends(get_db)):
     if row and row[0]:
         return LookupOut(client_id=row[0])
 
-    # c) 依帳號主檔推斷（請改成你的實際表結構；此處以 users.display_name 為例）
+    # c) 依 login_users 主檔推斷：用「事務所名稱」對應 client_id（只取啟用中的）
     if name:
         row = db.execute(text("""
             SELECT client_id
-              FROM users
-             WHERE display_name = :name
-             LIMIT 1
+            FROM login_users
+            WHERE client_name = :name
+            AND is_active = TRUE
+            LIMIT 1
         """), {"name": name}).first()
         if row and row[0]:
             return LookupOut(client_id=row[0])
