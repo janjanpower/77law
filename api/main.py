@@ -1,8 +1,24 @@
 # api/main.py — clean single include version
 
 import os, sys
+# 將 law_controller 的上層資料夾加入搜尋路徑
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from datetime import datetime
 from pathlib import Path
+
+from api.routes import routes_upload, routes_search
+from api.routes.api_routes import router as auth_router
+from api.routes.case_routes import router as cases_router
+from api.routes.case_upload_routes import router as case_upload_router
+from api.routes.case_upsert_routes import router as cases_upsert_router
+from api.routes.file_routes import router as file_router
+from api.routes.lawyer_routes import router as lawyer_router, router_user as user_router
+from api.routes.line_routes import line_router
+from api.routes.pending_routes import router as pending_router
+from api.routes.user_routes import user_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
@@ -27,17 +43,6 @@ app = FastAPI(
 )
 
 # ---- 單一來源，每個 router 掛一次 ----
-from api.routes.case_upload_routes import router as case_upload_router
-from api.routes.api_routes import router as auth_router
-from api.routes.line_routes import line_router
-from api.routes.file_routes import router as file_router
-from api.routes.case_upsert_routes import router as cases_upsert_router
-from api.routes.case_routes import router as cases_router
-from api.routes.lawyer_routes import router as lawyer_router, router_user as user_router
-from api.routes.user_routes import user_router
-from api.routes.pending_routes import router as pending_router
-from api.routes import routes_upload, routes_search
-
 app.include_router(routes_upload.router, prefix="/api/cases", tags=["Cases"])
 app.include_router(routes_search.router, prefix="/api/cases", tags=["Cases"])
 app.include_router(case_upload_router, tags=["cases"])
@@ -49,7 +54,7 @@ app.include_router(cases_router)
 app.include_router(lawyer_router)
 app.include_router(user_router)
 app.include_router(pending_router)
-
+app.include_router(user_router, prefix="/user")
 
 # 可選載入
 try:

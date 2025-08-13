@@ -1,13 +1,16 @@
 # api/routes/user_routes.py
 # -*- coding: utf-8 -*-
 
+from operator import or_
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import text, true
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import logging, traceback, re
+
+from sqlalchemy.sql import func
 
 from api.database import get_db
 from api.models_control import ClientLineUsers
@@ -235,7 +238,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
 # ==================================================
 # 3) 查個人案件（n8n 的「?」分支）
 # ==================================================
-user_router.post("/my-cases")
+@user_router.post("/my-cases")
 def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     lid = (payload.line_user_id or "").strip()
     if not lid:
