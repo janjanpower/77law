@@ -1,6 +1,7 @@
 # api/routes/user_routes.py - 修復版本
 # -*- coding: utf-8 -*-
 
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -92,31 +93,37 @@ def _safe_db_operation(db: Session, operation_name: str, sql_query: str, params:
         raise
 
 # ---------- 兩段式登記 (原邏輯保持) ----------
-@user_router.post("/register", response_model=UserRegisterOut)
-def register_user(payload: UserRegisterIn, db: Session = Depends(get_db)):
-    """
-    用戶註冊端點 - 處理 N8N 來的請求
-    支援多種格式：
-    1. 直接從 N8N 來的 client_name (新增)
-    2. 原有的兩段式註冊流程
-    """
-    try:
-        logger.info(f"收到註冊請求: line_user_id={payload.line_user_id}, text={payload.text}, client_name={payload.client_name}")
+@user_router.post("/register")
+def register_user(payload: dict, db: Session = Depends(get_db)):
+    line_user_id = (payload.get("line_user_id") or "").strip()
+    user_name    = (payload.get("user_name") or "").strip()
+    client_id    = (payload.get("client_id") or "").strip()
 
-        # === 新增邏輯：如果是從 N8N 來的且有 client_name，直接註冊 ===
-        if payload.client_name and payload.client_name.strip():
-            return _handle_n8n_registration(payload, db)
+    if not line_user_id or not user_name or not client_id:
+        return {"success": False, "message": "缺少必要欄位(line_user_id/user_name/client_id)"}
 
-        # === 原有邏輯：兩段式註冊 ===
-        return _handle_traditional_registration(payload, db)
+    # 以 (client_id, line_user_id) 當唯一鍵，避免重複送件
+    row = (db.query(PendingLineUser)
+             .filter(PendingLineUser.client_id == client_id,
+                     PendingLineUser.line_user_id == line_user_id)
+             .first())
 
-    except Exception as e:
-        logger.error(f"註冊失敗: {e}")
-        logger.error(f"錯誤詳情: {traceback.format_exc()}")
-        return UserRegisterOut(
-            success=False,
-            message=f"系統錯誤，請稍後再試。錯誤代碼: REG_500"
+    if row:
+        row.expected_name = user_name
+        row.status = "pending"
+        row.updated_at = datetime.utcnow()
+    else:
+        row = PendingLineUser(
+            client_id=client_id,              # ✅ 關鍵：寫入事務所ID
+            line_user_id=line_user_id,
+            expected_name=user_name,
+            status="pending",
+            created_at=datetime.utcnow()
         )
+        db.add(row)
+
+    db.commit()
+    return {"success": True, "message": f"已登錄 {user_name}，請稍候審核"}
 
 def _handle_n8n_registration(payload: UserRegisterIn, db: Session) -> UserRegisterOut:
     """處理從 N8N 來的註冊請求"""
