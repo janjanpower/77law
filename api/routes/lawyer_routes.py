@@ -1,441 +1,127 @@
-# api/routes/lawyer_routes.py
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+from typing import Optional, Tuple
+import re
 
-import datetime
-import os
-from typing import Optional, Dict, Any
-
-from urllib.parse import quote
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select, text
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 from api.database import get_db
-from api.models_control import LoginUser, ClientLineUsers
 
-# ✅ 與 main.py 對應的名稱
-lawyer_router = APIRouter(prefix="/api/lawyer", tags=["lawyer"])
+# ===== 依你的實際資料表名稱調整這兩個常數 =====
+TABLE_BOUND_USER = "public.client_line_users"   # 一般用戶綁定表：line_user_id / is_active
+TABLE_BOUND_LAWYER = "public.login_users"      # （可選）律師綁定表：line_user_id / is_active
 
-# ---------- I/O Schemas ----------
-class CheckLimitIn(BaseModel):
-    tenant_code: str = Field(..., description="事務所代碼/暗號（先用 client_id，必要時自行改 mapping）")
-    line_user_id: str = Field(..., min_length=5)
+# ────────────────────────────────────────────────────────────────────────────
+# 請求模型
+# ────────────────────────────────────────────────────────────────────────────
 
-class CheckLimitOut(BaseModel):
-    success: bool
-    limit: Optional[int] = None
-    usage: Optional[int] = None
-    tenant: Optional[Dict[str, Any]] = None
-    reason: Optional[str] = None  # "limit_reached" | "invalid_tenant_code"
-
-class BindLawyerIn(BaseModel):
-    tenant_code: str
+class VerifyIn(BaseModel):
+    text: str = ""
     line_user_id: str
 
-class BindLawyerOut(BaseModel):
-    success: bool
-    tenant: Optional[Dict[str, Any]] = None
-    role: Optional[str] = None     # "lawyer"
-    reason: Optional[str] = None   # "already_bound" | "invalid_tenant_code"
+class VerifyOut(BaseModel):
+    route: str
 
-# ---------- Helper ----------
-def resolve_client_by_code(db: Session, tenant_code: str) -> Optional[LoginUser]:
-    """以 client_id（或 client_name）解析事務所。"""
-    client = (
-        db.query(LoginUser)
-        .filter(LoginUser.client_id == tenant_code, LoginUser.is_active == True)
-        .first()
-    )
-    if not client:
-        client = (
-            db.query(LoginUser)
-            .filter(LoginUser.client_name == tenant_code, LoginUser.is_active == True)
-            .first()
-        )
-    return client
+# ────────────────────────────────────────────────────────────────────────────
+# 共用查詢：由 line_user_id 判斷角色
+# ────────────────────────────────────────────────────────────────────────────
 
-def count_current_usage(db: Session, client_id: str) -> int:
-    """目前已啟用的 LINE 綁定數。"""
-    return (
-        db.query(ClientLineUsers)
-        .filter(ClientLineUsers.client_id == client_id, ClientLineUsers.is_active == True)
-        .count()
-    )
-
-def upsert_lawyer_binding(db: Session, client_id: str, line_user_id: str) -> bool:
-    """將使用者綁為律師（冪等）。"""
-    row = (
-        db.query(ClientLineUsers)
-        .filter(ClientLineUsers.line_user_id == line_user_id)
-        .first()
-    )
-    if row:
-        row.client_id = client_id
-        row.user_role = "lawyer"
-        row.is_active = True
-    else:
-        row = ClientLineUsers(
-            client_id=client_id,
-            line_user_id=line_user_id,
-            user_role="lawyer",
-            is_active=True,
-        )
-        db.add(row)
-    db.commit()
-    return True
-
-# ---------- 綁定成功（後端決定名稱） ----------
-class BindUserRequest(BaseModel):
-    success: bool
-    user_id: str
-    client_id: str                 # 從 verify-secret 回傳帶進來
-    role: str = "user"             # 'user' | 'lawyer'，預設一般用戶
-
-class BindUserResponse(BaseModel):
-    success: bool
-    client_name: str | None = None
-    plan_type: str | None = None
-    limit: int = 0
-    usage: int = 0
-    available: int = 0
-    message: str | None = None
-
-@lawyer_router.post("/bind-user", response_model=BindUserResponse)
-def bind_user(payload: BindUserRequest, db: Session = Depends(get_db)):
-    if not payload.success:
-        return BindUserResponse(success=False, message="未執行綁定")
-
-    # 權威：從 login_users 取 client_name / 方案
-    tenant = (db.query(LoginUser)
-              .filter(LoginUser.client_id == payload.client_id,
-                      LoginUser.is_active.is_(True))
-              .first())
-    if not tenant:
-        return BindUserResponse(success=False, message="找不到事務所或未啟用")
-
-    client_id   = tenant.client_id
-    client_name = tenant.client_name
-    plan_type   = getattr(tenant, "plan_type", None)
-    max_users   = int(getattr(tenant, "max_users", 0) or getattr(tenant, "user_limit", 0) or 0)
-
-    # 當前使用數
-    usage_before = db.query(func.count(ClientLineUsers.id)).filter(
-        ClientLineUsers.client_id == client_id,
-        ClientLineUsers.is_active.is_(True)
-    ).scalar() or 0
-    usage_before = int(usage_before)
-
-    # 已綁定？
-    existed = db.query(ClientLineUsers).filter(
-        ClientLineUsers.client_id == client_id,
-        ClientLineUsers.line_user_id == payload.user_id,
-        ClientLineUsers.is_active.is_(True)
-    ).first()
-
-    if existed:
-        msg = _build_plan_message("ℹ️ 已經綁定", client_name, plan_type, max_users, usage_before)
-        return BindUserResponse(
-            success=True,
-            client_name=client_name,
-            plan_type=plan_type,
-            limit=max_users,
-            usage=usage_before,
-            available=max(0, max_users - usage_before),
-            message=msg,
-        )
-
-    # 方案額滿（只限制一般用戶，律師可視需求放寬）
-    if payload.role != "lawyer" and max_users and usage_before >= max_users:
-        msg = _build_plan_message("⚠️ 已額滿，需要升級方案", client_name, plan_type, max_users, usage_before)
-        return BindUserResponse(
-            success=False,
-            client_name=client_name,
-            plan_type=plan_type,
-            limit=max_users,
-            usage=usage_before,
-            available=0,
-            message=msg,
-        )
-
-    # Upsert（以權威名稱寫入）
-    db.execute(text("""
-        INSERT INTO client_line_users (client_id, client_name, line_user_id, user_role, is_active, bound_at)
-        VALUES (:client_id, :client_name, :line_user_id, :role, TRUE, NOW())
-        ON CONFLICT (client_id, line_user_id)
-        DO UPDATE SET client_name = EXCLUDED.client_name,
-                      user_role   = EXCLUDED.user_role,
-                      is_active   = TRUE,
-                      bound_at    = NOW();
-    """), {"client_id": client_id, "client_name": client_name,
-           "line_user_id": payload.user_id, "role": payload.role})
-    db.commit()
-
-    usage_now = db.query(func.count(ClientLineUsers.id)).filter(
-        ClientLineUsers.client_id == client_id,
-        ClientLineUsers.is_active.is_(True)
-    ).scalar() or 0
-    usage_now = int(usage_now)
-
-    msg = _build_plan_message("🎉 綁定成功", client_name, plan_type, max_users, usage_now)
-    return BindUserResponse(
-        success=True,
-        client_name=client_name,
-        plan_type=plan_type,
-        limit=max_users,
-        usage=usage_now,
-        available=max(0, max_users - usage_now),
-        message=msg,
-    )
-
-def _build_plan_message(title: str, client_name: str, plan_type: Optional[str], limit_val: Optional[int], usage_val: int) -> str:
-    plan = plan_type or "未設定"
-    lim  = str(limit_val) if isinstance(limit_val, int) else "未設定"
-    return (
-        f"{title}\n"
-        f"事務所：{client_name}\n"
-        f"方案：{plan}\n"
-        f"上限人數：{lim}\n"
-        f"當前人數：{usage_val}"
-    )
-# =========== 驗證 secret_code ============
-class VerifySecretIn(BaseModel):
-    text: Optional[str] = None
-    user_id: Optional[str] = None
-    reply_token: Optional[str] = None
-    eventType: Optional[str] = None
-    body: Optional[Dict[str, Any]] = None  # 允許直接丟 LINE 原始 webhook body
-
-class VerifySecretOut(BaseModel):
-    success: bool
-    client_name: Optional[str] = None
-
-def extract_from_line_body(body: dict):
-    """從 LINE webhook body 擷取需要的欄位"""
-    try:
-        ev = (body or {}).get("events", [{}])[0]
-        text = (ev.get("message") or {}).get("text")
-        user_id = (ev.get("source") or {}).get("userId")
-        reply_token = ev.get("replyToken")
-        event_type = ev.get("type")
-        return text, user_id, reply_token, event_type
-    except Exception:
-        return None, None, None, None
-
-@lawyer_router.post("/verify-secret")
-async def verify_secret(request: Request, db: Session = Depends(get_db)):
+def _get_binding_role(db: Session, line_user_id: str) -> Optional[str]:
     """
-    修正版本：檢查已註冊用戶，避免重複註冊流程
+    回傳 'USER' / 'LAWYER' / None
+    - USER：在 client_line_users 找到 line_user_id 且 is_active = TRUE
+    - LAWYER：（可選）在 login_users 找到 line_user_id 且 is_active = TRUE
     """
-    try:
-        payload = await request.json()
-    except Exception:
-        return {"success": False, "is_lawyer": False, "client_id": None,
-                "client_name": None, "route": "USER", "bind_url": None}
-
-    text_in = (payload.get("text") or "").strip()
-    line_user_id = payload.get("line_user_id") or payload.get("user_id")
-
-    # === 新增：檢查是否為已註冊的一般用戶 ===
-    if line_user_id:
-        from api.models_control import PendingLineUser
-        existing_user = db.query(PendingLineUser).filter(
-            PendingLineUser.line_user_id == line_user_id,
-            PendingLineUser.status.in_(["pending", "registered"])
-        ).first()
-
-        if existing_user:
-            # 已註冊用戶 - 檢查是否為暗號
-            secret_rec = None
-            if text_in:
-                secret_rec = (
-                    db.query(LoginUser)
-                      .filter(func.btrim(LoginUser.secret_code) == text_in)
-                      .first()
-                )
-
-            if secret_rec:
-                # 是有效暗號，但用戶已註冊 -> 回傳特殊狀態
-                return {
-                    "success": True,  # 暗號有效
-                    "is_lawyer": False,  # 不是律師（因為是已註冊一般用戶）
-                    "client_id": secret_rec.client_id,
-                    "client_name": existing_user.expected_name,  # 使用已註冊的姓名
-                    "route": "REGISTERED_USER",  # 特殊路由：已註冊用戶
-                    "bind_url": None,
-                    "registered_name": existing_user.expected_name  # 額外資訊
-                }
-            else:
-                # 不是暗號，走一般用戶流程
-                return {
-                    "success": False,
-                    "is_lawyer": False,
-                    "client_id": None,
-                    "client_name": existing_user.expected_name,
-                    "route": "USER",
-                    "bind_url": None
-                }
-
-    # === 原有邏輯：未註冊用戶的暗號檢查 ===
-    # 1) 檢查暗號
-    secret_rec = None
-    if text_in:
-        secret_rec = (
-            db.query(LoginUser)
-              .filter(func.btrim(LoginUser.secret_code) == text_in)
-              .first()
-        )
-    is_secret = bool(secret_rec)
-    client_id_from_secret = getattr(secret_rec, "client_id", None) if secret_rec else None
-    client_name_from_secret = getattr(secret_rec, "client_name", None) if secret_rec else None
-
-    # 2) 是否律師
-    is_lawyer = False
-    client_id_from_lawyer = None
-    if line_user_id:
-        q = (db.query(ClientLineUsers)
-               .filter(ClientLineUsers.line_user_id == line_user_id,
-                       ClientLineUsers.is_active == True))
-        if client_id_from_secret:
-            q = q.filter(ClientLineUsers.client_id == client_id_from_secret)
-        clu = q.first()
-        if clu:
-            is_lawyer = True
-            client_id_from_lawyer = getattr(clu, "client_id", None)
-
-    # 3) 路由決定
-    if (not is_secret) and is_lawyer:
-        route = "LAWYER"
-        chosen_client_id = client_id_from_lawyer
-        chosen_client_name = None
-    elif is_secret and (not is_lawyer):
-        route = "LOGIN"
-        chosen_client_id = client_id_from_secret
-        chosen_client_name = client_name_from_secret
-    elif (not is_secret) and (not is_lawyer):
-        route = "USER"
-        chosen_client_id = None
-        chosen_client_name = None
-    else:
-        route = "LAWYER"
-        chosen_client_id = client_id_from_lawyer or client_id_from_secret
-        chosen_client_name = client_name_from_secret if client_id_from_secret == chosen_client_id else None
-
-    # 4) 綁定網址（僅 LOGIN）
-    bind_url = None
-    if route == "LOGIN" and is_secret:
-        base = os.getenv("API_BASE_URL") or os.getenv("APP_BASE_URL") or "https://example.com"
-        bind_url = f"{base}/api/tenant/bind-user?code={quote(text_in)}"
-        if client_id_from_secret:
-            bind_url += f"&client_id={quote(str(client_id_from_secret))}"
-
-    # 5) 若只知道 client_id，補查 client_name
-    if chosen_client_id and not chosen_client_name:
-        rec = db.query(LoginUser).filter(LoginUser.client_id == str(chosen_client_id)).first()
-        if rec:
-            chosen_client_name = rec.client_name
-
-    return {
-        "success": bool(is_secret),
-        "is_lawyer": bool(is_lawyer),
-        "client_id": chosen_client_id,
-        "client_name": chosen_client_name,
-        "route": route,
-        "bind_url": bind_url,
-    }
-
-# =========== 方案查詢 ============
-def _extract_client_name(payload: dict) -> Optional[str]:
-    if not isinstance(payload, dict):
+    if not line_user_id:
         return None
-    name = payload.get("client_name") or payload.get("tenant")
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    for key in ("body", "data"):
-        sub = payload.get(key)
-        if isinstance(sub, dict):
-            name = sub.get("client_name") or sub.get("tenant")
-            if isinstance(name, str) and name.strip():
-                return name.strip()
+
+    # 一般用戶是否已綁定
+    row_user = db.execute(
+        text(f"""
+            SELECT 1
+            FROM {TABLE_BOUND_USER}
+            WHERE line_user_id = :lid AND (is_active = TRUE OR is_active IS NULL)
+            LIMIT 1
+        """),
+        {"lid": line_user_id},
+    ).first()
+    if row_user:
+        return "USER"
+
+    # 律師是否綁定（若你的設計是律師也會寫入某表；沒有的話可忽略）
+    try:
+        row_lawyer = db.execute(
+            text(f"""
+                SELECT 1
+                FROM {TABLE_BOUND_LAWYER}
+                WHERE line_user_id = :lid AND (is_active = TRUE OR is_active IS NULL)
+                LIMIT 1
+            """),
+            {"lid": line_user_id},
+        ).first()
+        if row_lawyer:
+            return "LAWYER"
+    except Exception:
+        # 若沒有這張表或欄位，直接忽略即可
+        pass
+
     return None
 
-@lawyer_router.post("/check-client-plan")
-async def check_client_plan(request: Request, db: Session = Depends(get_db)):
-    try:
-        payload = await request.json()
-    except Exception:
-        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "invalid_json"}
+# ────────────────────────────────────────────────────────────────────────────
+# Router：/api/lawyer 既有路由（更新 verify-secret 規則）
+# ────────────────────────────────────────────────────────────────────────────
 
-    client_name = _extract_client_name(payload)
-    if not client_name:
-        return {"success": False, "client_name": None, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_name_required"}
+router = APIRouter(prefix="/api/lawyer", tags=["lawyer"])
 
-    user = (
-        db.query(LoginUser)
-        .filter(func.btrim(LoginUser.client_name) == client_name.strip())
-        .first()
-    )
-    if not user:
-        return {"success": False, "client_name": client_name, "plan_type": None, "limit": None, "usage": None, "available": None, "message": "client_not_found"}
+@router.post("/verify-secret", response_model=VerifyOut)
+def verify_secret(payload: VerifyIn, db: Session = Depends(get_db)):
+    """
+    分流規則（供 n8n 的 Switch 使用）：
+    1) 已綁定的一般用戶 + 文字為「? / ？」 → REGISTERED_USER
+    2) 未綁定 + 文字「登錄 XXX」 → REGISTER
+    3) 已綁定律師（或你的其他律師驗證規則） → LAWYER
+    4) 其餘 → USER
+    """
+    text_in = (payload.text or "").strip()
+    lid = payload.line_user_id or ""
 
-    plan_type = getattr(user, "plan_type", None)
-    limit_val = getattr(user, "user_limit", None) or getattr(user, "max_users", None)
+    role = _get_binding_role(db, lid)
 
-    usage_val = db.query(func.count(ClientLineUsers.id)).filter(
-        ClientLineUsers.client_id == user.client_id,
-        ClientLineUsers.is_active == True
-    ).scalar() or 0
-    usage_val = int(usage_val)
-    available = max(limit_val - usage_val, 0) if isinstance(limit_val, int) else None
+    # 1) 一般用戶輸入「?」→ 直接走 REGISTERED_USER
+    if role == "USER" and text_in in ("?", "？"):
+        return VerifyOut(route="REGISTERED_USER")
 
-    if isinstance(limit_val, int) and usage_val >= limit_val:
-        msg = _build_plan_message("⚠️ 已額滿，需要升級方案", user.client_name, plan_type, limit_val, usage_val)
-        ok = False
-    else:
-        msg = _build_plan_message("✅ 目前方案資訊", user.client_name, plan_type, limit_val, usage_val)
-        ok = True
+    # 2) 未綁定但輸入「登錄 XXX」→ 讓 n8n 走註冊流程
+    if role is None and re.match(r"^登(錄|陸)\s+.+", text_in):
+        return VerifyOut(route="REGISTER")
 
-    return {
-        "success": ok,
-        "client_name": user.client_name,
-        "plan_type": plan_type,
-        "limit": limit_val,
-        "usage": usage_val,
-        "available": available,
-        "message": msg
-    }
+    # 3) 律師（你也可以在這裡加其他律師暗號判斷）
+    if role == "LAWYER":
+        return VerifyOut(route="LAWYER")
 
-# =========== 健康檢查/測試 ============
-@lawyer_router.get("/verify-secret/ping")
-async def verify_secret_ping():
-    return {"ok": True, "ts": datetime.datetime.utcnow().isoformat()}
+    # 4) 其餘情況 → USER（一般對話/使用說明）
+    return VerifyOut(route="USER")
 
-class CaseSearchIn(BaseModel):
-    text: str
-    line_user_id: Optional[str] = None
 
-@lawyer_router.post("/case-search")
-def case_search(payload: CaseSearchIn, db: Session = Depends(get_db)):
-    from api.models_cases import CaseRecord
-    key = (payload.text or "").strip().split()[-1]
-    if not key:
-        return {"message": "請輸入關鍵字或案號"}
+# ────────────────────────────────────────────────────────────────────────────
+# 可選：/api/user/verify（給 n8n 或除錯查看綁定狀態）
+# ────────────────────────────────────────────────────────────────────────────
 
-    rows = (
-        db.query(CaseRecord)
-          .filter(
-              (CaseRecord.case_id == key) |
-              (CaseRecord.case_number.ilike(f"%{key}%")) |
-              (CaseRecord.client.ilike(f"%{key}%"))
-          )
-          .order_by(CaseRecord.updated_at.desc())
-          .limit(5)
-          .all()
-    )
-    if not rows:
-        return {"message": f"找不到符合「{key}」的案件"}
+router_user = APIRouter(prefix="/api/user", tags=["user"])
 
-    def fmt(r):
-        return f"{r.client} / {r.case_type or ''} / {r.case_number or r.case_id} / 進度:{r.progress or '-'}"
+class VerifyUserIn(BaseModel):
+    line_user_id: str
 
-    return {"message": "查到以下案件：\n" + "\n".join(fmt(r) for r in rows)}
+class VerifyUserOut(BaseModel):
+    route: str   # REGISTERED_USER or UNREGISTERED_USER
+    role: Optional[str] = None  # USER / LAWYER / None（回饋資訊）
+
+@router_user.post("/verify", response_model=VerifyUserOut)
+def verify_user(payload: VerifyUserIn, db: Session = Depends(get_db)):
+    role = _get_binding_role(db, payload.line_user_id)
+    if role == "USER":
+        return VerifyUserOut(route="REGISTERED_USER", role=role)
+    return VerifyUserOut(route="UNREGISTERED_USER", role=role)

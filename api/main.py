@@ -33,7 +33,7 @@ from api.routes.line_routes import line_router
 from api.routes.file_routes import router as file_router
 from api.routes.case_upsert_routes import router as cases_upsert_router
 from api.routes.case_routes import router as cases_router
-from api.routes.lawyer_routes import lawyer_router
+from api.routes.lawyer_routes import router as lawyer_router, router_user as user_router
 from api.routes.user_routes import user_router
 from api.routes.pending_routes import router as pending_router
 from api.routes import routes_upload, routes_search
