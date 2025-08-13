@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text
+from sqlalchemy import func, text, true
 
 from api.database import get_db
 
@@ -94,9 +94,9 @@ def _get_role_by_line_id(db: Session, line_user_id: str) -> Optional[str]:
     # 一般用戶是否已綁定啟用
     row = db.query(ClientLineUsers).filter(
         ClientLineUsers.line_user_id == line_user_id,
-        # 允許 is_active 為 True / 1 / 非空
-        (ClientLineUsers.is_active.is_(True)) | (ClientLineUsers.is_active == 1)
+        func.coalesce(ClientLineUsers.is_active, true()) == true()
     ).first()
+
     if row:
         return "USER"
 
