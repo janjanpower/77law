@@ -224,57 +224,64 @@ def extract_from_line_body(body: dict):
 
 @lawyer_router.post("/verify-secret")
 async def verify_secret(request: Request, db: Session = Depends(get_db)):
-    """
-    修正版本：檢查已註冊用戶，避免重複註冊流程
-    """
-    try:
-        payload = await request.json()
-    except Exception:
-        return {"success": False, "is_lawyer": False, "client_id": None,
-                "client_name": None, "route": "USER", "bind_url": None}
+    p = await request.json()
+    text_in      = (p.get("text") or "").strip()
+    line_user_id = p.get("line_user_id") or p.get("user_id")
+    channel_id   = p.get("destination")            # ★ 讀 LINE 的 channel（事務所綁定點）
 
-    text_in = (payload.get("text") or "").strip()
-    line_user_id = payload.get("line_user_id") or payload.get("user_id")
+    # 1) 已綁定律師 or 已註冊/待審用戶
+    bind_row = db.query(ClientLineUsers)\
+                 .filter(ClientLineUsers.line_user_id == line_user_id,
+                         ClientLineUsers.is_active.is_(True)).first()
+    pending_row = None
+    if not bind_row and line_user_id:
+        pending_row = db.query(PendingLineUser)\
+                        .filter(PendingLineUser.line_user_id == line_user_id,
+                                PendingLineUser.status.in_(["pending","registered"]))\
+                        .first()
 
-    # === 新增：檢查是否為已註冊的一般用戶 ===
-    if line_user_id:
-        from api.models_control import PendingLineUser
-        existing_user = db.query(PendingLineUser).filter(
-            PendingLineUser.line_user_id == line_user_id,
-            PendingLineUser.status.in_(["pending", "registered"])
-        ).first()
+    client_id_from_lawyer  = getattr(bind_row,   "client_id", None)
+    client_id_from_pending = getattr(pending_row,"client_id", None)
 
-        if existing_user:
-            # 已註冊用戶 - 檢查是否為暗號
-            secret_rec = None
-            if text_in:
-                secret_rec = (
-                    db.query(LoginUser)
-                      .filter(func.btrim(LoginUser.secret_code) == text_in)
-                      .first()
-                )
+    # 2) 暗號所屬的事務所
+    secret_rec = None
+    if text_in:
+        secret_rec = db.query(LoginUser)\
+                       .filter(func.btrim(LoginUser.secret_code)==text_in).first()
+    client_id_from_secret = getattr(secret_rec, "client_id", None)
 
-            if secret_rec:
-                # 是有效暗號，但用戶已註冊 -> 回傳特殊狀態
-                return {
-                    "success": True,  # 暗號有效
-                    "is_lawyer": False,  # 不是律師（因為是已註冊一般用戶）
-                    "client_id": secret_rec.client_id,
-                    "client_name": existing_user.expected_name,  # 使用已註冊的姓名
-                    "route": "REGISTERED_USER",  # 特殊路由：已註冊用戶
-                    "bind_url": None,
-                    "registered_name": existing_user.expected_name  # 額外資訊
-                }
-            else:
-                # 不是暗號，走一般用戶流程
-                return {
-                    "success": False,
-                    "is_lawyer": False,
-                    "client_id": None,
-                    "client_name": existing_user.expected_name,
-                    "route": "USER",
-                    "bind_url": None
-                }
+    # 3) Channel 對應（冷啟用）
+    tenant = None
+    if not (client_id_from_lawyer or client_id_from_pending or client_id_from_secret) and channel_id:
+        tenant = db.execute(text("""
+            SELECT client_id FROM bot_channels WHERE channel_id = :cid LIMIT 1
+        """), {"cid": channel_id}).first()
+    client_id_from_channel = tenant[0] if tenant else None
+
+    # 路由（保持你原語意）
+    if bind_row and not secret_rec:
+        route = "LAWYER";       chosen_client_id = client_id_from_lawyer
+    elif (not bind_row) and secret_rec:
+        route = "LOGIN";        chosen_client_id = client_id_from_secret
+    elif (not bind_row) and (not secret_rec):
+        route = "USER";         chosen_client_id = client_id_from_pending or client_id_from_channel
+    else:
+        route = "LAWYER";       chosen_client_id = client_id_from_lawyer or client_id_from_secret
+
+    # 已註冊一般用戶 + 有暗號（你原本特例）
+    if pending_row and secret_rec:
+        route = "REGISTERED_USER"
+        chosen_client_id = client_id_from_pending or client_id_from_secret
+
+    # 最後回傳：任何 route 都盡量帶 client_id（可能為 None）
+    return {
+        "success": bool(secret_rec),
+        "is_lawyer": bool(bind_row),
+        "client_id": chosen_client_id,
+        "client_name": getattr(secret_rec, "client_name", None),
+        "route": route,
+        "bind_url": None
+    }
 
     # === 原有邏輯：未註冊用戶的暗號檢查 ===
     # 1) 檢查暗號
