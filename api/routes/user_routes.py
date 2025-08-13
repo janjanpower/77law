@@ -140,25 +140,16 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             if row and row[0]:
                 cid = row[0]
 
-        # 2) 解析「登錄 XXX」→ name，並一律清掉前綴
-        if not name and text_in:
-            intent, cname = _parse_intent(text_in)
-            if intent == "prepare" and cname:
-                name = cname.strip()
-        name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", name).strip()
-
         if not lid or not name:
             return RegisterOut(success=False, message="缺少必要欄位(line_user_id/user_name)")
 
         # 3) 已註冊早退（避免覆蓋 expected_name）
         row = db.execute(text("""
             SELECT 1 FROM pending_line_users
-            WHERE line_user_id = :lid
-              AND status = 'registered'
+            WHERE line_user_id = :lid AND status = 'registered'
             LIMIT 1
         """), {"lid": lid}).first()
         if row:
-            # （可選）若此時回推得到了 cid，幫忙回填 client_id 一次
             if cid:
                 db.execute(text("""
                     UPDATE pending_line_users
@@ -167,7 +158,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 """), {"cid": cid, "lid": lid})
                 db.commit()
             return RegisterOut(success=True, expected_name=name,
-                               message="您已完成登錄，請輸入「?」查詢案件進度。")
+                            message="您已完成登錄，請輸入「?」查詢案件進度。")
 
         # 4) 第一次註冊：有 cid 與無 cid 分支（已加 WHERE，避免覆蓋已註冊）
         if cid:
