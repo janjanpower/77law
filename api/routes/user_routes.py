@@ -10,6 +10,7 @@ from datetime import datetime
 import logging, traceback, re
 
 from api.database import get_db
+from api.models_control import ClientLineUsers
 from api.models_cases import CaseRecord  # 你專案已有的 ORM，若沒有請改用原生 SQL 查案件
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class RegisterOut(BaseModel):
 
 class MyCasesIn(BaseModel):
     line_user_id: str
+    include_as_opponent: Optional[bool] = False  # 是否把對造人也算進來（預設關閉）
 
 class MyCasesOut(BaseModel):
     success: bool
@@ -233,39 +235,68 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
 # ==================================================
 # 3) 查個人案件（n8n 的「?」分支）
 # ==================================================
-@user_router.post("/my-cases", response_model=MyCasesOut)
+user_router.post("/my-cases")
 def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
-    lid = (payload.line_user_id or '').strip()
+    lid = (payload.line_user_id or "").strip()
     if not lid:
-        return MyCasesOut(success=False, message="缺少 line_user_id")
+        raise HTTPException(status_code=400, detail="line_user_id 必填")
 
-    row = db.execute(text("""
-        SELECT client_id, expected_name
-          FROM pending_line_users
-         WHERE line_user_id = :lid
-           AND status IN ('pending','registered')
-         ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
-         LIMIT 1
-    """), {"lid": lid}).first()
+    # 找綁定資料（允許 is_active 為 NULL 視為有效）
+    bind = db.query(ClientLineUsers).filter(
+        ClientLineUsers.line_user_id == lid,
+        func.coalesce(ClientLineUsers.is_active, true()) == true()
+    ).first()
 
-    if not row or not row[1]:
-        return MyCasesOut(success=False, message="請先輸入「登錄 您的姓名」才能查詢案件")
+    if not bind:
+        return {"ok": False, "message": "目前查無綁定，請先輸入「登錄 你的大名」完成綁定。"}
 
-    cid, name = row[0], row[1]
+    q = db.query(CaseRecord)
 
-    q = db.query(CaseRecord).filter(CaseRecord.client == name)
-    if cid:
-        q = q.filter(CaseRecord.client_id == cid)
-    cases = q.order_by(CaseRecord.updated_at.desc()).limit(5).all()
+    # ✅ 1) 優先用租戶隔離
+    if getattr(bind, "client_id", None):
+        q = q.filter(CaseRecord.client_id == bind.client_id)
 
-    if not cases:
-        return MyCasesOut(success=True, name=name, count=0, message=f"{name} 目前沒有案件記錄")
+        # （可選）如果你希望用戶只看到「自己的案件」，再加上姓名條件
+        if getattr(bind, "user_name", None):
+            if payload.include_as_opponent:
+                q = q.filter(or_(
+                    CaseRecord.client == bind.user_name,
+                    CaseRecord.opposing_party == bind.user_name
+                ))
+            else:
+                q = q.filter(CaseRecord.client == bind.user_name)
+    else:
+        # ⛑️ 2) 舊資料尚未回填 client_id → 退回以姓名查詢
+        if not getattr(bind, "user_name", None):
+            return {"ok": False, "message": "目前查無案件（綁定資料缺少姓名）"}
+        if payload.include_as_opponent:
+            q = q.filter(or_(
+                CaseRecord.client == bind.user_name,
+                CaseRecord.opposing_party == bind.user_name
+            ))
+        else:
+            q = q.filter(CaseRecord.client == bind.user_name)
 
-    def fmt(c: CaseRecord) -> str:
-        return f"• {c.case_type or '案件'} / {c.case_number or c.case_id} / 進度: {c.progress or '處理中'}"
+    q = q.order_by(text("updated_date DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC")).limit(50)
+    rows: List[CaseRecord] = q.all()
 
-    msg = "📋 {} 的案件：\n\n{}".format(name, "\n".join(fmt(c) for c in cases))
-    return MyCasesOut(success=True, name=name, count=len(cases), message=msg)
+    if not rows:
+        return {"ok": True, "total": 0, "message": "目前查無案件"}
+
+    # 你現有的回覆格式（示範）
+    def fmt(r: CaseRecord) -> str:
+        ct  = r.case_type or "-"
+        cid = r.case_id   or "-"
+        num = r.case_number or "-"
+        cli = r.client or "-"
+        prog= r.progress or "-"
+        return f"{cli} / {ct} / {num or cid} / 進度:{prog}"
+
+    return {
+        "ok": True,
+        "total": len(rows),
+        "message": "你的案件如下：\n" + "\n".join(fmt(r) for r in rows)
+    }
 
 @user_router.get("/health")
 def health_check():

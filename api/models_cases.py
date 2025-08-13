@@ -24,10 +24,15 @@ class CaseRecord(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    case_type = Column(String, nullable=False)   # ✅ 不得為 NULL
-    case_id   = Column(String, nullable=False)   # ✅ 不得為 NULL
+    # 核心唯一鍵
+    case_type = Column(String, nullable=False)
+    case_id   = Column(String, nullable=False)
 
-    client         = Column(String)
+    # ✅ 新增：租戶/事務所識別
+    client_id = Column(String, index=True)   # 可為空；之後上傳時會自動寫入
+
+    # 其餘欄位（依你的實際欄位保持不變）
+    client         = Column(String)   # 當事人姓名
     lawyer         = Column(String)
     legal_affairs  = Column(String)
     progress       = Column(String)
@@ -48,7 +53,9 @@ class CaseRecord(Base):
         UniqueConstraint('case_type', 'case_id', name='ux_case_records_type_case'),
         Index('ix_case_records_case_type', 'case_type'),
         Index('ix_case_records_case_id', 'case_id'),
+        Index('ix_case_records_client_id', 'client_id'),
     )
+
 
     def __repr__(self):
         return f"<CaseRecord(id={self.id}, client_id='{self.client_id}', case_id='{self.case_id}', client='{self.client}')>"
