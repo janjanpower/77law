@@ -198,7 +198,6 @@ def _render_case_brief_list(items: List[Dict[str, Any]], label: str, session_key
         lines.append(f"{i}. {reason}（案件編號：{num}）")
     lines.append("")
     lines.append(f"💡 請輸入選項號碼 (1-{len(items)})")
-    lines.append(f"#KEY:{session_key}")
     return "\n".join(lines)
 
 # ============================ 會話暫存：清理策略 ============================
@@ -556,6 +555,73 @@ def choose_case(payload: ChooseCaseIn, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="案件不存在或已移除")
 
     return {"ok": True, "message": render_case_detail(case)}
+
+
+# ========= NEW: 6) 單一選單選擇端點（自動判斷類別選單/案件列表） =========
+class MenuSelectIn(BaseModel):
+    line_user_id: str
+    choice: int  # 1..N
+
+@user_router.post("/menu-select")
+def menu_select(payload: MenuSelectIn, db: Session = Depends(get_db)):
+    lid  = (payload.line_user_id or "").strip()
+    idx  = int(payload.choice)
+
+    # 抓該用戶最近一筆未過期的選單
+    row = db.execute(
+        text(f"""
+            SELECT session_key, scope, payload_json, created_at
+            FROM user_query_sessions
+            WHERE line_user_id = :lid
+              AND created_at >= NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
+            ORDER BY created_at DESC
+            LIMIT 1
+        """),
+        {"lid": lid, "ttl": SESSION_TTL_MINUTES},
+    ).first()
+
+    if not row:
+        raise HTTPException(status_code=400, detail="尚無有效選單，請重新輸入「?」")
+
+    skey, scope, payload, created_at = row
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+
+    # 用後即刪舊選單
+    _consume_session(db, lid, skey)
+
+    # 依 scope 分流
+    if scope == "category_menu":
+        menu   = payload["menu"]
+        bytype = payload["by_type"]
+        if not (1 <= idx <= len(menu)):
+            raise HTTPException(status_code=400, detail="選項超出範圍")
+
+        chosen = menu[idx - 1]  # {"key": "...", "label": "...", "count": ...}
+        key = chosen["key"]
+        bucket = bytype[key]
+        items = bucket["items"]
+        label = bucket["label"]
+
+        # 建立新的「案件列表」session
+        new_key = _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
+        msg = _render_case_brief_list(items, label, new_key)
+        return {"ok": True, "total": len(items), "message": msg}
+
+    elif scope.startswith("case_list:"):
+        items = payload["items"]
+        if not (1 <= idx <= len(items)):
+            raise HTTPException(status_code=400, detail="選項超出範圍")
+
+        case_id = items[idx - 1]["id"]
+        case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail="案件不存在或已移除")
+
+        return {"ok": True, "message": render_case_detail(case)}
+
+    else:
+        raise HTTPException(status_code=400, detail="選單已失效，請重新輸入「?」")
 
 # ============================ 健康檢查 ============================
 @user_router.get("/health")
