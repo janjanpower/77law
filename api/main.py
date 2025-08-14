@@ -1,11 +1,16 @@
 # api/main.py — clean single include version
-
+try:
+    from api.routes import routes_upload, routes_search  # 先嘗試原本的匯入
+except ModuleNotFoundError:
+    import sys, pathlib
+    HERE = pathlib.Path(__file__).resolve()
+    # 將 law_controller 這層加入 sys.path，讓 `from api...` 成為頂層 package
+    PKG_ROOT = HERE.parents[1]  # .../law_controller
+    if str(PKG_ROOT) not in sys.path:
+        sys.path.insert(0, str(PKG_ROOT))
+    # 再試一次
+    from api.routes import routes_upload, routes_search
 import os, sys
-# 將 law_controller 的上層資料夾加入搜尋路徑
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
-
 from datetime import datetime
 from pathlib import Path
 
@@ -18,10 +23,15 @@ from api.routes.file_routes import router as file_router
 from api.routes.lawyer_routes import router as lawyer_router, router_user as user_router
 from api.routes.line_routes import line_router
 from api.routes.pending_routes import router as pending_router
-from api.routes.user_routes import user_router
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
+
+
+# 將 law_controller 的上層資料夾加入搜尋路徑
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
 
 CURRENT_FILE = Path(__file__).resolve()
