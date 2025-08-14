@@ -108,18 +108,36 @@ def _normalize_hhmm(h: int, m: int, ampm: Optional[str]) -> str:
     return f"{max(0,min(23,h)):02d}:{max(0,min(59,m)):02d}"
 
 def _extract_time_from_text(text: str) -> Optional[str]:
+    """增強版時間提取，支援更多格式"""
+    if not text:
+        return None
+
     s = _to_halfwidth(text or "")
+
+    # 標準時間格式 HH:MM
     m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)[:：\.]([0-5]\d)", s, re.I)
     if m:
         return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+
+    # 中文時間格式 X點Y分
     m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)\s*[點时時点]\s*([0-5]?\d)\s*(?:分)?", s, re.I)
     if m:
         return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+
+    # 純數字格式 HHMM
     m = re.search(r"(?<!\d)([0-2]?\d)([0-5]\d)(?!\d)", s)
     if m:
         return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
+
+    # 如果直接就是 HH:MM 格式的字串
+    m = re.match(r"^\s*([0-2]?\d):([0-5]\d)\s*$", s)
+    if m:
+        return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
+
     return None
 
+# 如果您的時間資料可能直接就是 "13:00" 這種格式，
+# 也可以在 _extract_time_from_any 函數中加強處理
 def _extract_time_from_any(val) -> Optional[str]:
     if val is None:
         return None
@@ -133,7 +151,16 @@ def _extract_time_from_any(val) -> Optional[str]:
             t = _extract_time_from_any(v)
             if t: return t
         return None
-    return _extract_time_from_text(str(val))
+
+    # 轉為字串處理
+    val_str = str(val).strip()
+
+    # 如果直接是時間格式，先嘗試直接使用
+    if re.match(r"^\s*\d{1,2}:\d{2}\s*$", val_str):
+        return val_str
+
+    # 否則用文字提取
+    return _extract_time_from_text(val_str)
 
 _COMMON_TIME_KEYS = {
     "time","schedule_time","court_time","hearing_time","session_time",
@@ -316,9 +343,12 @@ def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) 
         time_str = it.get("time")
         stage    = (it.get("stage") or "-").strip()
 
-        title = f"{i}. {date_str}  {stage}"
-        if time_str:
-            title += f"  {time_str}"
+        # 修正：確保時間正確顯示
+        if time_str and time_str.strip():
+            title = f"{i}. {date_str}  {stage}  {time_str.strip()}"
+        else:
+            title = f"{i}. {date_str}  {stage}"
+
         lines.append(title)
 
         for n in it.get("notes", []):
