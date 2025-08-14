@@ -11,9 +11,8 @@ LINE 一般用戶/律師查案路由（單租戶版，n8n 無需新增節點）
 
 import logging, traceback, re, json, os
 from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple,Literal
 from uuid import uuid4
-
 from api.database import get_db
 from api.models_cases import CaseRecord  # 你專案的案件 ORM
 from fastapi import APIRouter, Depends, HTTPException
@@ -51,6 +50,16 @@ class RegisterOut(BaseModel):
     success: bool
     message: str
     expected_name: Optional[str] = None
+    route: Literal[
+        'REGISTER_PREPARE',   # 請確認您的大名（登錄 XXX 後）
+        'REGISTER_DONE',      # 完成登錄（是）
+        'REGISTER_RETRY',     # 重新輸入（否）
+        'MENU_CATEGORY',      # 類別選單（通常由 /my-cases 回）
+        'MENU_LIST',          # 案件列表（選好類別後）
+        'CASE_DETAIL',        # 單筆案件詳情
+        'INFO',               # 一般提示
+        'ERROR'               # 錯誤
+    ] = 'INFO'
 
 class MyCasesIn(BaseModel):
     line_user_id: str
@@ -172,7 +181,6 @@ def render_case_detail(case) -> str:
     legal_affairs = getattr(case, "legal_affairs", None) or "-"
     opposing      = case.opposing_party or "-"
     progress      = case.progress or "待處理"
-    stages_text   = _fmt_stages(getattr(case, "progress_stages", None))
     created_at    = _fmt_dt(getattr(case, "created_date", None))
     updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
 
@@ -345,7 +353,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 # 產生新列表選單（不存 key，因為我們改成「永遠讀最近一筆」）
                 _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
                 msg = _render_case_brief_list(items, label)
-                return RegisterOut(success=True, message=msg)
+                return RegisterOut(success=True, message=msg, route='MENU_LIST')
 
             # B. 案件列表 → 回單筆詳細
             elif scope.startswith("case_list:"):
@@ -358,7 +366,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 if not case:
                     return RegisterOut(success=False, message="案件不存在或已移除，請輸入「?」重新載入。")
 
-                return RegisterOut(success=True, message=render_case_detail(case))
+                return RegisterOut(success=True, message=render_case_detail(case), route='CASE_DETAIL')
 
             else:
                 return RegisterOut(success=False, message="選單已失效，請重新輸入「?」。")
@@ -388,9 +396,9 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             return RegisterOut(
                 success=True,
                 expected_name=candidate,
-                message=f"請確認您的大名：{candidate}\n回覆「是」確認，回覆「否」重新輸入。"
+                message=f"請確認您的大名：{candidate}\n回覆「是」確認，回覆「否」重新輸入。",
+                route='REGISTER_PREPARE'
             )
-
         # 1b) 「是」→ 將 pending → registered
         if intent == "confirm_yes":
             row = db.execute(text("""
@@ -416,8 +424,10 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             return RegisterOut(
                 success=True,
                 expected_name=final_name,
-                message=f"歡迎 {final_name}！已完成登錄。\n輸入「?」即可查詢您的案件進度。"
+                message=f"歡迎 {final_name}！已完成登錄。\n輸入「?」即可查詢您的案件進度。",
+                route='REGISTER_DONE'
             )
+
 
         # 1c) 「否」→ 清候選姓名，維持 pending
         if intent == "confirm_no":
@@ -430,7 +440,8 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             """), {"lid": lid})
             db.commit()
             _consume_all_sessions(db, lid)
-            return RegisterOut(success=True, message="好的，請重新輸入「登錄 您的大名」。")
+            return RegisterOut(success=True, message="好的，請重新輸入「登錄 您的大名」。", route='REGISTER_RETRY')
+
 
         # 1d) 其他文字 → 若已 registered 給提示；否則引導登錄
         row = db.execute(text("""
@@ -485,11 +496,15 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     rows: List[CaseRecord] = q.all()
 
     if not rows:
-        return {"ok": True, "total": 0, "message": f"沒有找到「{user_name}」的案件。"}
+        return {"ok": True, "total": 0,
+                "message": f"沒有找到「{user_name}」的案件。",
+                "route": "INFO"}                     # ⬅️ 新增
 
     if len(rows) == 1:
-        # 只有 1 件 → 直接詳細
-        return {"ok": True, "total": 1, "message": render_case_detail(rows[0])}
+        return {"ok": True, "total": 1,
+                "message": render_case_detail(rows[0]),
+                "route": "CASE_DETAIL"}              # ⬅️ 新增
+
 
     # 多件 → 依類別歸群並產生「類別選單」
     buckets: Dict[str, Dict[str, Any]] = {}
@@ -504,17 +519,28 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
             "updated_at": _fmt_dt(getattr(r, "updated_date", None) or getattr(r, "updated_at", None))
         })
 
+    # —— 多筆 → 依類別歸群 …（你的原有分組程式碼保留）
     types_present = [k for k in ["CRIM", "CIVIL", "OTHER"] if k in buckets]
-    menu_items = [{"key": k, "label": buckets[k]["label"], "count": len(buckets[k]["items"])}
-                  for k in types_present]
 
-    # 存一筆「類別選單」session，後續數字輸入會由 /register 讀取最近一筆
-    _save_session(
-        db, lid, "category_menu",
-        {"menu": menu_items, "by_type": buckets}
-    )
-    msg = _render_category_menu(menu_items)
-    return {"ok": True, "total": len(rows), "message": msg}
+    if len(types_present) >= 2:
+        # 類別選單
+        menu_items = [{"key": k, "label": buckets[k]["label"], "count": len(buckets[k]["items"])}
+                    for k in types_present]
+        _save_session(db, lid, "category_menu", {"menu": menu_items, "by_type": buckets})
+        msg = _render_category_menu(menu_items)
+        return {"ok": True, "total": len(rows),
+                "message": msg,
+                "route": "MENU_CATEGORY"}            # ⬅️ 新增
+
+    # 只有一種類別 → 直接列出該類別清單
+    only_key = types_present[0]
+    items = buckets[only_key]["items"]
+    label = buckets[only_key]["label"]
+    _save_session(db, lid, f"case_list:{only_key}", {"label": label, "items": items})
+    msg = _render_case_brief_list(items, label)
+    return {"ok": True, "total": len(rows),
+            "message": msg,
+            "route": "MENU_LIST"}
 
 # ============================ 健康檢查 ============================
 @user_router.get("/health")
