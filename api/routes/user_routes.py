@@ -139,9 +139,12 @@ def _build_progress_view(progress_stages):
             for stage, v in data.items():
                 if isinstance(v, dict):
                     push(stage,
-                         v.get("date") or v.get("at") or v.get("updated_at") or v.get("time") or "-",
-                         v.get("time"),
-                         v.get("note") or v.get("remark") or v.get("memo"))
+                        v.get("date") or v.get("at") or v.get("updated_at") or v.get("time") or "-",
+                        v.get("time"),
+                        v.get("note") or v.get("notes") or v.get("remark") or v.get("memo"))
+
+                    # list 形式（同上）
+                    note  = item.get("note") or item.get("notes") or item.get("remark") or item.get("memo")
                 else:
                     # v 是日期字串；若含時間（例如 "2025-08-05 13:00"），自動切開
                     vv = str(v)
@@ -202,11 +205,28 @@ def render_case_detail(case) -> str:
     lines.append("📈 案件進度歷程：")
     lines.extend(pv["lines"])
 
-    # ↙️ 就是你要的這種顯示：在清單下方獨立一行「備註」
-    if pv["notes"]:
-        lines.append(f"💭備註：{'；'.join(pv['notes'])}")
+    # 🔸 同時顯示『案件整體備註』與『各階段備註彙整』
+    case_note = (
+        getattr(case, "progress_notes", None)   # ← 你前端的欄位
+        or getattr(case, "progress_note", None)
+        or getattr(case, "progress_remark", None)
+        or getattr(case, "remark", None)
+        or getattr(case, "remarks", None)
+        or getattr(case, "note", None)
+        or getattr(case, "memo", None)
+    )
 
-    lines.append(f"📊 進度統計：共完成 {pv['count']} 個階段")
+    note_parts = []
+    if case_note:
+        note_parts.append(str(case_note).strip())
+    note_parts.extend([str(n).strip() for n in pv["notes"] if n])
+
+    # 去重後輸出
+    note_parts = [n for i, n in enumerate(note_parts) if n and n not in note_parts[:i]]
+    if note_parts:
+        lines.append(f"💭備註：{'；'.join(note_parts)}")
+
+    # lines.append(f"📊 進度統計：共完成 {pv['count']} 個階段")
 
     lines.append("────────────────────")
     lines.append("📁 案件資料夾：")
