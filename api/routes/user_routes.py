@@ -193,11 +193,35 @@ def _split_date_time_str(s: str):
         return left.strip(), right.strip()
     return s, None
 
-def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
+def _iter_stage_items(progress_stages, progress_times=None) -> List[Dict[str, Any]]:
     """
     展平成 list[{stage,date,time,notes_from_stage}]。
-    支援 dict/list/JSON 字串；時間鍵特別支援 progress_times。
+    支援 dict/list/JSON 字串；同時可用 progress_times 映射補上各階段的時間。
     """
+    # 先處理 progress_times 可能的型別（dict / JSON 字串 / None）
+    time_map = {}
+    if isinstance(progress_times, str):
+        try:
+            time_map = json.loads(progress_times) or {}
+        except Exception:
+            time_map = {}
+    elif isinstance(progress_times, dict):
+        time_map = progress_times or {}
+
+    def _get_time_from_map(stage_name: str) -> Optional[str]:
+        if not time_map:
+            return None
+        # 直取
+        val = time_map.get(stage_name)
+        if val:
+            return _extract_time_from_any(val)
+        # 寬鬆比對（去空白、全半形與大小寫）
+        norm = (stage_name or "").strip().lower()
+        for k, v in time_map.items():
+            if (k or "").strip().lower() == norm:
+                return _extract_time_from_any(v)
+        return None
+
     data = progress_stages
     if isinstance(data, str):
         try:
@@ -218,18 +242,21 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
             if isinstance(payload, dict):
                 raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
                 raw_time = _pick(payload, "time", "schedule_time", "court_time", "hearing_time",
-                                 "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
+                                 "session_time", "time_str", "clock", "progress_time", "開庭時間", "時間")
                 d, t = (None, None)
                 if raw_date:
                     d, t = _split_date_time_str(raw_date)
                 if not t:
-                    t = _extract_time_from_any(raw_time) or _find_time_in_payload(payload)
+                    # 先從 payload 內挖，再從 progress_times 補
+                    t = _extract_time_from_any(raw_time) or _find_time_in_payload(payload) or _get_time_from_map(stage)
                 notes = _as_list_of_str(
                     _pick(payload, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
                 )
                 items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
             else:
                 d, t = _split_date_time_str(str(payload))
+                if not t:
+                    t = _get_time_from_map(stage)
                 items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": []})
         return items
 
@@ -240,12 +267,12 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
             stage = _pick(it, "stage", "name", "label", "phase", "title") or "-"
             raw_date = _pick(it, "date", "at", "updated_at", "datetime", "schedule_date")
             raw_time = _pick(it, "time", "schedule_time", "court_time", "hearing_time",
-                             "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
+                             "session_time", "time_str", "clock", "progress_time", "開庭時間", "時間")
             d, t = (None, None)
             if raw_date:
                 d, t = _split_date_time_str(raw_date)
             if not t:
-                t = _extract_time_from_any(raw_time) or _find_time_in_payload(it)
+                t = _extract_time_from_any(raw_time) or _find_time_in_payload(it) or _get_time_from_map(stage)
             notes = _as_list_of_str(
                 _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
             )
@@ -254,64 +281,20 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
 
     return items
 
-def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> None:
-    """
-    依『階段名稱』把案件層級 progress_notes 併到 items[*]['notes']。
-    支援 dict / list；str 無法對到階段則忽略。
-    """
-    if case_level_notes is None:
-        for it in items:
-            it["notes"] = list(it.get("notes_from_stage") or [])
-        return
 
-    obj = case_level_notes
-    if isinstance(obj, str):
-        for it in items:
-            it["notes"] = list(it.get("notes_from_stage") or [])
-        return
-
-    mapping: Dict[str, List[str]] = {}
-    if isinstance(obj, dict):
-        for stage, val in obj.items():
-            mapping[stage] = _as_list_of_str(val)
-    elif isinstance(obj, list):
-        for it in obj:
-            if not isinstance(it, dict):
-                continue
-            stage = _pick(it, "stage", "name", "label", "phase", "title")
-            notes = _as_list_of_str(
-                _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
-            )
-            if stage:
-                mapping.setdefault(stage, []).extend(notes)
-
-    for it in items:
-        s = it.get("stage")
-        merged = list(it.get("notes_from_stage") or [])
-        if s in mapping:
-            merged.extend(mapping[s])
-        seen, unique = set(), []
-        for n in merged:
-            n = str(n).strip()
-            if not n or n in seen:
-                continue
-            seen.add(n)
-            unique.append(n)
-        it["notes"] = unique
-
-def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) -> List[str]:
+def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None, progress_times=None) -> List[str]:
     """
     回傳列印用文字行：
       1. 2025-08-14  一審  13:00
       💬 備註：帶文件
     """
-    items = _iter_stage_items(progress_stages)
+    items = _iter_stage_items(progress_stages, progress_times=progress_times)
     _merge_case_level_notes(items, case_level_notes)
 
     lines: List[str] = []
     for i, it in enumerate(items, 1):
         date_str = (it.get("date") or "-").strip()
-        time_str = it.get("time")
+        time_str = (it.get("time") or "").strip()
         stage    = (it.get("stage") or "-").strip()
 
         title = f"{i}. {date_str}  {stage}"
@@ -319,12 +302,13 @@ def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) 
             title += f"  {time_str}"
         lines.append(title)
 
-        for n in it.get("notes", []):
-            for s in re.split(r"\r?\n", n):
-                if s.strip():
-                    lines.append(f"💬 備註：{s.strip()}")
+        for s in it.get("notes") or []:
+            s = str(s).strip()
+            if s:
+                lines.append(f"💬 備註：{s}")
 
     return lines
+
 
 # ============================ Helpers：類別/選單 ============================
 def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
@@ -444,8 +428,7 @@ def render_case_detail(case) -> str:
     timeline = _build_progress_timeline_with_notes(
         getattr(case, "progress_stages", None),
         getattr(case, "progress_notes", None),
-        getattr(case, "progress_times", None),
-
+        getattr(case, "progress_times", None),    # <--- 新增這行
     )
     if timeline:
         lines.extend(timeline)
@@ -453,12 +436,10 @@ def render_case_detail(case) -> str:
         lines.append("（目前沒有進度記錄）")
 
     lines.append("────────────────────")
-    lines.append("📁 案件資料夾：")
-    lines.append("（稍後開放）")
-    lines.append("────────────────────")
     lines.append(f"🟥建立時間：{created_at}")
     lines.append(f"🟩更新時間：{updated_at}")
     return "\n".join(lines)
+# --- END PATCH ---
 
 # ============================ 1) /register ============================
 @user_router.post("/register", response_model=RegisterOut)
