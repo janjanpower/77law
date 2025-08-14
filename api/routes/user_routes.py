@@ -88,7 +88,6 @@ def _fmt_dt(v):
 
 # ============================ Helpers：進度「備註」視圖 ============================
 def _as_list_of_str(val):
-    """把 notes 欄位轉成 list[str]（接受 str / list / dict）。"""
     if val is None:
         return []
     if isinstance(val, str):
@@ -109,10 +108,6 @@ def _pick(d: dict, *keys):
     return None
 
 def _split_date_time_str(s: str):
-    """
-    把一個可能同時含日期與時間的字串拆成 (date, time)。
-    支援：'YYYY-MM-DD HH:MM'、'YYYY/MM/DD HH:MM'、'YYYY-MM-DDTHH:MM' 等。
-    """
     if not s:
         return None, None
     s = str(s).strip()
@@ -122,150 +117,88 @@ def _split_date_time_str(s: str):
     if " " in s:
         left, right = s.split(" ", 1)
         return left.strip(), right.strip()
-    return s, None  # 只有日期或只有時間（就先放到 date）
+    return s, None
 
-def _iter_stage_items(obj):
+def _build_progress_timeline_with_notes(progress_stages):
     """
-    解析多種結構為 iterable(dict)：每個 item 具有：
-      - stage：階段名稱
-      - notes：list[str] 備註
-      - date：日期（若有）
-      - time：時間（若有）
-    支援：
-      dict: {"一審":{"date":"...","time":"...","note":"..."}, "二審": {...}}
-      list: [{"stage":"一審","date":"...","time":"...","note":"..."}, ...]
-      包一層：{"stages":[...]}/{"items":[...]}/{"data":[...]}
-      str: 嘗試 json.loads，失敗則忽略
+    回傳列印用文字行：
+      1. 2025-08-05  調解  13:00
+      💬 備註：帶文件
+    只要該階段有備註才印「備註」行；階段行一定印。
+    支援 list / dict / JSON 字串。
     """
-    data = obj
-    if isinstance(obj, str):
+    data = progress_stages
+    if isinstance(data, str):
         try:
-            data = json.loads(obj)
+            data = json.loads(data)
         except Exception:
             return []
 
-    # 容器鍵
+    items = []
+
+    # 允許外層容器鍵
     if isinstance(data, dict) and any(k in data for k in ("stages", "items", "data")):
         for k in ("stages", "items", "data"):
             if k in data:
                 data = data[k]
                 break
 
-    def extract_dt(payload: dict):
-        """從 payload 中抓 date/time，若 date 本身夾時間就切開。"""
-        raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
-        raw_time = _pick(payload, "time", "schedule_time")
-        d, t = None, None
-        if raw_date:
-            d, t = _split_date_time_str(raw_date)
-        if raw_time and not t:
-            t = str(raw_time).strip()
-        return d, t
-
     if isinstance(data, dict):
+        # 依 dict 插入順序
         for stage, payload in data.items():
             if isinstance(payload, dict):
-                d, t = extract_dt(payload)
+                raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
+                raw_time = _pick(payload, "time", "schedule_time")
+                d, t = (None, None)
+                if raw_date:
+                    d, t = _split_date_time_str(raw_date)
+                if raw_time and not t:
+                    t = str(raw_time).strip()
                 notes = _as_list_of_str(
-                    _pick(payload, "progress_notes", "note", "notes", "remark", "memo", "comment", "comments", "description", "desc")
+                    _pick(payload, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
                 )
-                yield {"stage": stage, "notes": notes, "date": d, "time": t}
-        return
+                items.append({"stage": stage, "date": d, "time": t, "notes": notes})
+            else:
+                # 值是日期（可能含時間）
+                d, t = _split_date_time_str(str(payload))
+                items.append({"stage": stage, "date": d, "time": t, "notes": []})
 
-    if isinstance(data, list):
-        for item in data:
-            if not isinstance(item, dict):
+    elif isinstance(data, list):
+        for it in data:
+            if not isinstance(it, dict):
                 continue
-            stage = _pick(item, "stage", "name", "label", "phase", "phase_name", "title")
-            # 抓 date/time（同上邏輯）
-            raw_date = _pick(item, "date", "at", "updated_at", "datetime", "schedule_date")
-            raw_time = _pick(item, "time", "schedule_time")
-            d, t = None, None
+            stage = _pick(it, "stage", "name", "label", "phase", "title") or "-"
+            raw_date = _pick(it, "date", "at", "updated_at", "datetime", "schedule_date")
+            raw_time = _pick(it, "time", "schedule_time")
+            d, t = (None, None)
             if raw_date:
                 d, t = _split_date_time_str(raw_date)
             if raw_time and not t:
                 t = str(raw_time).strip()
-
             notes = _as_list_of_str(
-                _pick(item, "progress_notes", "note", "notes", "remark", "memo", "comment", "comments", "description", "desc")
+                _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
             )
-            yield {"stage": stage, "notes": notes, "date": d, "time": t}
-        return
+            items.append({"stage": stage, "date": d, "time": t, "notes": notes})
 
-    return []
+    lines = []
+    for i, it in enumerate(items, 1):
+        date_str = (it.get("date") or "-").strip()
+        time_str = it.get("time")
+        stage    = (it.get("stage") or "-").strip()
+        title = f"{i}. {date_str}  {stage}"
+        if time_str:
+            title += f"  {time_str}"
+        lines.append(title)
 
-def _build_stage_notes_view(progress_stages, case_level_notes=None) -> List[str]:
-    """
-    回傳只含『有備註的階段』的文字行，且階段行會帶日期/時間（若有）：
-      一審 2025-08-10 13:00
-        備註 A
-        備註 B
-    若 progress_stages 完全無法解析，回退使用案件層級 progress_notes。
-    """
-    lines: List[str] = []
-    added = False
-
-    for item in _iter_stage_items(progress_stages):
-        stage = (item.get("stage") or "-").strip()
-        notes = [n for n in item.get("notes", []) if n]
-        if not notes:
-            continue
-
-        # 標題行：階段 + 日期/時間（有就顯示）
-        d = item.get("date")
-        t = item.get("time")
-        header = stage
-        parts = []
-        if d: parts.append(str(d).strip())
-        if t: parts.append(str(t).strip())
-        if parts:
-            header = f"{stage} {' '.join(parts)}"
-        lines.append(header)
-
-        # 備註內容行（可多行）
-        for n in notes:
-            for s in re.split(r"\r?\n", n):
-                if s.strip():
-                    lines.append(f"  {s.strip()}")
-        added = True
-
-    # 完全沒取到 → 回退案件層級 notes（通常沒有日期時間）
-    if not added and case_level_notes is not None:
-        obj = case_level_notes
-        if isinstance(obj, str):
-            try:
-                obj = json.loads(obj)
-            except Exception:
-                text = obj.strip()
-                if text:
-                    lines.append("案件備註")
-                    for s in re.split(r"\r?\n", text):
-                        if s.strip():
-                            lines.append(f"  {s.strip()}")
-                return lines
-
-        if isinstance(obj, dict):
-            for stage, note_val in obj.items():
-                notes = _as_list_of_str(note_val)
-                if not notes:
-                    continue
-                lines.append(f"{stage}")
-                for s in notes:
-                    lines.append(f"  {s}")
-        elif isinstance(obj, list):
-            for it in obj:
-                if not isinstance(it, dict):
-                    continue
-                stage = _pick(it, "stage", "name", "label", "phase", "phase_name", "title") or "案件備註"
-                notes = _as_list_of_str(_pick(it, "progress_notes", "note", "notes", "remark", "memo", "comment", "comments", "description", "desc"))
-                if not notes:
-                    continue
-                lines.append(f"{stage}")
-                for s in notes:
-                    lines.append(f"  {s}")
+        # 只有有備註才加一行（可能多行）
+        notes = it.get("notes") or []
+        if notes:
+            for n in notes:
+                for s in re.split(r"\r?\n", n):
+                    if s.strip():
+                        lines.append(f"💬 備註：{s.strip()}")
 
     return lines
-
 # ============================ Helpers：類別/選單 ============================
 def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
     t = (case_type or "").strip()
@@ -366,7 +299,7 @@ def render_case_detail(case) -> str:
     created_at    = _fmt_dt(getattr(case, "created_date", None))
     updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
 
-    lines: List[str] = []
+    lines = []
     lines.append("ℹ️ 案件詳細資訊")
     lines.append("────────────────────")
     lines.append(f"📌 案件編號：{case_number}")
@@ -380,28 +313,23 @@ def render_case_detail(case) -> str:
     lines.append(f"負責股別：{division}")
     lines.append("────────────────────")
 
-    # 只顯示「每個階段的備註」
-    lines.append("📈案件進度備註：")
-    stage_notes_lines = _build_stage_notes_view(
-        getattr(case, "progress_stages", None),
-        getattr(case, "progress_notes", None)
-    )
-    if stage_notes_lines:
-        lines.extend(stage_notes_lines)
+    # ▼▼ 這裡是新的進度輸出樣式 ▼▼
+    lines.append("📈案件進度歷程：")
+    timeline = _build_progress_timeline_with_notes(getattr(case, "progress_stages", None))
+    if timeline:
+        lines.extend(timeline)
     else:
-        lines.append("（目前沒有階段備註）")
+        lines.append("（目前沒有記錄）")
+    # ▲▲ 這裡結束 ▲▲
 
     lines.append("────────────────────")
     lines.append("📁 案件資料夾：")
-    # lines.append("🔢 輸入編號瀏覽（1–2）檔案")
-    # lines.append("")
-    # lines.append("  1. 案件資訊（2 個檔案）")
-    # lines.append("  2. 進度總覽（1 個檔案）")
     lines.append("（稍後開放）")
     lines.append("────────────────────")
-    lines.append(f"🟥建立時間：{_fmt_dt(getattr(case, 'created_date', None))}")
-    lines.append(f"🟩更新時間：{_fmt_dt(getattr(case, 'updated_date', None) or getattr(case, 'updated_at', None))}")
+    lines.append(f"🟥建立時間：{created_at}")
+    lines.append(f"🟩更新時間：{updated_at}")
     return "\n".join(lines)
+
 
 # ============================ 1) /register（含數字選單） ============================
 @user_router.post("/register", response_model=RegisterOut)
