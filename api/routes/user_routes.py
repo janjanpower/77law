@@ -174,6 +174,79 @@ def _build_progress_view(progress_stages):
     except Exception:
         return {"lines": [str(progress_stages)], "notes": [], "count": 1}
 
+def _build_stage_notes_view(progress_stages):
+    """
+    只輸出『有備註的階段』，格式：
+      • <stage>
+        <note line 1>
+        <note line 2>（若有）
+    支援的資料結構：
+      - dict: { "一審": {"date":"...", "note":"..."}, "二審": {...} }
+      - list: [ {"stage":"一審", "note":"..."}, {"stage":"二審", "notes":[...]} ]
+      - 字串/其他：忽略（因為無法得知 stage 與 note）
+    備註欄位鍵名：note / notes / remark / memo（notes 可為 list）
+    """
+    if not progress_stages:
+        return []
+
+    # 可能是 JSON 字串
+    data = progress_stages
+    if isinstance(progress_stages, str):
+        try:
+            data = json.loads(progress_stages)
+        except Exception:
+            return []  # 純文字不處理
+
+    def to_lines(stage_label, note_obj):
+        """把一個階段的備註物件展開成多行"""
+        if note_obj is None or note_obj == "":
+            return []
+        lines = []
+        # 轉為 list[str]
+        if isinstance(note_obj, (list, tuple)):
+            note_list = [str(x).strip() for x in note_obj if str(x).strip()]
+        else:
+            note_list = [str(note_obj).strip()] if str(note_obj).strip() else []
+
+        if not note_list:
+            return []
+
+        lines.append(f"{stage_label}")         # 第一行：階段名
+        for n in note_list:                    # 後續：縮排的備註內容行
+            # 若備註內含換行，就切成多行
+            sublines = [s for s in re.split(r"\r?\n", n) if s.strip()]
+            for s in sublines:
+                lines.append(f"  {s}")
+        return lines
+
+    out = []
+
+    if isinstance(data, dict):
+        for stage, v in data.items():
+            note = None
+            if isinstance(v, dict):
+                note = v.get("note") or v.get("notes") or v.get("remark") or v.get("memo")
+            # 若是字串或其他型別，當作沒有備註 → 忽略
+            out.extend(to_lines(stage, note))
+
+    elif isinstance(data, list):
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            stage = item.get("stage") or item.get("name") or item.get("label")
+            note  = item.get("note") or item.get("notes") or item.get("remark") or item.get("memo")
+            if stage:
+                out.extend(to_lines(stage, note))
+
+    # 移除完全重複的相鄰區塊（避免重覆資料）
+    dedup = []
+    for line in out:
+        if not dedup or dedup[-1] != line:
+            dedup.append(line)
+
+    return dedup
+
+
 def render_case_detail(case) -> str:
     case_number   = case.case_number or case.case_id or "-"
     client        = case.client or "-"
@@ -200,31 +273,17 @@ def render_case_detail(case) -> str:
     lines.append(f"對造：{opposing}")
     lines.append(f"負責股別：{division}")
     lines.append("────────────────────")
-    # 進度清單 + 備註 + 統計
-    pv = _build_progress_view(getattr(case, "progress_stages", None))
-    lines.append("📈 案件進度歷程：")
-    lines.extend(pv["lines"])
+    # === 取代原本進度輸出區塊 ===
+    lines.append("📈 案件進度備註：")
 
-    # 🔸 同時顯示『案件整體備註』與『各階段備註彙整』
-    case_note = (
-        getattr(case, "progress_notes", None)   # ← 你前端的欄位
-        or getattr(case, "progress_note", None)
-        or getattr(case, "progress_remark", None)
-        or getattr(case, "remark", None)
-        or getattr(case, "remarks", None)
-        or getattr(case, "note", None)
-        or getattr(case, "memo", None)
-    )
+    stage_notes_lines = _build_stage_notes_view(getattr(case, "progress_stages", None))
+    if stage_notes_lines:
+        lines.extend(stage_notes_lines)
+    else:
+        lines.append("（目前沒有階段備註）")
 
-    note_parts = []
-    if case_note:
-        note_parts.append(str(case_note).strip())
-    note_parts.extend([str(n).strip() for n in pv["notes"] if n])
-
-    # 去重後輸出
-    note_parts = [n for i, n in enumerate(note_parts) if n and n not in note_parts[:i]]
-    if note_parts:
-        lines.append(f"💭備註：{'；'.join(note_parts)}")
+    # 若你仍想保留「最新進度」就留著；不想要可刪除
+    lines.append(f"⚠️ 最新進度：{progress}")
 
     # lines.append(f"📊 進度統計：共完成 {pv['count']} 個階段")
 
