@@ -256,7 +256,7 @@ def render_case_detail(case) -> str:
     division      = case.division or "-"
     legal_affairs = getattr(case, "legal_affairs", None) or "-"
     opposing      = case.opposing_party or "-"
-    progress      = case.progress or "待處理"
+    # progress    = case.progress or "待處理"   # 若不需要就保留註解
     created_at    = _fmt_dt(getattr(case, "created_date", None))
     updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
 
@@ -273,19 +273,14 @@ def render_case_detail(case) -> str:
     lines.append(f"對造：{opposing}")
     lines.append(f"負責股別：{division}")
     lines.append("────────────────────")
-    # === 取代原本進度輸出區塊 ===
-    lines.append("📈 案件進度備註：")
 
+    # ===== 只顯示「每個階段的備註」 =====
+    lines.append("📈 案件進度備註：")
     stage_notes_lines = _build_stage_notes_view(getattr(case, "progress_stages", None))
     if stage_notes_lines:
         lines.extend(stage_notes_lines)
     else:
-        lines.append("（目前沒有階段備註）")
-
-    # 若你仍想保留「最新進度」就留著；不想要可刪除
-    lines.append(f"⚠️ 最新進度：{progress}")
-
-    # lines.append(f"📊 進度統計：共完成 {pv['count']} 個階段")
+        lines.append("無備註")
 
     lines.append("────────────────────")
     lines.append("📁 案件資料夾：")
@@ -298,6 +293,7 @@ def render_case_detail(case) -> str:
     lines.append(f"🟥建立時間：{created_at}")
     lines.append(f"🟩更新時間：{updated_at}")
     return "\n".join(lines)
+
 
 # —— 類別歸一：回 (key, label)
 def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
