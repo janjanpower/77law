@@ -4,9 +4,8 @@
 LINE 一般用戶/律師查案路由（單租戶、n8n 零改動）
 - 使用者輸入「?」 → /my-cases
 - 其他（登錄 XXX／是／否／數字選單） → /register
-- 多筆 → 類別選單（刑事/民事/其他）；單筆 → 直接詳情
+- 多筆 → 類別選單；單筆 → 直接詳情
 - 進度呈現：每一階段一行（含日期/時間），若有備註就接一行「💬 備註：…」
-- 會話暫存 user_query_sessions：TTL 由環境變數 UQS_TTL_MINUTES 控制（預設 30 分）
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -86,10 +85,9 @@ def _fmt_dt(v):
         return v.strftime("%Y-%m-%d %H:%M:%S")
     return str(v)
 
-import re, json
-
+# ============================ Helpers：進度時間線（含備註與強韌時間解析） ============================
 def _to_halfwidth(s: str) -> str:
-    """全形數字、冒號轉半形。"""
+    """全形數字、冒號等轉半形。"""
     if not s: return s
     out = []
     for ch in str(s):
@@ -97,12 +95,12 @@ def _to_halfwidth(s: str) -> str:
         if 0xFF10 <= code <= 0xFF19:   # ０-９
             out.append(chr(code - 0xFEE0))
         elif ch in "：．，／－":
-            out.append({ "：":":", "．":".", "，":",", "／":"/", "－":"-" }[ch])
+            out.append({"：":":", "．":".", "，":",", "／":"/", "－":"-"}[ch])
         else:
             out.append(ch)
     return "".join(out)
 
-def _normalize_hhmm(h: int, m: int, ampm: str | None) -> str:
+def _normalize_hhmm(h: int, m: int, ampm: Optional[str]) -> str:
     ampm = (ampm or "").strip().lower()
     if ampm in ("pm", "p.m.", "下午"):
         if h % 12 != 0: h = (h % 12) + 12
@@ -111,57 +109,66 @@ def _normalize_hhmm(h: int, m: int, ampm: str | None) -> str:
         if h == 12: h = 0
     return f"{max(0,min(23,h)):02d}:{max(0,min(59,m)):02d}"
 
-def _extract_time_from_text(text: str) -> str | None:
-    """從一串文字中抓出時間並正規化為 HH:MM。"""
+def _extract_time_from_text(text: str) -> Optional[str]:
+    """從文字抓出時間並正規化為 HH:MM。"""
     s = _to_halfwidth(text or "")
-    # 1) (上午/下午/AM/PM) H:MM
+    # (上午/下午/AM/PM) H:MM
     m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)[:：\.]([0-5]\d)", s, re.I)
     if m:
         return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
-    # 2) (上午/下午/AM/PM) H點MM分 / H時MM分
+    # (上午/下午/AM/PM) H點MM分 / H時MM分
     m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)\s*[點时時点]\s*([0-5]?\d)\s*(?:分)?", s, re.I)
     if m:
         return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
-    # 3) 純 3~4 位數（1300/900）
+    # 純 3~4 位數（1300/900）
     m = re.search(r"(?<!\d)([0-2]?\d)([0-5]\d)(?!\d)", s)
     if m:
         return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
     return None
 
+def _extract_time_from_any(val) -> Optional[str]:
+    """接受 str/list/tuple/dict，回傳第一個可解析的 HH:MM。"""
+    if val is None:
+        return None
+    if isinstance(val, (list, tuple)):
+        for x in val:
+            t = _extract_time_from_any(x)
+            if t: return t
+        return None
+    if isinstance(val, dict):
+        for v in val.values():
+            t = _extract_time_from_any(v)
+            if t: return t
+        return None
+    return _extract_time_from_text(str(val))
+
 _COMMON_TIME_KEYS = {
     "time","schedule_time","court_time","hearing_time","session_time",
-    "time_str","clock","progress_time","開庭時間","時間","時刻","約定時間"
+    "time_str","clock","progress_time","progress_times","開庭時間","時間","時刻","約定時間"
 }
 
-def _find_time_in_payload(obj) -> str | None:
-    """
-    遞迴在 payload 任何位置找時間；支援 str / list / dict。
-    先試常見鍵名，再掃描所有字串值。
-    """
+def _find_time_in_payload(obj) -> Optional[str]:
+    """遞迴在 payload 任意位置找時間。"""
     if obj is None:
         return None
     if isinstance(obj, str):
         return _extract_time_from_text(obj)
-
     if isinstance(obj, dict):
-        # 先看常見鍵名
         for k in _COMMON_TIME_KEYS:
             if k in obj and obj[k] not in (None, ""):
-                t = _extract_time_from_text(str(obj[k]))
+                t = _extract_time_from_any(obj[k])
                 if t: return t
-        # 再遞迴所有值
         for v in obj.values():
             t = _find_time_in_payload(v)
             if t: return t
         return None
-
     if isinstance(obj, (list, tuple)):
         for v in obj:
-            t = _find_time_in_payload(v)
+            t = _extract_time_from_any(v)
             if t: return t
+        return None
     return None
 
-# ============================ Helpers：進度時間線（含備註） ============================
 def _as_list_of_str(val):
     """把 notes 欄位轉成 list[str]（接受 str / list / dict）。"""
     if val is None:
@@ -198,12 +205,8 @@ def _split_date_time_str(s: str):
 
 def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
     """
-    把多種資料結構展平成 list[ {stage, date, time, notes_from_stage} ]。
-    支援：
-      dict: {"一審":{"date":"...","time":"...","note":"..."}, "二審": {...}}
-      list: [{"stage":"一審","date":"...","time":"...","note":"..."}, ...]
-      包一層：{"stages":[...]}/{"items":[...]}/{"data":[...]}
-      str: 嘗試 json.loads
+    展平成 list[{stage,date,time,notes_from_stage}]。
+    支援 dict/list/JSON 字串，且支援時間鍵 progress_times。
     """
     data = progress_stages
     if isinstance(data, str):
@@ -226,15 +229,12 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
             if isinstance(payload, dict):
                 raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
                 raw_time = _pick(payload, "time", "schedule_time", "court_time", "hearing_time",
-                                "session_time", "time_str", "clock", "progress_time", "開庭時間", "時間")
+                                 "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
                 d, t = (None, None)
                 if raw_date:
                     d, t = _split_date_time_str(raw_date)
-                # 若指定 time 欄位沒抓到，再全域掃描一次
                 if not t:
-                    t = _extract_time_from_text(raw_time) if raw_time else _find_time_in_payload(payload)
-                if raw_time and not t:
-                    t = str(raw_time).strip()
+                    t = _extract_time_from_any(raw_time) or _find_time_in_payload(payload)
                 notes = _as_list_of_str(
                     _pick(payload, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
                 )
@@ -250,12 +250,13 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
                 continue
             stage = _pick(it, "stage", "name", "label", "phase", "title") or "-"
             raw_date = _pick(it, "date", "at", "updated_at", "datetime", "schedule_date")
-            raw_time = _pick(it, "time", "schedule_time")
+            raw_time = _pick(it, "time", "schedule_time", "court_time", "hearing_time",
+                             "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
             d, t = (None, None)
             if raw_date:
                 d, t = _split_date_time_str(raw_date)
-            if raw_time and not t:
-                t = str(raw_time).strip()
+            if not t:
+                t = _extract_time_from_any(raw_time) or _find_time_in_payload(it)
             notes = _as_list_of_str(
                 _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
             )
@@ -265,13 +266,7 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
     return items
 
 def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> None:
-    """
-    依『階段名稱』把案件層級的 progress_notes 併到 items[*]['notes']。
-    支援：
-      - dict: {"一審": "...", "二審": ["a","b"]}
-      - list: [{"stage":"一審", "note":"..."}, {"name":"二審","notes":[...]}]
-      - str: 忽略（不易對應到階段）
-    """
+    """依『階段名稱』把案件層級的 progress_notes 併到 items[*]['notes']。"""
     if case_level_notes is None:
         for it in items:
             it["notes"] = list(it.get("notes_from_stage") or [])
@@ -284,7 +279,6 @@ def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> No
             it["notes"] = list(it.get("notes_from_stage") or [])
         return
 
-    # 先做一個查表：stage -> list[str]
     mapping: Dict[str, List[str]] = {}
     if isinstance(obj, dict):
         for stage, val in obj.items():
@@ -300,7 +294,6 @@ def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> No
             if stage:
                 mapping.setdefault(stage, []).extend(notes)
 
-    # 合併：notes = notes_from_stage ∪ mapping[stage]
     for it in items:
         s = it.get("stage")
         merged = list(it.get("notes_from_stage") or [])
@@ -321,7 +314,6 @@ def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) 
     回傳列印用文字行：
       1. 2025-08-05  調解  13:00
       💬 備註：帶文件
-    只要該階段有備註才印「備註」行；階段行一定印。
     """
     items = _iter_stage_items(progress_stages)
     _merge_case_level_notes(items, case_level_notes)
@@ -337,7 +329,6 @@ def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) 
             title += f"  {time_str}"
         lines.append(title)
 
-        # 有備註才加
         for n in it.get("notes", []):
             for s in re.split(r"\r?\n", n):
                 if s.strip():
@@ -459,11 +450,11 @@ def render_case_detail(case) -> str:
     lines.append(f"負責股別：{division}")
     lines.append("────────────────────")
 
-    # 進度時間線（每一階段一行，若有備註就接「💬 備註：…」）
+    # 進度時間線（每一階段一行；若有備註就接「💬 備註：…」）
     lines.append("📈 案件進度歷程：")
     timeline = _build_progress_timeline_with_notes(
         getattr(case, "progress_stages", None),
-        getattr(case, "progress_notes", None)   # 會依階段名稱合併
+        getattr(case, "progress_notes", None)   # 依階段名稱合併
     )
     if timeline:
         lines.extend(timeline)
@@ -507,7 +498,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 if not (1 <= choice <= len(menu)):
                     return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。", route='INFO')
 
-                chosen = menu[choice - 1]   # {"key": "...", "label": "...", "count": ...}
+                chosen = menu[choice - 1]
                 key = chosen["key"]
                 bucket = bytype[key]
                 items = bucket["items"]
