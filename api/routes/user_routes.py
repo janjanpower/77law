@@ -1,111 +1,743 @@
-# api/routes/user_routes.py — provides /api/user/register and /api/user/my-cases
-from typing import Any, Dict, List, Optional
+# api/routes/user_routes.py
+# -*- coding: utf-8 -*-
+"""
+單租戶 LINE 用戶查案（n8n 零改動）
+- 「?」 → /my-cases
+- 其他（登錄 XXX / 是 / 否 / 數字選單）→ /register
+- 多筆先出「案件類別選單」，單筆直接詳情
+- 進度呈現：每一階段一行（含日期/時間），若有備註就緊接一行「💬 備註：…」
+- 已特別支援時間欄位：progress_times（可為字串或 list）
+"""
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
-from sqlalchemy import select, desc
+from sqlalchemy import text, or_
+from typing import Optional, List, Dict, Any, Tuple, Literal
+from datetime import datetime
+from uuid import uuid4
+import logging, traceback, re, json, os
 
-# Absolute imports for Heroku compatibility
 from api.database import get_db
+from api.models_cases import CaseRecord
 
-# Optional models (guarded import to avoid hard crashes if not present)
-try:
-    from api.models_control import PendingLineUsers, ClientLineUsers
-except Exception:
-    PendingLineUsers = None  # type: ignore
-    ClientLineUsers = None   # type: ignore
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-try:
-    from api.models_case import CaseRecord  # 假設你的案件模型是這個名稱
-except Exception:
-    CaseRecord = None  # type: ignore
+user_router = APIRouter(prefix="/api/user", tags=["user"])
 
-user_router = APIRouter(prefix="/user", tags=["user"])
+# ============================ 可調參數 ============================
+SESSION_TTL_MINUTES = int(os.getenv("UQS_TTL_MINUTES", "30"))
 
-# ---------- Schemas ----------
+# ============================ Pydantic Models ============================
 class RegisterIn(BaseModel):
-    line_user_id: str = Field(..., description="LINE 使用者 ID")
-    name: Optional[str] = Field("", description="當事人姓名（可選）")
+    line_user_id: str = Field(..., min_length=5)
+    user_name:   Optional[str] = None
+    client_id:   Optional[str] = None
+    text:        Optional[str] = None
+    destination: Optional[str] = None
 
 class RegisterOut(BaseModel):
     success: bool
     message: str
+    expected_name: Optional[str] = None
+    route: Literal[
+        'REGISTER_PREPARE',
+        'REGISTER_DONE',
+        'REGISTER_RETRY',
+        'MENU_CATEGORY',
+        'MENU_LIST',
+        'CASE_DETAIL',
+        'INFO',
+        'ERROR'
+    ] = 'INFO'
 
 class MyCasesIn(BaseModel):
-    line_user_id: str = Field(..., description="LINE 使用者 ID")
-
-class CaseItem(BaseModel):
-    case_id: str
-    client: Optional[str] = None
-    case_type: Optional[str] = None
-    progress: Optional[str] = None
-    updated_at: Optional[str] = None
-
-class MyCasesOut(BaseModel):
-    success: bool
     line_user_id: str
-    cases: List[CaseItem] = []
+    include_as_opponent: Optional[bool] = False
 
-# ---------- Endpoints ----------
+# ============================ Helpers：一般 ============================
+def _normalize_text(s: str) -> str:
+    s = (s or "")
+    s = s.replace("？", "?")
+    s = re.sub(r"[０-９]", lambda m: chr(ord(m.group(0)) - 0xFEE0), s)
+    return s.strip()
 
-@user_router.post("/register", response_model=RegisterOut)
-def register_user(payload: RegisterIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """
-    最小可用版：
-    - 若存在 PendingLineUsers，寫入/更新 pending 紀錄；否則只回成功訊息，留給 n8n/前端後續處理。
-    """
-    lid = payload.line_user_id.strip()
-    name = (payload.name or "").strip()
+def _parse_intent(text_msg: str):
+    msg = _normalize_text(text_msg)
+    if not msg:
+        return "none", None
+    m = re.match(r"^(?:登錄|登陸|登入|登录)\s*(.+)$", msg, flags=re.I)
+    if m:
+        return "prepare", m.group(1).strip()
+    if msg in ("是","yes","Yes","YES"): return "confirm_yes", None
+    if msg in ("否","no","No","NO"):   return "confirm_no", None
+    if msg == "?":                      return "show_cases", None
+    return "none", None
 
-    if not lid:
-        raise HTTPException(status_code=400, detail="line_user_id 必填")
+def _fmt_dt(v):
+    if not v:
+        return "-"
+    if isinstance(v, str):
+        return v[:19].replace("T", " ")
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    return str(v)
 
-    if PendingLineUsers is not None:
-        # upsert by line_user_id
-        existing = db.query(PendingLineUsers).filter(PendingLineUsers.line_user_id == lid).one_or_none()
-        if existing:
-            if name:
-                existing.expected_name = name
-            db.add(existing)
+# ============================ Helpers：進度時間線（時間 + 備註） ============================
+def _to_halfwidth(s: str) -> str:
+    if not s: return s
+    out = []
+    for ch in str(s):
+        code = ord(ch)
+        if 0xFF10 <= code <= 0xFF19:
+            out.append(chr(code - 0xFEE0))
+        elif ch in "：．，／－":
+            out.append({"：":":", "．":".", "，":",", "／":"/", "－":"-"}[ch])
         else:
-            rec = PendingLineUsers(line_user_id=lid, expected_name=name or None, status="pending")
-            db.add(rec)
-        db.commit()
+            out.append(ch)
+    return "".join(out)
 
-    msg = "已建立註冊請求" + (f"：{name}" if name else "")
-    return {"success": True, "message": msg}
+def _normalize_hhmm(h: int, m: int, ampm: Optional[str]) -> str:
+    ampm = (ampm or "").strip().lower()
+    if ampm in ("pm", "p.m.", "下午"):
+        if h % 12 != 0: h = (h % 12) + 12
+        else: h = 12
+    elif ampm in ("am", "a.m.", "上午"):
+        if h == 12: h = 0
+    return f"{max(0,min(23,h)):02d}:{max(0,min(59,m)):02d}"
 
-@user_router.post("/my-cases", response_model=MyCasesOut)
-def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)) -> Dict[str, Any]:
+def _extract_time_from_text(text: str) -> Optional[str]:
+    """增強版時間提取，支援更多格式"""
+    if not text:
+        return None
+
+    s = _to_halfwidth(text or "")
+
+    # 標準時間格式 HH:MM
+    m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)[:：\.]([0-5]\d)", s, re.I)
+    if m:
+        return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+
+    # 中文時間格式 X點Y分
+    m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)\s*[點时時点]\s*([0-5]?\d)\s*(?:分)?", s, re.I)
+    if m:
+        return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+
+    # 純數字格式 HHMM
+    m = re.search(r"(?<!\d)([0-2]?\d)([0-5]\d)(?!\d)", s)
+    if m:
+        return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
+
+    # 如果直接就是 HH:MM 格式的字串
+    m = re.match(r"^\s*([0-2]?\d):([0-5]\d)\s*$", s)
+    if m:
+        return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
+
+    return None
+
+# 如果您的時間資料可能直接就是 "13:00" 這種格式，
+# 也可以在 _extract_time_from_any 函數中加強處理
+def _extract_time_from_any(val) -> Optional[str]:
+    if val is None:
+        return None
+    if isinstance(val, (list, tuple)):
+        for x in val:
+            t = _extract_time_from_any(x)
+            if t: return t
+        return None
+    if isinstance(val, dict):
+        for v in val.values():
+            t = _extract_time_from_any(v)
+            if t: return t
+        return None
+
+    # 轉為字串處理
+    val_str = str(val).strip()
+
+    # 如果直接是時間格式，先嘗試直接使用
+    if re.match(r"^\s*\d{1,2}:\d{2}\s*$", val_str):
+        return val_str
+
+    # 否則用文字提取
+    return _extract_time_from_text(val_str)
+
+_COMMON_TIME_KEYS = {
+    "time","schedule_time","court_time","hearing_time","session_time",
+    "time_str","clock","progress_time","progress_times","開庭時間","時間","時刻","約定時間"
+}
+
+def _find_time_in_payload(obj) -> Optional[str]:
+    if obj is None:
+        return None
+    if isinstance(obj, str):
+        return _extract_time_from_text(obj)
+    if isinstance(obj, dict):
+        for k in _COMMON_TIME_KEYS:
+            if k in obj and obj[k] not in (None, ""):
+                t = _extract_time_from_any(obj[k])
+                if t: return t
+        for v in obj.values():
+            t = _find_time_in_payload(v)
+            if t: return t
+        return None
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            t = _extract_time_from_any(v)
+            if t: return t
+        return None
+    return None
+
+def _as_list_of_str(val):
+    if val is None:
+        return []
+    if isinstance(val, str):
+        return [s.strip() for s in re.split(r"\r?\n", val) if s.strip()]
+    if isinstance(val, (list, tuple)):
+        out = []
+        for x in val:
+            out += _as_list_of_str(x)
+        return [s for s in out if s]
+    if isinstance(val, dict):
+        return _as_list_of_str(list(val.values()))
+    return [str(val).strip()] if str(val).strip() else []
+
+def _pick(d: dict, *keys):
+    for k in keys:
+        if k in d and d[k] not in (None, ""):
+            return d[k]
+    return None
+
+def _split_date_time_str(s: str):
+    if not s:
+        return None, None
+    s = str(s).strip()
+    if "T" in s:
+        left, right = s.split("T", 1)
+        return left.strip(), right.strip()
+    if " " in s:
+        left, right = s.split(" ", 1)
+        return left.strip(), right.strip()
+    return s, None
+
+def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
     """
-    回傳該 line_user_id 綁定的事務所所屬案件；
-    - 若模型存在則做真實查詢；
-    - 若缺模型則回傳空列表（避免 404）。
+    展平成 list[{stage,date,time,notes_from_stage}]。
+    支援 dict/list/JSON 字串；時間鍵特別支援 progress_times。
     """
-    lid = payload.line_user_id.strip()
-    results: List[Dict[str, Any]] = []
+    data = progress_stages
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return []
 
+    if isinstance(data, dict) and any(k in data for k in ("stages", "items", "data")):
+        for k in ("stages", "items", "data"):
+            if k in data:
+                data = data[k]
+                break
+
+    items: List[Dict[str, Any]] = []
+
+    if isinstance(data, dict):
+        for stage, payload in data.items():
+            if isinstance(payload, dict):
+                raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
+                # 修改這一行，確保 progress_time 在前面
+                raw_time = _pick(payload, "progress_time", "progress_times", "time", "schedule_time", "court_time", "hearing_time",
+                                 "session_time", "time_str", "clock", "開庭時間", "時間")
+                d, t = (None, None)
+                if raw_date:
+                    d, t = _split_date_time_str(raw_date)
+                if not t:
+                    t = _extract_time_from_any(raw_time) or _find_time_in_payload(payload)
+                notes = _as_list_of_str(
+                    _pick(payload, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
+                )
+                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
+            else:
+                d, t = _split_date_time_str(str(payload))
+                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": []})
+        return items
+
+    if isinstance(data, list):
+        for it in data:
+            if not isinstance(it, dict):
+                continue
+            stage = _pick(it, "stage", "name", "label", "phase", "title") or "-"
+            raw_date = _pick(it, "date", "at", "updated_at", "datetime", "schedule_date")
+            # 修改這一行，確保 progress_time 在前面
+            raw_time = _pick(it, "progress_time", "progress_times", "time", "schedule_time", "court_time", "hearing_time",
+                             "session_time", "time_str", "clock", "開庭時間", "時間")
+            d, t = (None, None)
+            if raw_date:
+                d, t = _split_date_time_str(raw_date)
+            if not t:
+                t = _extract_time_from_any(raw_time) or _find_time_in_payload(it)
+            notes = _as_list_of_str(
+                _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
+            )
+            items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
+        return items
+
+    return items
+
+def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> None:
+    """
+    依『階段名稱』把案件層級 progress_notes 併到 items[*]['notes']。
+    支援 dict / list；str 無法對到階段則忽略。
+    """
+    if case_level_notes is None:
+        for it in items:
+            it["notes"] = list(it.get("notes_from_stage") or [])
+        return
+
+    obj = case_level_notes
+    if isinstance(obj, str):
+        for it in items:
+            it["notes"] = list(it.get("notes_from_stage") or [])
+        return
+
+    mapping: Dict[str, List[str]] = {}
+    if isinstance(obj, dict):
+        for stage, val in obj.items():
+            mapping[stage] = _as_list_of_str(val)
+    elif isinstance(obj, list):
+        for it in obj:
+            if not isinstance(it, dict):
+                continue
+            stage = _pick(it, "stage", "name", "label", "phase", "title")
+            notes = _as_list_of_str(
+                _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
+            )
+            if stage:
+                mapping.setdefault(stage, []).extend(notes)
+
+    for it in items:
+        s = it.get("stage")
+        merged = list(it.get("notes_from_stage") or [])
+        if s in mapping:
+            merged.extend(mapping[s])
+        seen, unique = set(), []
+        for n in merged:
+            n = str(n).strip()
+            if not n or n in seen:
+                continue
+            seen.add(n)
+            unique.append(n)
+        it["notes"] = unique
+
+def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) -> List[str]:
+    """
+    回傳列印用文字行：
+      1. 2025-08-14  一審  13:00
+      💬 備註：帶文件
+    """
+    items = _iter_stage_items(progress_stages)
+    _merge_case_level_notes(items, case_level_notes)
+
+    lines: List[str] = []
+    for i, it in enumerate(items, 1):
+        date_str = (it.get("date") or "-").strip()
+        time_str = it.get("time")
+        stage    = (it.get("stage") or "-").strip()
+
+        # 修正：確保時間正確顯示
+        if time_str and time_str.strip():
+            title = f"{i}. {date_str}  {stage}  {time_str.strip()}"
+        else:
+            title = f"{i}. {date_str}  {stage}"
+
+        lines.append(title)
+
+        for n in it.get("notes", []):
+            for s in re.split(r"\r?\n", n):
+                if s.strip():
+                    lines.append(f"💬 備註：{s.strip()}")
+
+    return lines
+
+# ============================ Helpers：類別/選單 ============================
+def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
+    t = (case_type or "").strip()
+    if "刑" in t:
+        return "CRIM", "刑事"
+    if "民" in t:
+        return "CIVIL", "民事"
+    return "OTHER", "其他"
+
+def _render_category_menu(menu_items: List[Dict[str, Any]]) -> str:
+    lines = []
+    lines.append("🗂 案件類別選單")
+    lines.append("────────────────────")
+    for i, m in enumerate(menu_items, 1):
+        lines.append(f"{i}. {m['label']}案件列表（{m['count']} 件）")
+    lines.append("")
+    lines.append(f"💡 請輸入選項號碼 (1-{len(menu_items)})")
+    return "\n".join(lines)
+
+def _render_case_brief_list(items: List[Dict[str, Any]], label: str) -> str:
+    lines = []
+    lines.append(f"📂 {label}案件列表")
+    lines.append("────────────────────")
+    for i, it in enumerate(items, 1):
+        num = it.get("case_number") or "-"
+        reason = it.get("case_reason") or "-"
+        lines.append(f"{i}. {reason}（案件編號：{num}）")
+    lines.append("")
+    lines.append(f"💡 請輸入選項號碼 (1-{len(items)})")
+    return "\n".join(lines)
+
+# ============================ Helpers：會話暫存 ============================
+def _cleanup_expired_sessions(db: Session, line_user_id: Optional[str] = None):
+    params = {"ttl": SESSION_TTL_MINUTES}
+    where_user = ""
+    if line_user_id:
+        where_user = "AND line_user_id = :lid"
+        params["lid"] = line_user_id
+    db.execute(
+        text(f"""
+        DELETE FROM user_query_sessions
+        WHERE created_at < NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
+        {where_user}
+        """),
+        params,
+    )
+    db.commit()
+
+def _save_session(db: Session, line_user_id: str, scope: str, payload: Dict[str, Any]) -> None:
+    _cleanup_expired_sessions(db, line_user_id)
+    db.execute(
+        text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid AND scope = :scope"""),
+        {"lid": line_user_id, "scope": scope},
+    )
+    db.execute(
+        text("""
+        INSERT INTO user_query_sessions (line_user_id, session_key, scope, payload_json)
+        VALUES (:lid, :skey, :scope, :payload)
+        """),
+        {"lid": line_user_id, "skey": str(uuid4()), "scope": scope, "payload": json.dumps(payload, ensure_ascii=False)},
+    )
+    db.commit()
+
+def _load_last_session(db: Session, line_user_id: str) -> Optional[Dict[str, Any]]:
+    row = db.execute(
+        text(f"""
+            SELECT session_key, scope, payload_json, created_at
+            FROM user_query_sessions
+            WHERE line_user_id = :lid
+              AND created_at >= NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
+            ORDER BY created_at DESC
+            LIMIT 1
+        """),
+        {"lid": line_user_id, "ttl": SESSION_TTL_MINUTES},
+    ).first()
+    if not row:
+        return None
+    _, scope, payload, created_at = row
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+    return {"scope": scope, "payload": payload, "created_at": created_at}
+
+def _consume_all_sessions(db: Session, line_user_id: str):
+    db.execute(text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid"""),
+               {"lid": line_user_id})
+    db.commit()
+
+# ============================ 視圖：單筆詳情 ============================
+def render_case_detail(case) -> str:
+    case_number   = case.case_number or case.case_id or "-"
+    client        = case.client or "-"
+    case_type     = case.case_type or "-"
+    case_reason   = case.case_reason or "-"
+    court         = case.court or "-"
+    division      = case.division or "-"
+    legal_affairs = getattr(case, "legal_affairs", None) or "-"
+    opposing      = case.opposing_party or "-"
+    created_at    = _fmt_dt(getattr(case, "created_date", None))
+    updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
+
+    lines: List[str] = []
+    lines.append("ℹ️案件詳細資訊")
+    lines.append("────────────────────")
+    lines.append(f"📌 案件編號：{case_number}")
+    lines.append(f"👤 當事人：{client}")
+    lines.append("────────────────────")
+    lines.append(f"案件類型：{case_type}")
+    lines.append(f"案由：{case_reason}")
+    lines.append(f"法院：{court}")
+    lines.append(f"法務：{legal_affairs}")
+    lines.append(f"對造：{opposing}")
+    lines.append(f"負責股別：{division}")
+    lines.append("────────────────────")
+
+    lines.append("📈案件進度歷程：")
+
+    # 嘗試獲取所有可能的時間相關欄位
+    progress_stages = getattr(case, "progress_stages", None)
+    progress_notes = getattr(case, "progress_notes", None)
+    progress_times = getattr(case, "progress_times", None)
+    progress_time = getattr(case, "progress_time", None)
+
+    # 建構完整的進度資料，包含時間資訊
+    enhanced_stages = progress_stages
+    # 如果有獨立的時間欄位，將其加入到階段資料中
+    if (progress_times or progress_time) and enhanced_stages:
+        try:
+            # 確保 stages 是可操作的格式
+            if isinstance(enhanced_stages, str):
+                enhanced_stages = json.loads(enhanced_stages)
+
+            # 處理時間資料
+            time_data = progress_times or progress_time
+            if isinstance(time_data, str):
+                try:
+                    time_data = json.loads(time_data)
+                except:
+                    # 如果是純時間字串，套用到所有階段
+                    if isinstance(enhanced_stages, dict):
+                        for stage_key in enhanced_stages:
+                            if isinstance(enhanced_stages[stage_key], dict):
+                                enhanced_stages[stage_key]["progress_time"] = time_data
+                            else:
+                                enhanced_stages[stage_key] = {
+                                    "date": enhanced_stages[stage_key],
+                                    "progress_time": time_data
+                                }
+
+            # 如果 time_data 是字典，按階段名稱匹配
+            elif isinstance(time_data, dict) and isinstance(enhanced_stages, dict):
+                for stage_key, stage_info in enhanced_stages.items():
+                    if stage_key in time_data:
+                        if isinstance(stage_info, dict):
+                            stage_info["progress_time"] = time_data[stage_key]
+                        else:
+                            enhanced_stages[stage_key] = {
+                                "date": stage_info,
+                                "progress_time": time_data[stage_key]
+                            }
+        except Exception as e:
+            logger.warning(f"合併時間資料時發生錯誤: {e}")
+            # 如果合併失敗，使用原始資料
+            enhanced_stages = progress_stages
+
+    timeline = _build_progress_timeline_with_notes(
+        enhanced_stages,
+        progress_notes,
+    )
+    if timeline:
+        lines.extend(timeline)
+    else:
+        lines.append("（目前沒有進度記錄）")
+
+    lines.append("────────────────────")
+    lines.append("📁案件資料夾：")
+    lines.append("（稍後開放）")
+    lines.append("────────────────────")
+    lines.append(f"🟥建立時間：{created_at}")
+    lines.append(f"🟩更新時間：{updated_at}")
+    return "\n".join(lines)
+
+# ============================ 1) /register ============================
+@user_router.post("/register", response_model=RegisterOut)
+def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
+    try:
+        lid     = (payload.line_user_id or "").strip()
+        text_in = _normalize_text(payload.text or "")
+
+        # 數字選單
+        if re.fullmatch(r"[1-9]\d*", text_in):
+            choice = int(text_in)
+            sess = _load_last_session(db, lid)
+            if not sess:
+                return RegisterOut(success=False, message="尚無有效選單，請先輸入「?」。", route='INFO')
+
+            scope = sess["scope"]
+            payload_json = sess["payload"]
+            _consume_all_sessions(db, lid)
+
+            if scope == "category_menu":
+                menu   = payload_json["menu"]
+                bytype = payload_json["by_type"]
+                if not (1 <= choice <= len(menu)):
+                    return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。", route='INFO')
+
+                chosen = menu[choice - 1]
+                key = chosen["key"]
+                bucket = bytype[key]
+                items = bucket["items"]
+                label = bucket["label"]
+
+                _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
+                msg = _render_case_brief_list(items, label)
+                return RegisterOut(success=True, message=msg, route='MENU_LIST')
+
+            elif scope.startswith("case_list:"):
+                items = payload_json["items"]
+                if not (1 <= choice <= len(items)):
+                    return RegisterOut(success=False, message="選項超出範圍，請輸入「?」重新載入。", route='INFO')
+
+                case_id = items[choice - 1]["id"]
+                case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
+                if not case:
+                    return RegisterOut(success=False, message="案件不存在或已移除，請輸入「?」重新載入。", route='INFO')
+
+                return RegisterOut(success=True, message=render_case_detail(case), route='CASE_DETAIL')
+
+            else:
+                return RegisterOut(success=False, message="選單已失效，請重新輸入「?」。", route='INFO')
+
+        # 意圖判斷
+        intent, cname = _parse_intent(text_in)
+
+        if intent == "show_cases":
+            return RegisterOut(success=True, message="請輸入「?」以查詢案件。", route='INFO')
+
+        if intent == "prepare" and cname:
+            candidate = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", cname).strip()
+            db.execute(text("""
+                INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
+                VALUES (:lid, :name, 'pending', NOW(), NOW())
+                ON CONFLICT (line_user_id)
+                DO UPDATE
+                SET expected_name = :name,
+                    status        = 'pending',
+                    updated_at    = NOW();
+            """), {"lid": lid, "name": candidate})
+            db.commit()
+            _consume_all_sessions(db, lid)
+            return RegisterOut(
+                success=True,
+                expected_name=candidate,
+                message=f"請確認您的大名：{candidate}\n回覆「是」確認，回覆「否」重新輸入。",
+                route='REGISTER_PREPARE'
+            )
+
+        if intent == "confirm_yes":
+            row = db.execute(text("""
+                SELECT expected_name
+                FROM pending_line_users
+                WHERE line_user_id = :lid
+                ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+                LIMIT 1
+            """), {"lid": lid}).first()
+            if not row or not row[0]:
+                return RegisterOut(success=False, message="尚未收到您的大名，請輸入「登錄 您的大名」。", route='INFO')
+
+            final_name = row[0]
+            db.execute(text("""
+                UPDATE pending_line_users
+                SET status = 'registered',
+                    updated_at = NOW()
+                WHERE line_user_id = :lid
+            """), {"lid": lid})
+            db.commit()
+            _consume_all_sessions(db, lid)
+            return RegisterOut(
+                success=True,
+                expected_name=final_name,
+                message=f"歡迎 {final_name}！已完成登錄。\n輸入「?」即可查詢您的案件進度。",
+                route='REGISTER_DONE'
+            )
+
+        if intent == "confirm_no":
+            db.execute(text("""
+                UPDATE pending_line_users
+                SET expected_name = NULL,
+                    status        = 'pending',
+                    updated_at    = NOW()
+                WHERE line_user_id = :lid
+            """), {"lid": lid})
+            db.commit()
+            _consume_all_sessions(db, lid)
+            return RegisterOut(success=True, message="好的，請重新輸入「登錄 您的大名」。", route='REGISTER_RETRY')
+
+        # 其他輸入：登錄提示
+        row = db.execute(text("""
+            SELECT status FROM pending_line_users
+            WHERE line_user_id = :lid
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+            LIMIT 1
+        """), {"lid": lid}).first()
+        if row and row[0] == "registered":
+            return RegisterOut(success=True, message="已登錄，用「?」可查詢您的案件。", route='INFO')
+        else:
+            return RegisterOut(success=False, message="您好，請輸入「登錄 您的大名」完成登錄。", route='INFO')
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"/register 失敗: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail="REG_500: 系統錯誤")
+
+# ============================ 2) /my-cases ============================
+@user_router.post("/my-cases")
+def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
+    lid = (payload.line_user_id or "").strip()
     if not lid:
         raise HTTPException(status_code=400, detail="line_user_id 必填")
 
-    if ClientLineUsers is not None and CaseRecord is not None:
-        # 取使用者綁定到的客戶/事務所
-        bound_rows = db.query(ClientLineUsers).filter(
-            ClientLineUsers.line_user_id == lid,
-            ClientLineUsers.is_active.is_(True)
-        ).all()
-        client_ids = [r.client_id for r in bound_rows]
+    row = db.execute(text("""
+        SELECT expected_name
+        FROM pending_line_users
+        WHERE line_user_id = :lid
+          AND status = 'registered'
+          AND expected_name IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+    """), {"lid": lid}).first()
+    if not row or not row[0]:
+        return {"ok": False, "message": "尚未登錄，請輸入「登錄 您的大名」完成登錄。", "route": "INFO"}
 
-        if client_ids:
-            # 查案件
-            q = db.query(CaseRecord).filter(CaseRecord.client_id.in_(client_ids)).order_by(desc(CaseRecord.updated_at)).limit(50)
-            for row in q.all():
-                results.append({
-                    "case_id": getattr(row, "case_id", ""),
-                    "client": getattr(row, "client", None),
-                    "case_type": getattr(row, "case_type", None),
-                    "progress": getattr(row, "progress", None),
-                    "updated_at": getattr(row, "updated_at", None).isoformat() if getattr(row, "updated_at", None) else None,
-                })
+    user_name = row[0].strip()
+    if not user_name:
+        return {"ok": False, "message": "目前查無姓名資訊，請輸入「登錄 您的大名」。", "route": "INFO"}
 
-    return {"success": True, "line_user_id": lid, "cases": results}
+    if payload.include_as_opponent:
+        q = db.query(CaseRecord).filter(or_(CaseRecord.client == user_name, CaseRecord.opposing_party == user_name))
+    else:
+        q = db.query(CaseRecord).filter(CaseRecord.client == user_name)
+
+    q = q.order_by(text("updated_date DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC"))
+    rows: List[CaseRecord] = q.all()
+
+    if not rows:
+        return {"ok": True, "total": 0, "message": f"沒有找到「{user_name}」的案件。", "route": "INFO"}
+
+    if len(rows) == 1:
+        return {"ok": True, "total": 1, "message": render_case_detail(rows[0]), "route": "CASE_DETAIL"}
+
+    buckets: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        key, label = _type_key_label(r.case_type)
+        buckets.setdefault(key, {"label": label, "items": []})
+        buckets[key]["items"].append({
+            "id": r.id,
+            "case_number": r.case_number or r.case_id,
+            "case_reason": r.case_reason,
+            "case_type": r.case_type,
+            "updated_at": _fmt_dt(getattr(r, "updated_date", None) or getattr(r, "updated_at", None))
+        })
+
+    types_present = [k for k in ["CRIM", "CIVIL", "OTHER"] if k in buckets]
+
+    if len(types_present) >= 2:
+        menu_items = [{"key": k, "label": buckets[k]["label"], "count": len(buckets[k]["items"])}
+                      for k in types_present]
+        _save_session(db, lid, "category_menu", {"menu": menu_items, "by_type": buckets})
+        msg = _render_category_menu(menu_items)
+        return {"ok": True, "total": len(rows), "message": msg, "route": "MENU_CATEGORY"}
+
+    only_key = types_present[0]
+    items = buckets[only_key]["items"]
+    label = buckets[only_key]["label"]
+    _save_session(db, lid, f"case_list:{only_key}", {"label": label, "items": items})
+    msg = _render_case_brief_list(items, label)
+    return {"ok": True, "total": len(rows), "message": msg, "route": "MENU_LIST"}
+
+# ============================ 健康檢查 ============================
+@user_router.get("/health")
+def health_check():
+    return {"status": "healthy", "service": "user_routes", "timestamp": datetime.utcnow().isoformat()}
+
+router = user_router
