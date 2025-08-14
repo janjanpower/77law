@@ -86,6 +86,81 @@ def _fmt_dt(v):
         return v.strftime("%Y-%m-%d %H:%M:%S")
     return str(v)
 
+import re, json
+
+def _to_halfwidth(s: str) -> str:
+    """全形數字、冒號轉半形。"""
+    if not s: return s
+    out = []
+    for ch in str(s):
+        code = ord(ch)
+        if 0xFF10 <= code <= 0xFF19:   # ０-９
+            out.append(chr(code - 0xFEE0))
+        elif ch in "：．，／－":
+            out.append({ "：":":", "．":".", "，":",", "／":"/", "－":"-" }[ch])
+        else:
+            out.append(ch)
+    return "".join(out)
+
+def _normalize_hhmm(h: int, m: int, ampm: str | None) -> str:
+    ampm = (ampm or "").strip().lower()
+    if ampm in ("pm", "p.m.", "下午"):
+        if h % 12 != 0: h = (h % 12) + 12
+        else: h = 12
+    elif ampm in ("am", "a.m.", "上午"):
+        if h == 12: h = 0
+    return f"{max(0,min(23,h)):02d}:{max(0,min(59,m)):02d}"
+
+def _extract_time_from_text(text: str) -> str | None:
+    """從一串文字中抓出時間並正規化為 HH:MM。"""
+    s = _to_halfwidth(text or "")
+    # 1) (上午/下午/AM/PM) H:MM
+    m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)[:：\.]([0-5]\d)", s, re.I)
+    if m:
+        return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+    # 2) (上午/下午/AM/PM) H點MM分 / H時MM分
+    m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)\s*[點时時点]\s*([0-5]?\d)\s*(?:分)?", s, re.I)
+    if m:
+        return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+    # 3) 純 3~4 位數（1300/900）
+    m = re.search(r"(?<!\d)([0-2]?\d)([0-5]\d)(?!\d)", s)
+    if m:
+        return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
+    return None
+
+_COMMON_TIME_KEYS = {
+    "time","schedule_time","court_time","hearing_time","session_time",
+    "time_str","clock","progress_time","開庭時間","時間","時刻","約定時間"
+}
+
+def _find_time_in_payload(obj) -> str | None:
+    """
+    遞迴在 payload 任何位置找時間；支援 str / list / dict。
+    先試常見鍵名，再掃描所有字串值。
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, str):
+        return _extract_time_from_text(obj)
+
+    if isinstance(obj, dict):
+        # 先看常見鍵名
+        for k in _COMMON_TIME_KEYS:
+            if k in obj and obj[k] not in (None, ""):
+                t = _extract_time_from_text(str(obj[k]))
+                if t: return t
+        # 再遞迴所有值
+        for v in obj.values():
+            t = _find_time_in_payload(v)
+            if t: return t
+        return None
+
+    if isinstance(obj, (list, tuple)):
+        for v in obj:
+            t = _find_time_in_payload(v)
+            if t: return t
+    return None
+
 # ============================ Helpers：進度時間線（含備註） ============================
 def _as_list_of_str(val):
     """把 notes 欄位轉成 list[str]（接受 str / list / dict）。"""
@@ -150,10 +225,14 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
         for stage, payload in data.items():
             if isinstance(payload, dict):
                 raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
-                raw_time = _pick(payload, "time", "schedule_time")
+                raw_time = _pick(payload, "time", "schedule_time", "court_time", "hearing_time",
+                                "session_time", "time_str", "clock", "progress_time", "開庭時間", "時間")
                 d, t = (None, None)
                 if raw_date:
                     d, t = _split_date_time_str(raw_date)
+                # 若指定 time 欄位沒抓到，再全域掃描一次
+                if not t:
+                    t = _extract_time_from_text(raw_time) if raw_time else _find_time_in_payload(payload)
                 if raw_time and not t:
                     t = str(raw_time).strip()
                 notes = _as_list_of_str(
