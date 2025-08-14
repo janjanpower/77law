@@ -1,12 +1,12 @@
 # api/routes/user_routes.py
 # -*- coding: utf-8 -*-
 """
-LINE 一般用戶/律師查案路由（單租戶、n8n 零改動版）
+LINE 一般用戶/律師查案路由（單租戶、n8n 零改動）
 - 使用者輸入「?」 → /my-cases
 - 其他（登錄 XXX／是／否／數字選單） → /register
 - 多筆 → 類別選單（刑事/民事/其他）；單筆 → 直接詳情
-- 案件進度只顯示【每個階段的備註】，每個階段獨立區塊；無日期與「一審：備註」等字樣
-- 會話暫存 user_query_sessions：TTL 可由環境變數 UQS_TTL_MINUTES（預設 30 分）控制
+- 進度呈現：每一階段一行（含日期/時間），若有備註就接一行「💬 備註：…」
+- 會話暫存 user_query_sessions：TTL 由環境變數 UQS_TTL_MINUTES 控制（預設 30 分）
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -86,8 +86,9 @@ def _fmt_dt(v):
         return v.strftime("%Y-%m-%d %H:%M:%S")
     return str(v)
 
-# ============================ Helpers：進度「備註」視圖 ============================
+# ============================ Helpers：進度時間線（含備註） ============================
 def _as_list_of_str(val):
+    """把 notes 欄位轉成 list[str]（接受 str / list / dict）。"""
     if val is None:
         return []
     if isinstance(val, str):
@@ -108,6 +109,7 @@ def _pick(d: dict, *keys):
     return None
 
 def _split_date_time_str(s: str):
+    """把可能含日期+時間的字串拆成 (date, time)。"""
     if not s:
         return None, None
     s = str(s).strip()
@@ -119,13 +121,14 @@ def _split_date_time_str(s: str):
         return left.strip(), right.strip()
     return s, None
 
-def _build_progress_timeline_with_notes(progress_stages):
+def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
     """
-    回傳列印用文字行：
-      1. 2025-08-05  調解  13:00
-      💬 備註：帶文件
-    只要該階段有備註才印「備註」行；階段行一定印。
-    支援 list / dict / JSON 字串。
+    把多種資料結構展平成 list[ {stage, date, time, notes_from_stage} ]。
+    支援：
+      dict: {"一審":{"date":"...","time":"...","note":"..."}, "二審": {...}}
+      list: [{"stage":"一審","date":"...","time":"...","note":"..."}, ...]
+      包一層：{"stages":[...]}/{"items":[...]}/{"data":[...]}
+      str: 嘗試 json.loads
     """
     data = progress_stages
     if isinstance(data, str):
@@ -134,17 +137,16 @@ def _build_progress_timeline_with_notes(progress_stages):
         except Exception:
             return []
 
-    items = []
-
-    # 允許外層容器鍵
+    # 容器鍵
     if isinstance(data, dict) and any(k in data for k in ("stages", "items", "data")):
         for k in ("stages", "items", "data"):
             if k in data:
                 data = data[k]
                 break
 
+    items: List[Dict[str, Any]] = []
+
     if isinstance(data, dict):
-        # 依 dict 插入順序
         for stage, payload in data.items():
             if isinstance(payload, dict):
                 raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
@@ -157,13 +159,13 @@ def _build_progress_timeline_with_notes(progress_stages):
                 notes = _as_list_of_str(
                     _pick(payload, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
                 )
-                items.append({"stage": stage, "date": d, "time": t, "notes": notes})
+                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
             else:
-                # 值是日期（可能含時間）
                 d, t = _split_date_time_str(str(payload))
-                items.append({"stage": stage, "date": d, "time": t, "notes": []})
+                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": []})
+        return items
 
-    elif isinstance(data, list):
+    if isinstance(data, list):
         for it in data:
             if not isinstance(it, dict):
                 continue
@@ -178,27 +180,92 @@ def _build_progress_timeline_with_notes(progress_stages):
             notes = _as_list_of_str(
                 _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
             )
-            items.append({"stage": stage, "date": d, "time": t, "notes": notes})
+            items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
+        return items
 
-    lines = []
+    return items
+
+def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> None:
+    """
+    依『階段名稱』把案件層級的 progress_notes 併到 items[*]['notes']。
+    支援：
+      - dict: {"一審": "...", "二審": ["a","b"]}
+      - list: [{"stage":"一審", "note":"..."}, {"name":"二審","notes":[...]}]
+      - str: 忽略（不易對應到階段）
+    """
+    if case_level_notes is None:
+        for it in items:
+            it["notes"] = list(it.get("notes_from_stage") or [])
+        return
+
+    obj = case_level_notes
+    if isinstance(obj, str):
+        # 無法對應到特定階段；保留原本 notes_from_stage
+        for it in items:
+            it["notes"] = list(it.get("notes_from_stage") or [])
+        return
+
+    # 先做一個查表：stage -> list[str]
+    mapping: Dict[str, List[str]] = {}
+    if isinstance(obj, dict):
+        for stage, val in obj.items():
+            mapping[stage] = _as_list_of_str(val)
+    elif isinstance(obj, list):
+        for it in obj:
+            if not isinstance(it, dict):
+                continue
+            stage = _pick(it, "stage", "name", "label", "phase", "title")
+            notes = _as_list_of_str(
+                _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
+            )
+            if stage:
+                mapping.setdefault(stage, []).extend(notes)
+
+    # 合併：notes = notes_from_stage ∪ mapping[stage]
+    for it in items:
+        s = it.get("stage")
+        merged = list(it.get("notes_from_stage") or [])
+        if s in mapping:
+            merged.extend(mapping[s])
+        # 去重
+        seen, unique = set(), []
+        for n in merged:
+            n = str(n).strip()
+            if not n or n in seen:
+                continue
+            seen.add(n)
+            unique.append(n)
+        it["notes"] = unique
+
+def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) -> List[str]:
+    """
+    回傳列印用文字行：
+      1. 2025-08-05  調解  13:00
+      💬 備註：帶文件
+    只要該階段有備註才印「備註」行；階段行一定印。
+    """
+    items = _iter_stage_items(progress_stages)
+    _merge_case_level_notes(items, case_level_notes)
+
+    lines: List[str] = []
     for i, it in enumerate(items, 1):
         date_str = (it.get("date") or "-").strip()
         time_str = it.get("time")
         stage    = (it.get("stage") or "-").strip()
+
         title = f"{i}. {date_str}  {stage}"
         if time_str:
             title += f"  {time_str}"
         lines.append(title)
 
-        # 只有有備註才加一行（可能多行）
-        notes = it.get("notes") or []
-        if notes:
-            for n in notes:
-                for s in re.split(r"\r?\n", n):
-                    if s.strip():
-                        lines.append(f"💬 備註：{s.strip()}")
+        # 有備註才加
+        for n in it.get("notes", []):
+            for s in re.split(r"\r?\n", n):
+                if s.strip():
+                    lines.append(f"💬 備註：{s.strip()}")
 
     return lines
+
 # ============================ Helpers：類別/選單 ============================
 def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
     t = (case_type or "").strip()
@@ -286,7 +353,7 @@ def _consume_all_sessions(db: Session, line_user_id: str):
                {"lid": line_user_id})
     db.commit()
 
-# ============================ 視圖：單筆詳情（僅「每階段備註」） ============================
+# ============================ 視圖：單筆詳情（時間線 + 備註） ============================
 def render_case_detail(case) -> str:
     case_number   = case.case_number or case.case_id or "-"
     client        = case.client or "-"
@@ -299,7 +366,7 @@ def render_case_detail(case) -> str:
     created_at    = _fmt_dt(getattr(case, "created_date", None))
     updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
 
-    lines = []
+    lines: List[str] = []
     lines.append("ℹ️ 案件詳細資訊")
     lines.append("────────────────────")
     lines.append(f"📌 案件編號：{case_number}")
@@ -313,14 +380,16 @@ def render_case_detail(case) -> str:
     lines.append(f"負責股別：{division}")
     lines.append("────────────────────")
 
-    # ▼▼ 這裡是新的進度輸出樣式 ▼▼
-    lines.append("📈案件進度歷程：")
-    timeline = _build_progress_timeline_with_notes(getattr(case, "progress_stages", None))
+    # 進度時間線（每一階段一行，若有備註就接「💬 備註：…」）
+    lines.append("📈 案件進度歷程：")
+    timeline = _build_progress_timeline_with_notes(
+        getattr(case, "progress_stages", None),
+        getattr(case, "progress_notes", None)   # 會依階段名稱合併
+    )
     if timeline:
         lines.extend(timeline)
     else:
-        lines.append("（目前沒有記錄）")
-    # ▲▲ 這裡結束 ▲▲
+        lines.append("（目前沒有進度記錄）")
 
     lines.append("────────────────────")
     lines.append("📁 案件資料夾：")
@@ -329,7 +398,6 @@ def render_case_detail(case) -> str:
     lines.append(f"🟥建立時間：{created_at}")
     lines.append(f"🟩更新時間：{updated_at}")
     return "\n".join(lines)
-
 
 # ============================ 1) /register（含數字選單） ============================
 @user_router.post("/register", response_model=RegisterOut)
@@ -366,7 +434,6 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 items = bucket["items"]
                 label = bucket["label"]
 
-                # 建新的「案件列表」選單（靠 /register 讀最近一筆）
                 _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
                 msg = _render_case_brief_list(items, label)
                 return RegisterOut(success=True, message=msg, route='MENU_LIST')
