@@ -1,26 +1,25 @@
 # api/routes/user_routes.py
 # -*- coding: utf-8 -*-
 """
-LINE 一般用戶/律師查案路由（單租戶版）
-- 一般用戶「?」查詢：
-  • 只有 1 件 → 直接回「案件詳細資訊」卡片
-  • 超過 1 件 → 先出「案件類別選單」（刑事/民事/其他），再列出該類別清單，最後回單筆詳細
-- 「案件資料夾」區塊先保留為註解（未啟用）
-- 簡單會話暫存：user_query_sessions（TTL 預設 30 分鐘），過期自清、同 scope 只留最新、用後即刪
+LINE 一般用戶/律師查案路由（單租戶版，n8n 無需新增節點）
+- 「?」→ /my-cases
+- 其餘（登錄/是/否/數字選單）→ 全部走 /register
+  • 數字：自動辨識並處理最近一筆有效選單（類別選單 or 案件列表）
+  • 登錄/是/否：維持原有流程
+- 會話選單：user_query_sessions（TTL 預設 30 分鐘），過期自清、同 scope 只留最新、用後即刪
 """
 
-import logging, traceback, re, json, os
-from datetime import datetime
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from sqlalchemy import text, or_
 from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime
 from uuid import uuid4
+import logging, traceback, re, json, os
 
 from api.database import get_db
 from api.models_cases import CaseRecord  # 你專案的案件 ORM
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from sqlalchemy import text, or_
-from sqlalchemy.orm import Session
-
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -28,7 +27,6 @@ logging.basicConfig(level=logging.INFO)
 user_router = APIRouter(prefix="/api/user", tags=["user"])
 
 # ============================ 可調參數 ============================
-# 選單有效時間（分鐘），可用環境變數 UQS_TTL_MINUTES 覆寫
 SESSION_TTL_MINUTES = int(os.getenv("UQS_TTL_MINUTES", "30"))
 
 # ============================ Pydantic ============================
@@ -37,9 +35,6 @@ class LookupIn(BaseModel):
     user_name:   Optional[str] = None
     destination: Optional[str] = None
     text:        Optional[str] = None
-
-    class Config:
-        allow_population_by_field_name = True
 
 class LookupOut(BaseModel):
     client_id: Optional[str] = None
@@ -55,25 +50,24 @@ class RegisterOut(BaseModel):
     success: bool
     message: str
     expected_name: Optional[str] = None
-    cases: Optional[List[Dict[str, Any]]] = None
 
 class MyCasesIn(BaseModel):
     line_user_id: str
     include_as_opponent: Optional[bool] = False  # 是否把對造人也算進來（預設關閉）
 
-class ChooseCategoryIn(BaseModel):
-    line_user_id: str
-    session_key: str
-    choice: int  # 1,2,...
-
-class ChooseCaseIn(BaseModel):
-    line_user_id: str
-    session_key: str
-    choice: int  # 1..N
-
 # ============================ Helpers ============================
+def _normalize_text(s: str) -> str:
+    """全形數字→半形、全形問號→半形、trim"""
+    s = (s or "")
+    # 全形問號
+    s = s.replace("？", "?")
+    # 全形數字
+    s = re.sub(r"[０-９]", lambda m: chr(ord(m.group(0)) - 0xFEE0), s)
+    return s.strip()
+
 def _parse_intent(text_msg: str):
-    msg = (text_msg or "").strip()
+    """登錄/確認/? 三類意圖，其餘交給數字或預設"""
+    msg = _normalize_text(text_msg)
     if not msg:
         return "none", None
     m = re.match(r"^(?:登錄|登陸|登入|登录)\s*(.+)$", msg, flags=re.I)
@@ -81,8 +75,8 @@ def _parse_intent(text_msg: str):
         return "prepare", m.group(1).strip()
     if msg in ("是","yes","Yes","YES"): return "confirm_yes", None
     if msg in ("否","no","No","NO"):   return "confirm_no", None
-    if msg in ("?","？"):               return "show_cases", None
-    return "none", None
+    if msg == "?":                      return "show_cases", None
+    return "none", None  # 可能是數字或其他
 
 def _fmt_dt(v):
     if not v:
@@ -94,29 +88,17 @@ def _fmt_dt(v):
     return str(v)
 
 def _fmt_stages(progress_stages):
-    """
-    progress_stages:
-    - JSON string like {"偵查中": "2025-08-10"}
-    - dict
-    - None / ""
-    """
     if not progress_stages:
         return "尚無進度階段記錄"
     try:
-        data = progress_stages
-        if isinstance(progress_stages, str):
-            data = json.loads(progress_stages)
+        data = json.loads(progress_stages) if isinstance(progress_stages, str) else progress_stages
         if isinstance(data, dict) and data:
-            lines = [f"．{k}：{v}" for k, v in data.items()]
-            return "\n".join(lines)
+            return "\n".join([f"．{k}：{v}" for k, v in data.items()])
         return "尚無進度階段記錄"
     except Exception:
         return str(progress_stages)
 
 def render_case_detail(case) -> str:
-    """
-    單筆案件輸出樣式（符合你給的截圖）
-    """
     case_number   = case.case_number or case.case_id or "-"
     client        = case.client or "-"
     case_type     = case.case_type or "-"
@@ -148,7 +130,7 @@ def render_case_detail(case) -> str:
     lines.append(f"⚠️ 最新進度：{progress}")
     lines.append("────────────────────")
     lines.append("📁 案件資料夾：")
-    # lines.append("🔢 輸入編號瀏覽（1–2）檔案")   # ← 之後開啟時再把這些註解移除
+    # lines.append("🔢 輸入編號瀏覽（1–2）檔案")
     # lines.append("")
     # lines.append("  1. 案件資訊（2 個檔案）")
     # lines.append("  2. 進度總覽（1 個檔案）")
@@ -158,11 +140,7 @@ def render_case_detail(case) -> str:
     lines.append(f"🛠 更新時間：{updated_at}")
     return "\n".join(lines)
 
-def render_cases_list(cases) -> str:
-    """多筆案件連續輸出（若要一次回多筆詳細）"""
-    return "\n\n".join(render_case_detail(c) for c in cases)
-
-# —— 案件類別歸一：回 (key, label)
+# —— 類別歸一：回 (key, label)
 def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
     t = (case_type or "").strip()
     if "刑" in t:
@@ -171,10 +149,7 @@ def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
         return "CIVIL", "民事"
     return "OTHER", "其他"
 
-def _render_category_menu(menu_items: List[Dict[str, Any]], session_key: str) -> str:
-    """
-    menu_items: [{"key":"CRIM","label":"刑事","count":N}, ...]（只列有資料的）
-    """
+def _render_category_menu(menu_items: List[Dict[str, Any]]) -> str:
     lines = []
     lines.append("🗂 案件類別選單")
     lines.append("────────────────────")
@@ -182,13 +157,9 @@ def _render_category_menu(menu_items: List[Dict[str, Any]], session_key: str) ->
         lines.append(f"{i}. {m['label']}案件列表（{m['count']} 件）")
     lines.append("")
     lines.append(f"💡 請輸入選項號碼 (1-{len(menu_items)})")
-    lines.append(f"#KEY:{session_key}")  # 讓 n8n 從訊息中擷取 session_key
     return "\n".join(lines)
 
-def _render_case_brief_list(items: List[Dict[str, Any]], label: str, session_key: str) -> str:
-    """
-    items: [{"id":..., "case_number":..., "case_reason":..., "case_type":..., "updated_at":...}, ...]
-    """
+def _render_case_brief_list(items: List[Dict[str, Any]], label: str) -> str:
     lines = []
     lines.append(f"📂 {label}案件列表")
     lines.append("────────────────────")
@@ -200,9 +171,8 @@ def _render_case_brief_list(items: List[Dict[str, Any]], label: str, session_key
     lines.append(f"💡 請輸入選項號碼 (1-{len(items)})")
     return "\n".join(lines)
 
-# ============================ 會話暫存：清理策略 ============================
+# ============================ 會話暫存（user_query_sessions） ============================
 def _cleanup_expired_sessions(db: Session, line_user_id: Optional[str] = None):
-    # 刪過期的（全部或指定用戶）
     params = {"ttl": SESSION_TTL_MINUTES}
     where_user = ""
     if line_user_id:
@@ -218,154 +188,141 @@ def _cleanup_expired_sessions(db: Session, line_user_id: Optional[str] = None):
     )
     db.commit()
 
-def _save_session(db: Session, line_user_id: str, scope: str, payload: Dict[str, Any]) -> str:
+def _save_session(db: Session, line_user_id: str, scope: str, payload: Dict[str, Any]) -> None:
     # 逾時自清 + 同 scope 只留最新
     _cleanup_expired_sessions(db, line_user_id)
     db.execute(
         text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid AND scope = :scope"""),
         {"lid": line_user_id, "scope": scope},
     )
-    skey = str(uuid4())
     db.execute(
         text("""
         INSERT INTO user_query_sessions (line_user_id, session_key, scope, payload_json)
         VALUES (:lid, :skey, :scope, :payload)
         """),
-        {"lid": line_user_id, "skey": skey, "scope": scope, "payload": json.dumps(payload, ensure_ascii=False)},
+        {"lid": line_user_id, "skey": str(uuid4()), "scope": scope, "payload": json.dumps(payload, ensure_ascii=False)},
     )
     db.commit()
-    return skey
 
-def _load_session(db: Session, line_user_id: str, session_key: str) -> Dict[str, Any]:
-    _cleanup_expired_sessions(db, line_user_id)
+def _load_last_session(db: Session, line_user_id: str) -> Optional[Dict[str, Any]]:
+    # 取用戶最近一筆未過期的選單
     row = db.execute(
-        text("""SELECT scope, payload_json, created_at
-                FROM user_query_sessions
-                WHERE line_user_id = :lid AND session_key = :skey
-                ORDER BY created_at DESC LIMIT 1"""),
-        {"lid": line_user_id, "skey": session_key},
+        text(f"""
+            SELECT session_key, scope, payload_json, created_at
+            FROM user_query_sessions
+            WHERE line_user_id = :lid
+              AND created_at >= NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
+            ORDER BY created_at DESC
+            LIMIT 1
+        """),
+        {"lid": line_user_id, "ttl": SESSION_TTL_MINUTES},
     ).first()
     if not row:
-        raise HTTPException(status_code=400, detail="選單已失效，請重新輸入「?」")
-    scope, payload, created_at = row[0], row[1], row[2]
+        return None
+    _, scope, payload, created_at = row
     if isinstance(payload, str):
         payload = json.loads(payload)
-    # 再檢查 TTL（避免 race）
-    ttl_ok = db.execute(
-        text("""SELECT (NOW() - :created_at) <= (CAST(:ttl AS TEXT) || ' minutes')::interval"""),
-        {"created_at": created_at, "ttl": SESSION_TTL_MINUTES},
-    ).scalar()
-    if not ttl_ok:
-        db.execute(
-            text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid AND session_key = :skey"""),
-            {"lid": line_user_id, "skey": session_key},
-        )
-        db.commit()
-        raise HTTPException(status_code=400, detail="選單已過期，請重新輸入「?」")
-    return {"scope": scope, "payload": payload}
+    return {"scope": scope, "payload": payload, "created_at": created_at}
 
-def _consume_session(db: Session, line_user_id: str, session_key: str):
+def _consume_all_sessions(db: Session, line_user_id: str):
     db.execute(
-        text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid AND session_key = :skey"""),
-        {"lid": line_user_id, "skey": session_key},
+        text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid"""),
+        {"lid": line_user_id},
     )
     db.commit()
 
-# ============================ 1) 查 client_id（n8n 用） ============================
-@user_router.post("/lookup-client", response_model=LookupOut)
-def lookup_client(payload: LookupIn, db: Session = Depends(get_db)):
-    line_user_id = (payload.line_user_id or "").strip()
-    user_name    = (payload.user_name   or "").strip()
-    destination  = (payload.destination or "").strip()
-
-    # 先用 LINE destination 找事務所
-    if destination:
-        row = db.execute(text("""
-            SELECT client_id
-            FROM line_channel_bindings
-            WHERE destination_id = :dest AND is_active = TRUE
-            LIMIT 1
-        """), {"dest": destination}).first()
-        if row and row[0]:
-            return {"client_id": row[0]}
-
-    # 其次：line_user_id 是否已在綁定表
-    row = db.execute(text("""
-        SELECT client_id
-        FROM client_line_users
-        WHERE line_user_id = :lid AND is_active = TRUE
-        LIMIT 1
-    """), {"lid": line_user_id}).first()
-    if row and row[0]:
-        return {"client_id": row[0]}
-
-    # 最後保底：把「登錄 」前綴去掉再對 login_users.client_name
-    name = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", user_name).strip()
-    row = db.execute(text("""
-        SELECT client_id
-        FROM login_users
-        WHERE client_name = :name
-          AND is_active = TRUE
-        LIMIT 1
-    """), {"name": name}).first()
-
-    return {"client_id": row[0] if row else None}
-
-# ============================ 2) 註冊（登錄/確認） ============================
+# ============================ 2) 註冊（含數字選單處理） ============================
 @user_router.post("/register", response_model=RegisterOut)
 def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
+    """
+    這支同時處理：
+    - 「登錄 XXX」→ pending
+    - 「是 / 否」→ registered 或重輸
+    - 「數字」→ 依最近有效選單（類別選單 or 案件列表）做選擇
+    你在 n8n 不用加新節點；所有非「?」輸入都打這支即可。
+    """
     try:
         lid     = (payload.line_user_id or "").strip()
-        name_in = (payload.user_name   or "").strip()
-        cid     = (payload.client_id   or "").strip()
-        text_in = (payload.text        or "").strip()
-        dest    = (payload.destination or "").strip()
+        text_in = _normalize_text(payload.text or "")
 
-        # 回推 client_id（destination → client_id；或從既有綁定表）
-        if not cid and dest:
-            row = db.execute(text("""
-                SELECT client_id FROM line_channel_bindings
-                WHERE destination_id = :dest AND is_active = TRUE
-                LIMIT 1
-            """), {"dest": dest}).first()
-            if row and row[0]:
-                cid = row[0]
-        if not cid and lid:
-            row = db.execute(text("""
-                SELECT client_id FROM client_line_users
-                WHERE line_user_id = :lid AND is_active = TRUE
-                LIMIT 1
-            """), {"lid": lid}).first()
-            if row and row[0]:
-                cid = row[0]
+        # ---------- 0) 判斷是否為純數字（選單選擇） ----------
+        if re.fullmatch(r"[1-9]\d*", text_in):
+            choice = int(text_in)
+            sess = _load_last_session(db, lid)
+            if not sess:
+                return RegisterOut(success=False, message="尚無有效選單，請先輸入「?」。")
 
-        # 解析意圖
-        intent, cname = _parse_intent(text_in)  # prepare / confirm_yes / confirm_no / show_cases / none
+            scope = sess["scope"]
+            payload_json = sess["payload"]
+            # 用後即刪（全部清掉，避免混亂）
+            _consume_all_sessions(db, lid)
 
-        # 使用者說了「登錄 XXX」=> 寫/更新 pending（不立刻成為正式）
+            # A. 類別選單 → 回該類別案件列表，並建立新的列表選單（但不再要求 n8n 帶 key）
+            if scope == "category_menu":
+                menu   = payload_json["menu"]
+                bytype = payload_json["by_type"]
+                if not (1 <= choice <= len(menu)):
+                    return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。")
+
+                chosen = menu[choice - 1]  # {"key": "...", "label": "...", "count": ...}
+                key = chosen["key"]
+                bucket = bytype[key]
+                items = bucket["items"]
+                label = bucket["label"]
+
+                # 產生新列表選單（不存 key，因為我們改成「永遠讀最近一筆」）
+                _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
+                msg = _render_case_brief_list(items, label)
+                return RegisterOut(success=True, message=msg)
+
+            # B. 案件列表 → 回單筆詳細
+            elif scope.startswith("case_list:"):
+                items = payload_json["items"]
+                if not (1 <= choice <= len(items)):
+                    return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。")
+
+                case_id = items[choice - 1]["id"]
+                case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
+                if not case:
+                    return RegisterOut(success=False, message="案件不存在或已移除，請輸入「?」重新載入。")
+
+                return RegisterOut(success=True, message=render_case_detail(case))
+
+            else:
+                return RegisterOut(success=False, message="選單已失效，請重新輸入「?」。")
+
+        # ---------- 1) 解析文字意圖（登錄/確認/問號） ----------
+        intent, cname = _parse_intent(text_in)
+
+        # （可選）如果有人把「?」也丟進來，直接提示去用 /my-cases
+        if intent == "show_cases":
+            return RegisterOut(success=True, message="請輸入「?」以查詢案件。")
+
+        # 1a) 「登錄 XXX」→ 寫/更新 pending（不立刻成為正式）
         if intent == "prepare" and cname:
             candidate = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", cname).strip()
             db.execute(text("""
-                INSERT INTO pending_line_users (line_user_id, client_id, expected_name, status, created_at, updated_at)
-                VALUES (:lid, NULLIF(:cid,''), :name, 'pending', NOW(), NOW())
+                INSERT INTO pending_line_users (line_user_id, expected_name, status, created_at, updated_at)
+                VALUES (:lid, :name, 'pending', NOW(), NOW())
                 ON CONFLICT (line_user_id)
                 DO UPDATE
                 SET expected_name = :name,
-                    client_id     = COALESCE(pending_line_users.client_id, NULLIF(:cid,'')),
                     status        = 'pending',
                     updated_at    = NOW();
-            """), {"lid": lid, "cid": cid, "name": candidate})
+            """), {"lid": lid, "name": candidate})
             db.commit()
+            # 新輸入登錄時，清掉舊選單
+            _consume_all_sessions(db, lid)
             return RegisterOut(
                 success=True,
                 expected_name=candidate,
                 message=f"請確認您的大名：{candidate}\n回覆「是」確認，回覆「否」重新輸入。"
             )
 
-        # 使用者回「是」=> 將 pending → registered
+        # 1b) 「是」→ 將 pending → registered
         if intent == "confirm_yes":
             row = db.execute(text("""
-                SELECT expected_name, client_id
+                SELECT expected_name
                 FROM pending_line_users
                 WHERE line_user_id = :lid
                 ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
@@ -374,26 +331,23 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             if not row or not row[0]:
                 return RegisterOut(success=False, message="尚未收到您的大名，請輸入「登錄 您的大名」。")
 
-            final_name, existed_cid = row[0], row[1]
-            if cid and (existed_cid is None or existed_cid == ""):
-                existed_cid = cid
-
+            final_name = row[0]
             db.execute(text("""
                 UPDATE pending_line_users
                 SET status = 'registered',
-                    client_id = COALESCE(client_id, NULLIF(:cid,'')),
                     updated_at = NOW()
                 WHERE line_user_id = :lid
-            """), {"cid": existed_cid or "", "lid": lid})
+            """), {"lid": lid})
             db.commit()
-
+            # 完成登錄後，清掉舊選單
+            _consume_all_sessions(db, lid)
             return RegisterOut(
                 success=True,
                 expected_name=final_name,
                 message=f"歡迎 {final_name}！已完成登錄。\n輸入「?」即可查詢您的案件進度。"
             )
 
-        # 使用者回「否」=> 清掉候選姓名，維持 pending
+        # 1c) 「否」→ 清候選姓名，維持 pending
         if intent == "confirm_no":
             db.execute(text("""
                 UPDATE pending_line_users
@@ -403,9 +357,10 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 WHERE line_user_id = :lid
             """), {"lid": lid})
             db.commit()
+            _consume_all_sessions(db, lid)
             return RegisterOut(success=True, message="好的，請重新輸入「登錄 您的大名」。")
 
-        # 其他文字：僅提示
+        # 1d) 其他文字 → 若已 registered 給提示；否則引導登錄
         row = db.execute(text("""
             SELECT status FROM pending_line_users
             WHERE line_user_id = :lid
@@ -429,7 +384,7 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     if not lid:
         raise HTTPException(status_code=400, detail="line_user_id 必填")
 
-    # 取使用者已確認的姓名（pending_line_users 裡 status='registered'）
+    # 取使用者已確認的姓名
     row = db.execute(text("""
         SELECT expected_name
         FROM pending_line_users
@@ -446,7 +401,7 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     if not user_name:
         return {"ok": False, "message": "目前查無姓名資訊，請輸入「登錄 您的大名」。"}
 
-    # 只用當事人姓名查 case_records.client（可選含對造）
+    # 查案件
     if payload.include_as_opponent:
         q = db.query(CaseRecord).filter(
             or_(CaseRecord.client == user_name, CaseRecord.opposing_party == user_name)
@@ -464,8 +419,8 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
         # 只有 1 件 → 直接詳細
         return {"ok": True, "total": 1, "message": render_case_detail(rows[0])}
 
-    # 多件 → 依類別歸群
-    buckets: Dict[str, Dict[str, Any]] = {}  # key -> {"label":..., "items":[...] }
+    # 多件 → 依類別歸群並產生「類別選單」
+    buckets: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         key, label = _type_key_label(r.case_type)
         buckets.setdefault(key, {"label": label, "items": []})
@@ -478,150 +433,16 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
         })
 
     types_present = [k for k in ["CRIM", "CIVIL", "OTHER"] if k in buckets]
-    if len(types_present) >= 2:
-        # 類別選單
-        menu_items = [{"key": k, "label": buckets[k]["label"], "count": len(buckets[k]["items"])}
-                      for k in types_present]
-        skey = _save_session(
-            db, lid, "category_menu",
-            {"menu": menu_items, "by_type": buckets}
-        )
-        msg = _render_category_menu(menu_items, skey)
-        return {"ok": True, "total": len(rows), "message": msg}
+    menu_items = [{"key": k, "label": buckets[k]["label"], "count": len(buckets[k]["items"])}
+                  for k in types_present]
 
-    # 只剩一種類別 → 直接列出該類別清單
-    only_key = types_present[0]
-    items = buckets[only_key]["items"]
-    label = buckets[only_key]["label"]
-    skey = _save_session(
-        db, lid, f"case_list:{only_key}",
-        {"label": label, "items": items}
+    # 存一筆「類別選單」session，後續數字輸入會由 /register 讀取最近一筆
+    _save_session(
+        db, lid, "category_menu",
+        {"menu": menu_items, "by_type": buckets}
     )
-    msg = _render_case_brief_list(items, label, skey)
+    msg = _render_category_menu(menu_items)
     return {"ok": True, "total": len(rows), "message": msg}
-
-# ============================ 4) 選了「類別」 → 回該類別清單 ============================
-@user_router.post("/choose-category")
-def choose_category(payload: ChooseCategoryIn, db: Session = Depends(get_db)):
-    lid  = (payload.line_user_id or "").strip()
-    skey = (payload.session_key or "").strip()
-    idx  = int(payload.choice)
-
-    sess = _load_session(db, lid, skey)
-    # 用後即刪舊類別選單
-    _consume_session(db, lid, skey)
-
-    if sess["scope"] != "category_menu":
-        raise HTTPException(status_code=400, detail="選單已失效，請重新輸入「?」")
-
-    menu   = sess["payload"]["menu"]
-    bytype = sess["payload"]["by_type"]
-
-    if not (1 <= idx <= len(menu)):
-        raise HTTPException(status_code=400, detail="選項超出範圍")
-
-    chosen = menu[idx - 1]  # {"key": "...", "label": "...", "count": ...}
-    key = chosen["key"]
-    bucket = bytype[key]
-    items = bucket["items"]
-    label = bucket["label"]
-
-    # 開新列表 session
-    new_key = _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
-    msg = _render_case_brief_list(items, label, new_key)
-    return {"ok": True, "total": len(items), "message": msg}
-
-# ============================ 5) 選了清單中的案件 → 回單筆詳細 ============================
-@user_router.post("/choose-case")
-def choose_case(payload: ChooseCaseIn, db: Session = Depends(get_db)):
-    lid  = (payload.line_user_id or "").strip()
-    skey = (payload.session_key or "").strip()
-    idx  = int(payload.choice)
-
-    sess = _load_session(db, lid, skey)
-    # 用後即刪案件列表選單
-    _consume_session(db, lid, skey)
-
-    if not sess["scope"].startswith("case_list:"):
-        raise HTTPException(status_code=400, detail="列表已失效，請重新輸入「?」")
-
-    items = sess["payload"]["items"]
-    if not (1 <= idx <= len(items)):
-        raise HTTPException(status_code=400, detail="選項超出範圍")
-
-    case_id = items[idx - 1]["id"]
-    case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
-    if not case:
-        raise HTTPException(status_code=404, detail="案件不存在或已移除")
-
-    return {"ok": True, "message": render_case_detail(case)}
-
-
-# ========= NEW: 6) 單一選單選擇端點（自動判斷類別選單/案件列表） =========
-class MenuSelectIn(BaseModel):
-    line_user_id: str
-    choice: int  # 1..N
-
-@user_router.post("/menu-select")
-def menu_select(payload: MenuSelectIn, db: Session = Depends(get_db)):
-    lid  = (payload.line_user_id or "").strip()
-    idx  = int(payload.choice)
-
-    # 抓該用戶最近一筆未過期的選單
-    row = db.execute(
-        text(f"""
-            SELECT session_key, scope, payload_json, created_at
-            FROM user_query_sessions
-            WHERE line_user_id = :lid
-              AND created_at >= NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
-            ORDER BY created_at DESC
-            LIMIT 1
-        """),
-        {"lid": lid, "ttl": SESSION_TTL_MINUTES},
-    ).first()
-
-    if not row:
-        raise HTTPException(status_code=400, detail="尚無有效選單，請重新輸入「?」")
-
-    skey, scope, payload, created_at = row
-    if isinstance(payload, str):
-        payload = json.loads(payload)
-
-    # 用後即刪舊選單
-    _consume_session(db, lid, skey)
-
-    # 依 scope 分流
-    if scope == "category_menu":
-        menu   = payload["menu"]
-        bytype = payload["by_type"]
-        if not (1 <= idx <= len(menu)):
-            raise HTTPException(status_code=400, detail="選項超出範圍")
-
-        chosen = menu[idx - 1]  # {"key": "...", "label": "...", "count": ...}
-        key = chosen["key"]
-        bucket = bytype[key]
-        items = bucket["items"]
-        label = bucket["label"]
-
-        # 建立新的「案件列表」session
-        new_key = _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
-        msg = _render_case_brief_list(items, label, new_key)
-        return {"ok": True, "total": len(items), "message": msg}
-
-    elif scope.startswith("case_list:"):
-        items = payload["items"]
-        if not (1 <= idx <= len(items)):
-            raise HTTPException(status_code=400, detail="選項超出範圍")
-
-        case_id = items[idx - 1]["id"]
-        case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
-        if not case:
-            raise HTTPException(status_code=404, detail="案件不存在或已移除")
-
-        return {"ok": True, "message": render_case_detail(case)}
-
-    else:
-        raise HTTPException(status_code=400, detail="選單已失效，請重新輸入「?」")
 
 # ============================ 健康檢查 ============================
 @user_router.get("/health")
