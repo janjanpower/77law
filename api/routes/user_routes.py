@@ -1,25 +1,25 @@
 # api/routes/user_routes.py
 # -*- coding: utf-8 -*-
 """
-LINE 一般用戶/律師查案路由（單租戶版，n8n 無需新增節點）
-- 「?」→ /my-cases
-- 其餘（登錄/是/否/數字選單）→ 全部走 /register
-  • 數字：自動辨識並處理最近一筆有效選單（類別選單 or 案件列表）
-  • 登錄/是/否：維持原有流程
-- 會話選單：user_query_sessions（TTL 預設 30 分鐘），過期自清、同 scope 只留最新、用後即刪
+LINE 一般用戶/律師查案路由（單租戶、n8n 零改動版）
+- 使用者輸入「?」 → /my-cases
+- 其他（登錄 XXX／是／否／數字選單） → /register
+- 多筆 → 類別選單（刑事/民事/其他）；單筆 → 直接詳情
+- 案件進度只顯示【每個階段的備註】，每個階段獨立區塊；無日期與「一審：備註」等字樣
+- 會話暫存 user_query_sessions：TTL 可由環境變數 UQS_TTL_MINUTES（預設 30 分）控制
 """
 
-import logging, traceback, re, json, os
-from datetime import datetime
-from typing import Optional, List, Dict, Any, Tuple,Literal
-from uuid import uuid4
-from api.database import get_db
-from api.models_cases import CaseRecord  # 你專案的案件 ORM
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import text, or_
 from sqlalchemy.orm import Session
+from sqlalchemy import text, or_
+from typing import Optional, List, Dict, Any, Tuple, Literal
+from datetime import datetime
+from uuid import uuid4
+import logging, traceback, re, json, os
 
+from api.database import get_db
+from api.models_cases import CaseRecord  # 你的案件 ORM
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -29,22 +29,13 @@ user_router = APIRouter(prefix="/api/user", tags=["user"])
 # ============================ 可調參數 ============================
 SESSION_TTL_MINUTES = int(os.getenv("UQS_TTL_MINUTES", "30"))
 
-# ============================ Pydantic ============================
-class LookupIn(BaseModel):
-    line_user_id: Optional[str] = None
-    user_name:   Optional[str] = None
-    destination: Optional[str] = None
-    text:        Optional[str] = None
-
-class LookupOut(BaseModel):
-    client_id: Optional[str] = None
-
+# ============================ Pydantic Models ============================
 class RegisterIn(BaseModel):
     line_user_id: str = Field(..., min_length=5)
     user_name:   Optional[str] = None
     client_id:   Optional[str] = None
     text:        Optional[str] = None
-    destination: Optional[str] = None  # 相容舊流程（原始文字）
+    destination: Optional[str] = None
 
 class RegisterOut(BaseModel):
     success: bool
@@ -63,20 +54,18 @@ class RegisterOut(BaseModel):
 
 class MyCasesIn(BaseModel):
     line_user_id: str
-    include_as_opponent: Optional[bool] = False  # 是否把對造人也算進來（預設關閉）
+    include_as_opponent: Optional[bool] = False  # 是否包含對造
 
-# ============================ Helpers ============================
+# ============================ Helpers：一般 ============================
 def _normalize_text(s: str) -> str:
-    """全形數字→半形、全形問號→半形、trim"""
+    """全形問號/數字→半形；trim。"""
     s = (s or "")
-    # 全形問號
     s = s.replace("？", "?")
-    # 全形數字
     s = re.sub(r"[０-９]", lambda m: chr(ord(m.group(0)) - 0xFEE0), s)
     return s.strip()
 
 def _parse_intent(text_msg: str):
-    """登錄/確認/? 三類意圖，其餘交給數字或預設"""
+    """解析登錄/確認/?。其餘交給數字或預設。"""
     msg = _normalize_text(text_msg)
     if not msg:
         return "none", None
@@ -86,7 +75,7 @@ def _parse_intent(text_msg: str):
     if msg in ("是","yes","Yes","YES"): return "confirm_yes", None
     if msg in ("否","no","No","NO"):   return "confirm_no", None
     if msg == "?":                      return "show_cases", None
-    return "none", None  # 可能是數字或其他
+    return "none", None
 
 def _fmt_dt(v):
     if not v:
@@ -97,205 +86,138 @@ def _fmt_dt(v):
         return v.strftime("%Y-%m-%d %H:%M:%S")
     return str(v)
 
-def _build_progress_view(progress_stages):
-    """
-    解析進度資料並回傳：
-    - lines: ["1. 2025-08-05 調解 13:00", "2. 2025-08-07 確定 15:00", ...]
-    - notes: ["帶刀子", ...]   # 彙整各階段 note/remark/memo
-    - count: 已完成階段數
-
-    支援格式：
-    A) dict: {"偵查中": "2025-08-10", "準備程序": {"date":"2025-09-01", "time":"15:00", "note":"已送卷"}}
-    B) list: [{"stage":"偵查中","date":"2025-08-10","time":"13:00","note":"..."}, ...]
-    C) str  : 原樣回傳為單一行
-    """
-    if not progress_stages:
-        return {"lines": ["尚無進度階段記錄"], "notes": [], "count": 0}
-
-    try:
-        data = progress_stages
-        if isinstance(progress_stages, str):
-            try:
-                data = json.loads(progress_stages)
-            except Exception:
-                # 純文字就直接當作唯一一行
-                return {"lines": [str(progress_stages)], "notes": [], "count": 1}
-
-        lines, notes = [], []
-
-        def push(stage, date=None, time=None, note=None):
-            stage = (stage or "-").strip()
-            date  = (date  or "-").strip()
-            time  = (time  or "").strip()
-            tpart = f" {time}" if time else ""
-            lines.append(f"{len(lines)+1}. {date} {stage}{tpart}")
-            if note:
-                n = str(note).strip()
-                if n:
-                    notes.append(n)
-
-        if isinstance(data, dict):
-            # 依照 dict 插入順序輸出
-            for stage, v in data.items():
-                if isinstance(v, dict):
-                    push(stage,
-                        v.get("date") or v.get("at") or v.get("updated_at") or v.get("time") or "-",
-                        v.get("time"),
-                        v.get("note") or v.get("notes") or v.get("remark") or v.get("memo"))
-
-                    # list 形式（同上）
-                    note  = item.get("note") or item.get("notes") or item.get("remark") or item.get("memo")
-                else:
-                    # v 是日期字串；若含時間（例如 "2025-08-05 13:00"），自動切開
-                    vv = str(v)
-                    d, t = (vv.split(" ", 1) + [""])[:2] if " " in vv else (vv, "")
-                    push(stage, d, t, None)
-
-        elif isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict):
-                    stage = item.get("stage") or item.get("name") or item.get("label")
-                    date  = item.get("date")  or item.get("at")   or item.get("updated_at")
-                    time  = item.get("time")
-                    note  = item.get("note")  or item.get("remark") or item.get("memo")
-                    push(stage, date, time, note)
-                else:
-                    # 非 dict 元素，直接當作一行
-                    lines.append(f"{len(lines)+1}. {item}")
-
-        else:
-            return {"lines": [str(data)], "notes": [], "count": 1}
-
-        if not lines:
-            lines = ["尚無進度階段記錄"]
-
-        return {"lines": lines, "notes": notes, "count": len(lines)}
-
-    except Exception:
-        return {"lines": [str(progress_stages)], "notes": [], "count": 1}
-
-def _build_stage_notes_view(progress_stages):
-    """
-    只輸出『有備註的階段』，格式：
-      • <stage>
-        <note line 1>
-        <note line 2>（若有）
-    支援的資料結構：
-      - dict: { "一審": {"date":"...", "note":"..."}, "二審": {...} }
-      - list: [ {"stage":"一審", "note":"..."}, {"stage":"二審", "notes":[...]} ]
-      - 字串/其他：忽略（因為無法得知 stage 與 note）
-    備註欄位鍵名：note / notes / remark / memo（notes 可為 list）
-    """
-    if not progress_stages:
+# ============================ Helpers：進度「備註」視圖 ============================
+def _as_list_of_str(val):
+    """把 notes 欄位轉成 list[str]（接受 str / list / dict）。"""
+    if val is None:
         return []
+    if isinstance(val, str):
+        return [s.strip() for s in re.split(r"\r?\n", val) if s.strip()]
+    if isinstance(val, (list, tuple)):
+        out = []
+        for x in val:
+            out += _as_list_of_str(x)
+        return [s for s in out if s]
+    if isinstance(val, dict):
+        return _as_list_of_str(list(val.values()))
+    return [str(val).strip()] if str(val).strip() else []
 
-    # 可能是 JSON 字串
-    data = progress_stages
-    if isinstance(progress_stages, str):
+def _pick(d: dict, *keys):
+    for k in keys:
+        if k in d and d[k] not in (None, ""):
+            return d[k]
+    return None
+
+def _iter_stage_items(obj):
+    """
+    解析多種結構為 iterable(dict)：每個 item 具有：
+      - stage：階段名稱
+      - notes：list[str] 備註
+    支援：
+      dict: {"一審":{"note":"...","notes":[...]}, "二審": {...}}
+      list: [{"stage":"一審","note":"..."}, {"name":"二審","notes":[...]}]
+      包一層：{"stages":[...]}/{"items":[...]}/{"data":[...]}
+      str: 嘗試 json.loads，失敗則忽略
+    """
+    data = obj
+    if isinstance(obj, str):
         try:
-            data = json.loads(progress_stages)
+            data = json.loads(obj)
         except Exception:
-            return []  # 純文字不處理
-
-    def to_lines(stage_label, note_obj):
-        """把一個階段的備註物件展開成多行"""
-        if note_obj is None or note_obj == "":
-            return []
-        lines = []
-        # 轉為 list[str]
-        if isinstance(note_obj, (list, tuple)):
-            note_list = [str(x).strip() for x in note_obj if str(x).strip()]
-        else:
-            note_list = [str(note_obj).strip()] if str(note_obj).strip() else []
-
-        if not note_list:
             return []
 
-        lines.append(f"{stage_label}")         # 第一行：階段名
-        for n in note_list:                    # 後續：縮排的備註內容行
-            # 若備註內含換行，就切成多行
-            sublines = [s for s in re.split(r"\r?\n", n) if s.strip()]
-            for s in sublines:
-                lines.append(f"  {s}")
-        return lines
-
-    out = []
+    # 容器鍵
+    if isinstance(data, dict) and any(k in data for k in ("stages", "items", "data")):
+        for k in ("stages", "items", "data"):
+            if k in data:
+                data = data[k]
+                break
 
     if isinstance(data, dict):
-        for stage, v in data.items():
-            note = None
-            if isinstance(v, dict):
-                note = v.get("note") or v.get("notes") or v.get("remark") or v.get("memo")
-            # 若是字串或其他型別，當作沒有備註 → 忽略
-            out.extend(to_lines(stage, note))
+        for stage, payload in data.items():
+            if isinstance(payload, dict):
+                yield {
+                    "stage": stage,
+                    "notes": _as_list_of_str(
+                        _pick(payload, "progress_notes", "note", "notes", "remark", "memo", "comment", "comments", "description", "desc")
+                    ),
+                }
+        return
 
-    elif isinstance(data, list):
+    if isinstance(data, list):
         for item in data:
             if not isinstance(item, dict):
                 continue
-            stage = item.get("stage") or item.get("name") or item.get("label")
-            note  = item.get("note") or item.get("notes") or item.get("remark") or item.get("memo")
-            if stage:
-                out.extend(to_lines(stage, note))
+            stage = _pick(item, "stage", "name", "label", "phase", "phase_name", "title")
+            notes = _as_list_of_str(
+                _pick(item, "progress_notes", "note", "notes", "remark", "memo", "comment", "comments", "description", "desc")
+            )
+            yield {"stage": stage, "notes": notes}
+        return
 
-    # 移除完全重複的相鄰區塊（避免重覆資料）
-    dedup = []
-    for line in out:
-        if not dedup or dedup[-1] != line:
-            dedup.append(line)
+    return []
 
-    return dedup
+def _build_stage_notes_view(progress_stages, case_level_notes=None) -> List[str]:
+    """
+    回傳只含『有備註的階段』的文字行：
+      一審
+        備註 A
+        備註 B
+    若 progress_stages 完全無法解析，回退使用案件層級 progress_notes。
+    """
+    lines: List[str] = []
+    added = False
 
+    for item in _iter_stage_items(progress_stages):
+        stage = (item.get("stage") or "-").strip()
+        notes = [n for n in item.get("notes", []) if n]
+        if not notes:
+            continue
+        lines.append(f"{stage}")
+        for n in notes:
+            for s in re.split(r"\r?\n", n):
+                if s.strip():
+                    lines.append(f"  {s.strip()}")
+        added = True
 
-def render_case_detail(case) -> str:
-    case_number   = case.case_number or case.case_id or "-"
-    client        = case.client or "-"
-    case_type     = case.case_type or "-"
-    case_reason   = case.case_reason or "-"
-    court         = case.court or "-"
-    division      = case.division or "-"
-    legal_affairs = getattr(case, "legal_affairs", None) or "-"
-    opposing      = case.opposing_party or "-"
-    # progress    = case.progress or "待處理"   # 若不需要就保留註解
-    created_at    = _fmt_dt(getattr(case, "created_date", None))
-    updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
+    # 完全沒取到 → 回退案件層級 notes
+    if not added and case_level_notes is not None:
+        obj = case_level_notes
+        if isinstance(obj, str):
+            try:
+                obj = json.loads(obj)
+            except Exception:
+                text = obj.strip()
+                if text:
+                    lines.append("案件備註")
+                    for s in re.split(r"\r?\n", text):
+                        if s.strip():
+                            lines.append(f"  {s.strip()}")
+                return lines
 
-    lines = []
-    lines.append("ℹ️ 案件詳細資訊")
-    lines.append("────────────────────")
-    lines.append(f"📌 案件編號：{case_number}")
-    lines.append(f"👤 當事人：{client}")
-    lines.append("────────────────────")
-    lines.append(f"案件類型：{case_type}")
-    lines.append(f"案由：{case_reason}")
-    lines.append(f"法院：{court}")
-    lines.append(f"法務：{legal_affairs}")
-    lines.append(f"對造：{opposing}")
-    lines.append(f"負責股別：{division}")
-    lines.append("────────────────────")
+        if isinstance(obj, dict):
+            for stage, note_val in obj.items():
+                notes = _as_list_of_str(note_val)
+                if not notes:
+                    continue
+                lines.append(f"{stage}")
+                for s in notes:
+                    lines.append(f"  {s}")
+        elif isinstance(obj, list):
+            for it in obj:
+                if not isinstance(it, dict):
+                    continue
+                stage = _pick(it, "stage", "name", "label", "phase", "phase_name", "title") or "案件備註"
+                notes = _as_list_of_str(_pick(it, "progress_notes", "note", "notes", "remark", "memo", "comment", "comments", "description", "desc"))
+                if not notes:
+                    continue
+                lines.append(f"{stage}")
+                for s in notes:
+                    lines.append(f"  {s}")
 
-    # ===== 只顯示「每個階段的備註」 =====
-    lines.append("📈 案件進度備註：")
-    stage_notes_lines = _build_stage_notes_view(getattr(case, "progress_stages", None))
-    if stage_notes_lines:
-        lines.extend(stage_notes_lines)
-    else:
-        lines.append("無備註")
+    return lines
 
-    lines.append("────────────────────")
-    lines.append("📁 案件資料夾：")
-    # lines.append("🔢 輸入編號瀏覽（1–2）檔案")
-    # lines.append("")
-    # lines.append("  1. 案件資訊（2 個檔案）")
-    # lines.append("  2. 進度總覽（1 個檔案）")
-    lines.append("（稍後開放）")
-    lines.append("────────────────────")
-    lines.append(f"🟥建立時間：{created_at}")
-    lines.append(f"🟩更新時間：{updated_at}")
-    return "\n".join(lines)
-
-
-# —— 類別歸一：回 (key, label)
+# ============================ Helpers：類別/選單 ============================
 def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
     t = (case_type or "").strip()
     if "刑" in t:
@@ -326,7 +248,7 @@ def _render_case_brief_list(items: List[Dict[str, Any]], label: str) -> str:
     lines.append(f"💡 請輸入選項號碼 (1-{len(items)})")
     return "\n".join(lines)
 
-# ============================ 會話暫存（user_query_sessions） ============================
+# ============================ Helpers：會話暫存 ============================
 def _cleanup_expired_sessions(db: Session, line_user_id: Optional[str] = None):
     params = {"ttl": SESSION_TTL_MINUTES}
     where_user = ""
@@ -344,7 +266,6 @@ def _cleanup_expired_sessions(db: Session, line_user_id: Optional[str] = None):
     db.commit()
 
 def _save_session(db: Session, line_user_id: str, scope: str, payload: Dict[str, Any]) -> None:
-    # 逾時自清 + 同 scope 只留最新
     _cleanup_expired_sessions(db, line_user_id)
     db.execute(
         text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid AND scope = :scope"""),
@@ -360,7 +281,6 @@ def _save_session(db: Session, line_user_id: str, scope: str, payload: Dict[str,
     db.commit()
 
 def _load_last_session(db: Session, line_user_id: str) -> Optional[Dict[str, Any]]:
-    # 取用戶最近一筆未過期的選單
     row = db.execute(
         text(f"""
             SELECT session_key, scope, payload_json, created_at
@@ -380,80 +300,121 @@ def _load_last_session(db: Session, line_user_id: str) -> Optional[Dict[str, Any
     return {"scope": scope, "payload": payload, "created_at": created_at}
 
 def _consume_all_sessions(db: Session, line_user_id: str):
-    db.execute(
-        text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid"""),
-        {"lid": line_user_id},
-    )
+    db.execute(text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid"""),
+               {"lid": line_user_id})
     db.commit()
 
-# ============================ 2) 註冊（含數字選單處理） ============================
+# ============================ 視圖：單筆詳情（僅「每階段備註」） ============================
+def render_case_detail(case) -> str:
+    case_number   = case.case_number or case.case_id or "-"
+    client        = case.client or "-"
+    case_type     = case.case_type or "-"
+    case_reason   = case.case_reason or "-"
+    court         = case.court or "-"
+    division      = case.division or "-"
+    legal_affairs = getattr(case, "legal_affairs", None) or "-"
+    opposing      = case.opposing_party or "-"
+    created_at    = _fmt_dt(getattr(case, "created_date", None))
+    updated_at    = _fmt_dt(getattr(case, "updated_date", None) or getattr(case, "updated_at", None))
+
+    lines: List[str] = []
+    lines.append("ℹ️ 案件詳細資訊")
+    lines.append("────────────────────")
+    lines.append(f"📌 案件編號：{case_number}")
+    lines.append(f"👤 當事人：{client}")
+    lines.append("────────────────────")
+    lines.append(f"案件類型：{case_type}")
+    lines.append(f"案由：{case_reason}")
+    lines.append(f"法院：{court}")
+    lines.append(f"法務：{legal_affairs}")
+    lines.append(f"對造：{opposing}")
+    lines.append(f"負責股別：{division}")
+    lines.append("────────────────────")
+
+    # 只顯示「每個階段的備註」
+    lines.append("📈 案件進度備註：")
+    stage_notes_lines = _build_stage_notes_view(
+        getattr(case, "progress_stages", None),
+        getattr(case, "progress_notes", None)  # 回退來源
+    )
+    if stage_notes_lines:
+        lines.extend(stage_notes_lines)
+    else:
+        lines.append("（目前沒有階段備註）")
+
+    lines.append("────────────────────")
+    lines.append("📁 案件資料夾：")
+    # lines.append("🔢 輸入編號瀏覽（1–2）檔案")
+    # lines.append("")
+    # lines.append("  1. 案件資訊（2 個檔案）")
+    # lines.append("  2. 進度總覽（1 個檔案）")
+    lines.append("（稍後開放）")
+    lines.append("────────────────────")
+    lines.append(f"🟥建立時間：{_fmt_dt(getattr(case, 'created_date', None))}")
+    lines.append(f"🟩更新時間：{_fmt_dt(getattr(case, 'updated_date', None) or getattr(case, 'updated_at', None))}")
+    return "\n".join(lines)
+
+# ============================ 1) /register（含數字選單） ============================
 @user_router.post("/register", response_model=RegisterOut)
 def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
     """
-    這支同時處理：
     - 「登錄 XXX」→ pending
     - 「是 / 否」→ registered 或重輸
-    - 「數字」→ 依最近有效選單（類別選單 or 案件列表）做選擇
-    你在 n8n 不用加新節點；所有非「?」輸入都打這支即可。
+    - 「數字」→ 依最近一筆有效選單（類別選單 or 案件列表）做選擇
     """
     try:
         lid     = (payload.line_user_id or "").strip()
         text_in = _normalize_text(payload.text or "")
 
-        # ---------- 0) 判斷是否為純數字（選單選擇） ----------
+        # 0) 數字（選單）
         if re.fullmatch(r"[1-9]\d*", text_in):
             choice = int(text_in)
             sess = _load_last_session(db, lid)
             if not sess:
-                return RegisterOut(success=False, message="尚無有效選單，請先輸入「?」。")
+                return RegisterOut(success=False, message="尚無有效選單，請先輸入「?」。", route='INFO')
 
             scope = sess["scope"]
             payload_json = sess["payload"]
-            # 用後即刪（全部清掉，避免混亂）
-            _consume_all_sessions(db, lid)
+            _consume_all_sessions(db, lid)  # 用後即刪
 
-            # A. 類別選單 → 回該類別案件列表，並建立新的列表選單（但不再要求 n8n 帶 key）
             if scope == "category_menu":
                 menu   = payload_json["menu"]
                 bytype = payload_json["by_type"]
                 if not (1 <= choice <= len(menu)):
-                    return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。")
+                    return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。", route='INFO')
 
-                chosen = menu[choice - 1]  # {"key": "...", "label": "...", "count": ...}
+                chosen = menu[choice - 1]   # {"key": "...", "label": "...", "count": ...}
                 key = chosen["key"]
                 bucket = bytype[key]
                 items = bucket["items"]
                 label = bucket["label"]
 
-                # 產生新列表選單（不存 key，因為我們改成「永遠讀最近一筆」）
+                # 建新的「案件列表」選單（靠 /register 讀最近一筆）
                 _save_session(db, lid, f"case_list:{key}", {"label": label, "items": items})
                 msg = _render_case_brief_list(items, label)
                 return RegisterOut(success=True, message=msg, route='MENU_LIST')
 
-            # B. 案件列表 → 回單筆詳細
             elif scope.startswith("case_list:"):
                 items = payload_json["items"]
                 if not (1 <= choice <= len(items)):
-                    return RegisterOut(success=False, message="選項超出範圍，請重新輸入「?」。")
+                    return RegisterOut(success=False, message="選項超出範圍，請輸入「?」重新載入。", route='INFO')
 
                 case_id = items[choice - 1]["id"]
                 case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
                 if not case:
-                    return RegisterOut(success=False, message="案件不存在或已移除，請輸入「?」重新載入。")
+                    return RegisterOut(success=False, message="案件不存在或已移除，請輸入「?」重新載入。", route='INFO')
 
                 return RegisterOut(success=True, message=render_case_detail(case), route='CASE_DETAIL')
 
             else:
-                return RegisterOut(success=False, message="選單已失效，請重新輸入「?」。")
+                return RegisterOut(success=False, message="選單已失效，請重新輸入「?」。", route='INFO')
 
-        # ---------- 1) 解析文字意圖（登錄/確認/問號） ----------
+        # 1) 登錄/確認/? 意圖
         intent, cname = _parse_intent(text_in)
 
-        # （可選）如果有人把「?」也丟進來，直接提示去用 /my-cases
         if intent == "show_cases":
-            return RegisterOut(success=True, message="請輸入「?」以查詢案件。")
+            return RegisterOut(success=True, message="請輸入「?」以查詢案件。", route='INFO')
 
-        # 1a) 「登錄 XXX」→ 寫/更新 pending（不立刻成為正式）
         if intent == "prepare" and cname:
             candidate = re.sub(r"^(?:登錄|登陸|登入|登录)\s+", "", cname).strip()
             db.execute(text("""
@@ -466,15 +427,14 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                     updated_at    = NOW();
             """), {"lid": lid, "name": candidate})
             db.commit()
-            # 新輸入登錄時，清掉舊選單
-            _consume_all_sessions(db, lid)
+            _consume_all_sessions(db, lid)  # 新登錄清掉舊選單
             return RegisterOut(
                 success=True,
                 expected_name=candidate,
                 message=f"請確認您的大名：{candidate}\n回覆「是」確認，回覆「否」重新輸入。",
                 route='REGISTER_PREPARE'
             )
-        # 1b) 「是」→ 將 pending → registered
+
         if intent == "confirm_yes":
             row = db.execute(text("""
                 SELECT expected_name
@@ -484,7 +444,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 LIMIT 1
             """), {"lid": lid}).first()
             if not row or not row[0]:
-                return RegisterOut(success=False, message="尚未收到您的大名，請輸入「登錄 您的大名」。")
+                return RegisterOut(success=False, message="尚未收到您的大名，請輸入「登錄 您的大名」。", route='INFO')
 
             final_name = row[0]
             db.execute(text("""
@@ -494,7 +454,6 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 WHERE line_user_id = :lid
             """), {"lid": lid})
             db.commit()
-            # 完成登錄後，清掉舊選單
             _consume_all_sessions(db, lid)
             return RegisterOut(
                 success=True,
@@ -503,8 +462,6 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
                 route='REGISTER_DONE'
             )
 
-
-        # 1c) 「否」→ 清候選姓名，維持 pending
         if intent == "confirm_no":
             db.execute(text("""
                 UPDATE pending_line_users
@@ -517,8 +474,7 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             _consume_all_sessions(db, lid)
             return RegisterOut(success=True, message="好的，請重新輸入「登錄 您的大名」。", route='REGISTER_RETRY')
 
-
-        # 1d) 其他文字 → 若已 registered 給提示；否則引導登錄
+        # 2) 其他文字 → 已登錄提示 / 引導登錄
         row = db.execute(text("""
             SELECT status FROM pending_line_users
             WHERE line_user_id = :lid
@@ -526,23 +482,23 @@ def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
             LIMIT 1
         """), {"lid": lid}).first()
         if row and row[0] == "registered":
-            return RegisterOut(success=True, message="已登錄，用「?」可查詢您的案件。")
+            return RegisterOut(success=True, message="已登錄，用「?」可查詢您的案件。", route='INFO')
         else:
-            return RegisterOut(success=False, message="您好，請輸入「登錄 您的大名」完成登錄。")
+            return RegisterOut(success=False, message="您好，請輸入「登錄 您的大名」完成登錄。", route='INFO')
 
     except Exception as e:
         db.rollback()
         logger.error(f"/register 失敗: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="REG_500: 系統錯誤")
 
-# ============================ 3) ? 查個人案件（>1 先選類別） ============================
+# ============================ 2) /my-cases ============================
 @user_router.post("/my-cases")
 def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     lid = (payload.line_user_id or "").strip()
     if not lid:
         raise HTTPException(status_code=400, detail="line_user_id 必填")
 
-    # 取使用者已確認的姓名
+    # 取使用者已確認姓名
     row = db.execute(text("""
         SELECT expected_name
         FROM pending_line_users
@@ -553,17 +509,15 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
         LIMIT 1
     """), {"lid": lid}).first()
     if not row or not row[0]:
-        return {"ok": False, "message": "尚未登錄，請輸入「登錄 您的大名」完成登錄。"}
+        return {"ok": False, "message": "尚未登錄，請輸入「登錄 您的大名」完成登錄。", "route": "INFO"}
 
     user_name = row[0].strip()
     if not user_name:
-        return {"ok": False, "message": "目前查無姓名資訊，請輸入「登錄 您的大名」。"}
+        return {"ok": False, "message": "目前查無姓名資訊，請輸入「登錄 您的大名」。", "route": "INFO"}
 
     # 查案件
     if payload.include_as_opponent:
-        q = db.query(CaseRecord).filter(
-            or_(CaseRecord.client == user_name, CaseRecord.opposing_party == user_name)
-        )
+        q = db.query(CaseRecord).filter(or_(CaseRecord.client == user_name, CaseRecord.opposing_party == user_name))
     else:
         q = db.query(CaseRecord).filter(CaseRecord.client == user_name)
 
@@ -571,17 +525,12 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     rows: List[CaseRecord] = q.all()
 
     if not rows:
-        return {"ok": True, "total": 0,
-                "message": f"沒有找到「{user_name}」的案件。",
-                "route": "INFO"}                     # ⬅️ 新增
+        return {"ok": True, "total": 0, "message": f"沒有找到「{user_name}」的案件。", "route": "INFO"}
 
     if len(rows) == 1:
-        return {"ok": True, "total": 1,
-                "message": render_case_detail(rows[0]),
-                "route": "CASE_DETAIL"}              # ⬅️ 新增
+        return {"ok": True, "total": 1, "message": render_case_detail(rows[0]), "route": "CASE_DETAIL"}
 
-
-    # 多件 → 依類別歸群並產生「類別選單」
+    # 多筆 → 分類
     buckets: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         key, label = _type_key_label(r.case_type)
@@ -594,28 +543,23 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
             "updated_at": _fmt_dt(getattr(r, "updated_date", None) or getattr(r, "updated_at", None))
         })
 
-    # —— 多筆 → 依類別歸群 …（你的原有分組程式碼保留）
     types_present = [k for k in ["CRIM", "CIVIL", "OTHER"] if k in buckets]
 
     if len(types_present) >= 2:
         # 類別選單
         menu_items = [{"key": k, "label": buckets[k]["label"], "count": len(buckets[k]["items"])}
-                    for k in types_present]
+                      for k in types_present]
         _save_session(db, lid, "category_menu", {"menu": menu_items, "by_type": buckets})
         msg = _render_category_menu(menu_items)
-        return {"ok": True, "total": len(rows),
-                "message": msg,
-                "route": "MENU_CATEGORY"}            # ⬅️ 新增
+        return {"ok": True, "total": len(rows), "message": msg, "route": "MENU_CATEGORY"}
 
-    # 只有一種類別 → 直接列出該類別清單
+    # 單一類別 → 直接列出清單
     only_key = types_present[0]
     items = buckets[only_key]["items"]
     label = buckets[only_key]["label"]
     _save_session(db, lid, f"case_list:{only_key}", {"label": label, "items": items})
     msg = _render_case_brief_list(items, label)
-    return {"ok": True, "total": len(rows),
-            "message": msg,
-            "route": "MENU_LIST"}
+    return {"ok": True, "total": len(rows), "message": msg, "route": "MENU_LIST"}
 
 # ============================ 健康檢查 ============================
 @user_router.get("/health")
