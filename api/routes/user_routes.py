@@ -1,7 +1,7 @@
 # api/routes/user_routes.py
 # -*- coding: utf-8 -*-
 
-from operator import or_
+from sqlalchemy import or_
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -244,56 +244,44 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     if not lid:
         raise HTTPException(status_code=400, detail="line_user_id 必填")
 
-    # 找綁定資料（允許 is_active 為 NULL 視為有效）
-    bind = db.query(ClientLineUsers).filter(
-        ClientLineUsers.line_user_id == lid,
-        func.coalesce(ClientLineUsers.is_active, true()) == true()
-    ).first()
+    # 1) 取使用者已確認的姓名（以 pending_line_users 的 registered 狀態為準）
+    row = db.execute(text("""
+        SELECT expected_name
+        FROM pending_line_users
+        WHERE line_user_id = :lid
+          AND status = 'registered'
+          AND expected_name IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
+        LIMIT 1
+    """), {"lid": lid}).first()
 
-    if not bind:
-        return {"ok": False, "message": "目前查無綁定，請先輸入「登錄 你的大名」完成綁定。"}
+    if not row or not row[0]:
+        return {"ok": False, "message": "尚未登錄，請輸入「登錄 您的大名」完成登錄。"}
 
-    q = db.query(CaseRecord)
+    user_name = row[0].strip()
+    if not user_name:
+        return {"ok": False, "message": "目前查無姓名資訊，請輸入「登錄 您的大名」。"}
 
-    # ✅ 1) 優先用租戶隔離
-    if getattr(bind, "client_id", None):
-        q = q.filter(CaseRecord.client_id == bind.client_id)
-
-        # （可選）如果你希望用戶只看到「自己的案件」，再加上姓名條件
-        if getattr(bind, "user_name", None):
-            if payload.include_as_opponent:
-                q = q.filter(or_(
-                    CaseRecord.client == bind.user_name,
-                    CaseRecord.opposing_party == bind.user_name
-                ))
-            else:
-                q = q.filter(CaseRecord.client == bind.user_name)
+    # 2) 只用當事人姓名查 case_records.client（可選含對造）
+    if payload.include_as_opponent:
+        # 如果你有 ORM 模型：
+        q = db.query(CaseRecord).filter(
+            or_(CaseRecord.client == user_name, CaseRecord.opposing_party == user_name)
+        )
     else:
-        # ⛑️ 2) 舊資料尚未回填 client_id → 退回以姓名查詢
-        if not getattr(bind, "user_name", None):
-            return {"ok": False, "message": "目前查無案件（綁定資料缺少姓名）"}
-        if payload.include_as_opponent:
-            q = q.filter(or_(
-                CaseRecord.client == bind.user_name,
-                CaseRecord.opposing_party == bind.user_name
-            ))
-        else:
-            q = q.filter(CaseRecord.client == bind.user_name)
+        q = db.query(CaseRecord).filter(CaseRecord.client == user_name)
 
     q = q.order_by(text("updated_date DESC NULLS LAST, updated_at DESC NULLS LAST, id DESC")).limit(50)
-    rows: List[CaseRecord] = q.all()
+    rows = q.all()
 
     if not rows:
-        return {"ok": True, "total": 0, "message": "目前查無案件"}
+        return {"ok": True, "total": 0, "message": f"沒有找到「{user_name}」的案件。"}
 
-    # 你現有的回覆格式（示範）
     def fmt(r: CaseRecord) -> str:
         ct  = r.case_type or "-"
-        cid = r.case_id   or "-"
-        num = r.case_number or "-"
-        cli = r.client or "-"
+        num = r.case_number or r.case_id or "-"
         prog= r.progress or "-"
-        return f"{cli} / {ct} / {num or cid} / 進度:{prog}"
+        return f"案號：{num}｜類型：{ct}｜進度：{prog}"
 
     return {
         "ok": True,
