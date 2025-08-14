@@ -473,11 +473,58 @@ def render_case_detail(case) -> str:
     lines.append("────────────────────")
 
     lines.append("📈案件進度歷程：")
+
+    # 嘗試獲取所有可能的時間相關欄位
+    progress_stages = getattr(case, "progress_stages", None)
+    progress_notes = getattr(case, "progress_notes", None)
+    progress_times = getattr(case, "progress_times", None)
+    progress_time = getattr(case, "progress_time", None)
+
+    # 建構完整的進度資料，包含時間資訊
+    enhanced_stages = progress_stages
+    # 如果有獨立的時間欄位，將其加入到階段資料中
+    if (progress_times or progress_time) and enhanced_stages:
+        try:
+            # 確保 stages 是可操作的格式
+            if isinstance(enhanced_stages, str):
+                enhanced_stages = json.loads(enhanced_stages)
+
+            # 處理時間資料
+            time_data = progress_times or progress_time
+            if isinstance(time_data, str):
+                try:
+                    time_data = json.loads(time_data)
+                except:
+                    # 如果是純時間字串，套用到所有階段
+                    if isinstance(enhanced_stages, dict):
+                        for stage_key in enhanced_stages:
+                            if isinstance(enhanced_stages[stage_key], dict):
+                                enhanced_stages[stage_key]["progress_time"] = time_data
+                            else:
+                                enhanced_stages[stage_key] = {
+                                    "date": enhanced_stages[stage_key],
+                                    "progress_time": time_data
+                                }
+
+            # 如果 time_data 是字典，按階段名稱匹配
+            elif isinstance(time_data, dict) and isinstance(enhanced_stages, dict):
+                for stage_key, stage_info in enhanced_stages.items():
+                    if stage_key in time_data:
+                        if isinstance(stage_info, dict):
+                            stage_info["progress_time"] = time_data[stage_key]
+                        else:
+                            enhanced_stages[stage_key] = {
+                                "date": stage_info,
+                                "progress_time": time_data[stage_key]
+                            }
+        except Exception as e:
+            logger.warning(f"合併時間資料時發生錯誤: {e}")
+            # 如果合併失敗，使用原始資料
+            enhanced_stages = progress_stages
+
     timeline = _build_progress_timeline_with_notes(
-        getattr(case, "progress_stages", None),
-        getattr(case, "progress_notes", None),
-
-
+        enhanced_stages,
+        progress_notes,
     )
     if timeline:
         lines.extend(timeline)
