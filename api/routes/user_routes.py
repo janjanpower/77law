@@ -9,17 +9,18 @@ LINE 一般用戶/律師查案路由（單租戶版，n8n 無需新增節點）
 - 會話選單：user_query_sessions（TTL 預設 30 分鐘），過期自清、同 scope 只留最新、用後即刪
 """
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
-from sqlalchemy import text, or_
-from typing import Optional, List, Dict, Any, Tuple
-from datetime import datetime
-from uuid import uuid4
 import logging, traceback, re, json, os
+from datetime import datetime
+from typing import Optional, List, Dict, Any, Tuple
+from uuid import uuid4
 
 from api.database import get_db
 from api.models_cases import CaseRecord  # 你專案的案件 ORM
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import text, or_
+from sqlalchemy.orm import Session
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -87,16 +88,79 @@ def _fmt_dt(v):
         return v.strftime("%Y-%m-%d %H:%M:%S")
     return str(v)
 
-def _fmt_stages(progress_stages):
+def _build_progress_view(progress_stages):
+    """
+    解析進度資料並回傳：
+    - lines: ["1. 2025-08-05 調解 13:00", "2. 2025-08-07 確定 15:00", ...]
+    - notes: ["帶刀子", ...]   # 彙整各階段 note/remark/memo
+    - count: 已完成階段數
+
+    支援格式：
+    A) dict: {"偵查中": "2025-08-10", "準備程序": {"date":"2025-09-01", "time":"15:00", "note":"已送卷"}}
+    B) list: [{"stage":"偵查中","date":"2025-08-10","time":"13:00","note":"..."}, ...]
+    C) str  : 原樣回傳為單一行
+    """
     if not progress_stages:
-        return "尚無進度階段記錄"
+        return {"lines": ["尚無進度階段記錄"], "notes": [], "count": 0}
+
     try:
-        data = json.loads(progress_stages) if isinstance(progress_stages, str) else progress_stages
-        if isinstance(data, dict) and data:
-            return "\n".join([f"．{k}：{v}" for k, v in data.items()])
-        return "尚無進度階段記錄"
+        data = progress_stages
+        if isinstance(progress_stages, str):
+            try:
+                data = json.loads(progress_stages)
+            except Exception:
+                # 純文字就直接當作唯一一行
+                return {"lines": [str(progress_stages)], "notes": [], "count": 1}
+
+        lines, notes = [], []
+
+        def push(stage, date=None, time=None, note=None):
+            stage = (stage or "-").strip()
+            date  = (date  or "-").strip()
+            time  = (time  or "").strip()
+            tpart = f" {time}" if time else ""
+            lines.append(f"{len(lines)+1}. {date} {stage}{tpart}")
+            if note:
+                n = str(note).strip()
+                if n:
+                    notes.append(n)
+
+        if isinstance(data, dict):
+            # 依照 dict 插入順序輸出
+            for stage, v in data.items():
+                if isinstance(v, dict):
+                    push(stage,
+                         v.get("date") or v.get("at") or v.get("updated_at") or v.get("time") or "-",
+                         v.get("time"),
+                         v.get("note") or v.get("remark") or v.get("memo"))
+                else:
+                    # v 是日期字串；若含時間（例如 "2025-08-05 13:00"），自動切開
+                    vv = str(v)
+                    d, t = (vv.split(" ", 1) + [""])[:2] if " " in vv else (vv, "")
+                    push(stage, d, t, None)
+
+        elif isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    stage = item.get("stage") or item.get("name") or item.get("label")
+                    date  = item.get("date")  or item.get("at")   or item.get("updated_at")
+                    time  = item.get("time")
+                    note  = item.get("note")  or item.get("remark") or item.get("memo")
+                    push(stage, date, time, note)
+                else:
+                    # 非 dict 元素，直接當作一行
+                    lines.append(f"{len(lines)+1}. {item}")
+
+        else:
+            return {"lines": [str(data)], "notes": [], "count": 1}
+
+        if not lines:
+            lines = ["尚無進度階段記錄"]
+
+        return {"lines": lines, "notes": notes, "count": len(lines)}
+
     except Exception:
-        return str(progress_stages)
+        return {"lines": [str(progress_stages)], "notes": [], "count": 1}
 
 def render_case_detail(case) -> str:
     case_number   = case.case_number or case.case_id or "-"
@@ -125,8 +189,18 @@ def render_case_detail(case) -> str:
     lines.append(f"對造：{opposing}")
     lines.append(f"負責股別：{division}")
     lines.append("────────────────────")
+    # 進度清單 + 備註 + 統計
+    pv = _build_progress_view(getattr(case, "progress_stages", None))
     lines.append("📈 案件進度歷程：")
-    lines.append(stages_text)
+    lines.extend(pv["lines"])
+
+    # ↙️ 就是你要的這種顯示：在清單下方獨立一行「備註」
+    if pv["notes"]:
+        lines.append(f"🌿 備註：{'；'.join(pv['notes'])}")
+
+    lines.append(f"📊 進度統計：共完成 {pv['count']} 個階段")
+
+    # （如果你還想保留「最新進度」就留著這行）
     lines.append(f"⚠️ 最新進度：{progress}")
     lines.append("────────────────────")
     lines.append("📁 案件資料夾：")
@@ -136,8 +210,8 @@ def render_case_detail(case) -> str:
     # lines.append("  2. 進度總覽（1 個檔案）")
     lines.append("（稍後開放）")
     lines.append("────────────────────")
-    lines.append(f"⌛ 建立時間：{created_at}")
-    lines.append(f"🛠 更新時間：{updated_at}")
+    lines.append(f"🟥建立時間：{created_at}")
+    lines.append(f"🟩更新時間：{updated_at}")
     return "\n".join(lines)
 
 # —— 類別歸一：回 (key, label)
