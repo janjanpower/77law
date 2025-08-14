@@ -1,12 +1,12 @@
 # api/routes/user_routes.py
 # -*- coding: utf-8 -*-
 """
-單租戶 LINE 用戶查案（n8n 零改動）
+單租戶 LINE 用戶查案（含徹底時間解析 + Debug 端點）
 - 「?」 → /my-cases
 - 其他（登錄 XXX / 是 / 否 / 數字選單）→ /register
 - 多筆先出「案件類別選單」，單筆直接詳情
 - 進度呈現：每一階段一行（含日期/時間），若有備註就緊接一行「💬 備註：…」
-- 已特別支援時間欄位：progress_times（可為字串或 list）
+- 時間解析特別支援：progress_times（字串 / list / dict / 巢狀）
 """
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -84,16 +84,16 @@ def _fmt_dt(v):
         return v.strftime("%Y-%m-%d %H:%M:%S")
     return str(v)
 
-# ============================ Helpers：進度時間線（時間 + 備註） ============================
+# ============================ Helpers：時間 & 備註解析 ============================
 def _to_halfwidth(s: str) -> str:
     if not s: return s
     out = []
     for ch in str(s):
         code = ord(ch)
-        if 0xFF10 <= code <= 0xFF19:
+        if 0xFF10 <= code <= 0xFF19:   # ０-９
             out.append(chr(code - 0xFEE0))
         elif ch in "：．，／－":
-            out.append({"：":":", "．":".", "，":",", "／":"/", "－":"-"}[ch])
+            out.append({"：":":", "．":".", " ": " ", "，":",", "／":"/", "－":"-"}[ch])
         else:
             out.append(ch)
     return "".join(out)
@@ -108,19 +108,24 @@ def _normalize_hhmm(h: int, m: int, ampm: Optional[str]) -> str:
     return f"{max(0,min(23,h)):02d}:{max(0,min(59,m)):02d}"
 
 def _extract_time_from_text(text: str) -> Optional[str]:
+    """從文字抓出時間並正規化為 HH:MM。"""
     s = _to_halfwidth(text or "")
+    # (上午/下午/AM/PM) H:MM
     m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)[:：\.]([0-5]\d)", s, re.I)
     if m:
         return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+    # (上午/下午/AM/PM) H點MM分 / H時MM分
     m = re.search(r"(上午|下午|AM|PM|am|pm)?\s*([0-2]?\d)\s*[點时時点]\s*([0-5]?\d)\s*(?:分)?", s, re.I)
     if m:
         return _normalize_hhmm(int(m.group(2)), int(m.group(3)), m.group(1))
+    # 純 3~4 位數（1300/900）
     m = re.search(r"(?<!\d)([0-2]?\d)([0-5]\d)(?!\d)", s)
     if m:
         return _normalize_hhmm(int(m.group(1)), int(m.group(2)), None)
     return None
 
 def _extract_time_from_any(val) -> Optional[str]:
+    """接受 str/list/tuple/dict，回傳第一個可解析的 HH:MM。"""
     if val is None:
         return None
     if isinstance(val, (list, tuple)):
@@ -141,6 +146,7 @@ _COMMON_TIME_KEYS = {
 }
 
 def _find_time_in_payload(obj) -> Optional[str]:
+    """遞迴在任意位置找時間（先看常見鍵；無則掃描所有值）。"""
     if obj is None:
         return None
     if isinstance(obj, str):
@@ -162,6 +168,7 @@ def _find_time_in_payload(obj) -> Optional[str]:
     return None
 
 def _as_list_of_str(val):
+    """把 notes 欄位轉成 list[str]（str / list / dict）。"""
     if val is None:
         return []
     if isinstance(val, str):
@@ -182,6 +189,7 @@ def _pick(d: dict, *keys):
     return None
 
 def _split_date_time_str(s: str):
+    """把可能含日期+時間的字串拆成 (date, time)。"""
     if not s:
         return None, None
     s = str(s).strip()
@@ -193,9 +201,10 @@ def _split_date_time_str(s: str):
         return left.strip(), right.strip()
     return s, None
 
+# ============================ 關鍵：展平階段 + 併入時間/備註 ============================
 def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
     """
-    展平成 list[{stage,date,time,notes_from_stage}]。
+    展平成 list[{stage,date,time,notes_from_stage, _debug_src_time}]。
     支援 dict/list/JSON 字串；時間鍵特別支援 progress_times。
     """
     data = progress_stages
@@ -217,20 +226,26 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
         for stage, payload in data.items():
             if isinstance(payload, dict):
                 raw_date = _pick(payload, "date", "at", "updated_at", "datetime", "schedule_date")
-                raw_time = _pick(payload, "time", "schedule_time", "court_time", "hearing_time",
-                                 "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
-                d, t = (None, None)
+                raw_time_val = _pick(payload, "time", "schedule_time", "court_time", "hearing_time",
+                                     "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
+                d, t, src = (None, None, None)
                 if raw_date:
                     d, t = _split_date_time_str(raw_date)
+                    if t:
+                        src = "date_str"
                 if not t:
-                    t = _extract_time_from_any(raw_time) or _find_time_in_payload(payload)
+                    t = _extract_time_from_any(raw_time_val)
+                    if t: src = "explicit_key"
+                if not t:
+                    t = _find_time_in_payload(payload)
+                    if t: src = "payload_scan"
                 notes = _as_list_of_str(
                     _pick(payload, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
                 )
-                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
+                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes, "_debug_src_time": src})
             else:
                 d, t = _split_date_time_str(str(payload))
-                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": []})
+                items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": [], "_debug_src_time": "value_str"})
         return items
 
     if isinstance(data, list):
@@ -239,26 +254,80 @@ def _iter_stage_items(progress_stages) -> List[Dict[str, Any]]:
                 continue
             stage = _pick(it, "stage", "name", "label", "phase", "title") or "-"
             raw_date = _pick(it, "date", "at", "updated_at", "datetime", "schedule_date")
-            raw_time = _pick(it, "time", "schedule_time", "court_time", "hearing_time",
-                             "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
-            d, t = (None, None)
+            raw_time_val = _pick(it, "time", "schedule_time", "court_time", "hearing_time",
+                                 "session_time", "time_str", "clock", "progress_time", "progress_times", "開庭時間", "時間")
+            d, t, src = (None, None, None)
             if raw_date:
                 d, t = _split_date_time_str(raw_date)
+                if t: src = "date_str"
             if not t:
-                t = _extract_time_from_any(raw_time) or _find_time_in_payload(it)
+                t = _extract_time_from_any(raw_time_val)
+                if t: src = "explicit_key"
+            if not t:
+                t = _find_time_in_payload(it)
+                if t: src = "payload_scan"
             notes = _as_list_of_str(
                 _pick(it, "note", "notes", "progress_notes", "remark", "memo", "comment", "comments", "description", "desc")
             )
-            items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes})
+            items.append({"stage": stage, "date": d, "time": t, "notes_from_stage": notes, "_debug_src_time": src})
         return items
 
     return items
 
+def _attach_case_level_times(items: List[Dict[str, Any]], case_times) -> None:
+    """
+    若階段沒取到 time，嘗試用案件層級 progress_times 補上。
+    支援：
+    - list/tuple：按索引對應（長度相同則對齊；較短則就近取第一個可用）
+    - dict：以階段名稱（完全比對）或遞迴掃描 value 取第一個時間
+    - str：解析出單一時間，填給所有缺少時間的階段
+    - 巢狀：dict/list 巢狀也行（會掃描值）
+    """
+    if not case_times:
+        return
+
+    # 先把 dict/list 轉為易查的 mapping 與序列
+    by_index: List[Optional[str]] = []
+    by_stage: Dict[str, Optional[str]] = {}
+
+    if isinstance(case_times, (list, tuple)):
+        for v in case_times:
+            by_index.append(_extract_time_from_any(v))
+    elif isinstance(case_times, dict):
+        for k, v in case_times.items():
+            by_stage[str(k)] = _extract_time_from_any(v) or _find_time_in_payload(v)
+    elif isinstance(case_times, str):
+        t = _extract_time_from_text(case_times)
+        by_index = [t] if t else []
+
+    # 補上
+    for idx, it in enumerate(items):
+        if it.get("time"):
+            continue
+        # 先用 stage 名稱
+        sname = str(it.get("stage") or "")
+        t = None
+        if sname and sname in by_stage and by_stage[sname]:
+            t = by_stage[sname]
+            it["_debug_src_time"] = (it.get("_debug_src_time") or "") + "+case.progress_times(stage)"
+        # 再用 index
+        if not t and by_index:
+            if idx < len(by_index) and by_index[idx]:
+                t = by_index[idx]
+            elif len(by_index) == 1 and by_index[0]:
+                t = by_index[0]
+            if t:
+                it["_debug_src_time"] = (it.get("_debug_src_time") or "") + "+case.progress_times(index)"
+        if not t and isinstance(case_times, (dict, list, tuple)):
+            # 最後再掃一次整個 case_times 物件（萬一放得很深）
+            t = _find_time_in_payload(case_times)
+            if t:
+                it["_debug_src_time"] = (it.get("_debug_src_time") or "") + "+case.scan"
+        if t:
+            it["time"] = t
+
 def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> None:
-    """
-    依『階段名稱』把案件層級 progress_notes 併到 items[*]['notes']。
-    支援 dict / list；str 無法對到階段則忽略。
-    """
+    """依『階段名稱』把案件層級 progress_notes 併到 items[*]['notes']。"""
     if case_level_notes is None:
         for it in items:
             it["notes"] = list(it.get("notes_from_stage") or [])
@@ -299,13 +368,14 @@ def _merge_case_level_notes(items: List[Dict[str, Any]], case_level_notes) -> No
             unique.append(n)
         it["notes"] = unique
 
-def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) -> List[str]:
+def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None, case_level_times=None, want_debug: bool=False) -> List[str]:
     """
     回傳列印用文字行：
       1. 2025-08-14  一審  13:00
       💬 備註：帶文件
     """
     items = _iter_stage_items(progress_stages)
+    _attach_case_level_times(items, case_level_times)
     _merge_case_level_notes(items, case_level_notes)
 
     lines: List[str] = []
@@ -324,94 +394,10 @@ def _build_progress_timeline_with_notes(progress_stages, case_level_notes=None) 
                 if s.strip():
                     lines.append(f"💬 備註：{s.strip()}")
 
+        if want_debug:
+            lines.append(f"   ↳ ⏱ 來源：{it.get('_debug_src_time') or '-'}")
+
     return lines
-
-# ============================ Helpers：類別/選單 ============================
-def _type_key_label(case_type: Optional[str]) -> Tuple[str, str]:
-    t = (case_type or "").strip()
-    if "刑" in t:
-        return "CRIM", "刑事"
-    if "民" in t:
-        return "CIVIL", "民事"
-    return "OTHER", "其他"
-
-def _render_category_menu(menu_items: List[Dict[str, Any]]) -> str:
-    lines = []
-    lines.append("🗂 案件類別選單")
-    lines.append("────────────────────")
-    for i, m in enumerate(menu_items, 1):
-        lines.append(f"{i}. {m['label']}案件列表（{m['count']} 件）")
-    lines.append("")
-    lines.append(f"💡 請輸入選項號碼 (1-{len(menu_items)})")
-    return "\n".join(lines)
-
-def _render_case_brief_list(items: List[Dict[str, Any]], label: str) -> str:
-    lines = []
-    lines.append(f"📂 {label}案件列表")
-    lines.append("────────────────────")
-    for i, it in enumerate(items, 1):
-        num = it.get("case_number") or "-"
-        reason = it.get("case_reason") or "-"
-        lines.append(f"{i}. {reason}（案件編號：{num}）")
-    lines.append("")
-    lines.append(f"💡 請輸入選項號碼 (1-{len(items)})")
-    return "\n".join(lines)
-
-# ============================ Helpers：會話暫存 ============================
-def _cleanup_expired_sessions(db: Session, line_user_id: Optional[str] = None):
-    params = {"ttl": SESSION_TTL_MINUTES}
-    where_user = ""
-    if line_user_id:
-        where_user = "AND line_user_id = :lid"
-        params["lid"] = line_user_id
-    db.execute(
-        text(f"""
-        DELETE FROM user_query_sessions
-        WHERE created_at < NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
-        {where_user}
-        """),
-        params,
-    )
-    db.commit()
-
-def _save_session(db: Session, line_user_id: str, scope: str, payload: Dict[str, Any]) -> None:
-    _cleanup_expired_sessions(db, line_user_id)
-    db.execute(
-        text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid AND scope = :scope"""),
-        {"lid": line_user_id, "scope": scope},
-    )
-    db.execute(
-        text("""
-        INSERT INTO user_query_sessions (line_user_id, session_key, scope, payload_json)
-        VALUES (:lid, :skey, :scope, :payload)
-        """),
-        {"lid": line_user_id, "skey": str(uuid4()), "scope": scope, "payload": json.dumps(payload, ensure_ascii=False)},
-    )
-    db.commit()
-
-def _load_last_session(db: Session, line_user_id: str) -> Optional[Dict[str, Any]]:
-    row = db.execute(
-        text(f"""
-            SELECT session_key, scope, payload_json, created_at
-            FROM user_query_sessions
-            WHERE line_user_id = :lid
-              AND created_at >= NOW() - (CAST(:ttl AS TEXT) || ' minutes')::interval
-            ORDER BY created_at DESC
-            LIMIT 1
-        """),
-        {"lid": line_user_id, "ttl": SESSION_TTL_MINUTES},
-    ).first()
-    if not row:
-        return None
-    _, scope, payload, created_at = row
-    if isinstance(payload, str):
-        payload = json.loads(payload)
-    return {"scope": scope, "payload": payload, "created_at": created_at}
-
-def _consume_all_sessions(db: Session, line_user_id: str):
-    db.execute(text("""DELETE FROM user_query_sessions WHERE line_user_id = :lid"""),
-               {"lid": line_user_id})
-    db.commit()
 
 # ============================ 視圖：單筆詳情 ============================
 def render_case_detail(case) -> str:
@@ -443,7 +429,9 @@ def render_case_detail(case) -> str:
     lines.append("📈 案件進度歷程：")
     timeline = _build_progress_timeline_with_notes(
         getattr(case, "progress_stages", None),
-        getattr(case, "progress_notes", None)
+        getattr(case, "progress_notes", None),
+        getattr(case, "progress_times", None),  # ← 這裡把案件層級 progress_times 也丟進去做補值
+        want_debug=False
     )
     if timeline:
         lines.extend(timeline)
@@ -458,7 +446,7 @@ def render_case_detail(case) -> str:
     lines.append(f"🟩更新時間：{updated_at}")
     return "\n".join(lines)
 
-# ============================ 1) /register ============================
+# ============================ 1) /register（含數字選單） ============================
 @user_router.post("/register", response_model=RegisterOut)
 def register_user(payload: RegisterIn, db: Session = Depends(get_db)):
     try:
@@ -653,6 +641,49 @@ def my_cases(payload: MyCasesIn, db: Session = Depends(get_db)):
     _save_session(db, lid, f"case_list:{only_key}", {"label": label, "items": items})
     msg = _render_case_brief_list(items, label)
     return {"ok": True, "total": len(rows), "message": msg, "route": "MENU_LIST"}
+
+# ============================ 3) Debug 端點（幫你查為何沒顯示時間） ============================
+@user_router.get("/debug/case/{case_id}")
+def debug_case(case_id: int, db: Session = Depends(get_db)):
+    case = db.query(CaseRecord).filter(CaseRecord.id == case_id).first()
+    if not case:
+        raise HTTPException(404, "not found")
+    ps = getattr(case, "progress_stages", None)
+    pn = getattr(case, "progress_notes", None)
+    pt = getattr(case, "progress_times", None)
+    timeline = _build_progress_timeline_with_notes(ps, pn, pt, want_debug=True)
+    # 也回展平後的 items（含每階段 time 來源）
+    items = _iter_stage_items(ps)
+    _attach_case_level_times(items, pt)
+    _merge_case_level_notes(items, pn)
+    return {
+        "raw": {
+            "progress_stages": ps,
+            "progress_notes": pn,
+            "progress_times": pt,
+        },
+        "parsed": {
+            "items": items,
+            "timeline": timeline
+        }
+    }
+
+class DebugEchoIn(BaseModel):
+    progress_stages: Any = None
+    progress_notes: Any = None
+    progress_times: Any = None
+
+@user_router.post("/debug/echo-progress")
+def debug_echo(data: DebugEchoIn):
+    ps, pn, pt = data.progress_stages, data.progress_notes, data.progress_times
+    timeline = _build_progress_timeline_with_notes(ps, pn, pt, want_debug=True)
+    items = _iter_stage_items(ps)
+    _attach_case_level_times(items, pt)
+    _merge_case_level_notes(items, pn)
+    return {
+        "input": {"progress_stages": ps, "progress_notes": pn, "progress_times": pt},
+        "parsed": {"items": items, "timeline": timeline}
+    }
 
 # ============================ 健康檢查 ============================
 @user_router.get("/health")
